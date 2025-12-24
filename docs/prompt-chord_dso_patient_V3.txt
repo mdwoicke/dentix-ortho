@@ -1,0 +1,11 @@
+REQUIRED: Use this tool for ALL patient operations including creating patients, looking up existing patients, and getting clinic information.
+
+ACTION 'create': Call to create a new patient record. Provide patientFirstName, patientLastName, phoneNumber, birthdayDateTime (MM/DD/YYYY), and emailAddress.
+
+ACTION 'lookup': Call to search for existing patients by phone number or name.
+
+ACTION 'get': Call to retrieve patient details by patientGUID.
+
+ACTION 'clinic_info': Call to get list of clinic locations and their GUIDs.
+
+CRITICAL: You must create a patient (action 'create') before booking an appointment. Store the returned patientGUID for use with chord_dso_scheduling book_child action.

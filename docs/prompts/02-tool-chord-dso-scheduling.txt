@@ -1,0 +1,122 @@
+================================================================================
+TOOL: chord_dso_scheduling
+================================================================================
+Version: 2.0
+Updated: 2024-12-24
+Purpose: Appointment scheduling operations
+
+================================================================================
+TOOL NAME (must match exactly in Flowise):
+================================================================================
+chord_dso_scheduling
+
+================================================================================
+TOOL DESCRIPTION (copy entire block into Flowise tool description):
+================================================================================
+
+<tool_purpose>
+REQUIRED tool for ALL appointment scheduling operations. You MUST call this tool before offering appointment times to callers.
+</tool_purpose>
+
+<mandatory_preconditions>
+BEFORE using this tool:
+1. Get current date using get_current_date tool
+2. Ensure startDate is TODAY or FUTURE (never past dates)
+3. Have location_guid ready (from clinic_info or conversation)
+</mandatory_preconditions>
+
+<actions>
+
+<action name="slots">
+PURPOSE: Check available appointment times
+WHEN TO USE: MUST call BEFORE offering any appointment times to caller
+SAY FIRST: "Let me check what times we have available..." or "One moment while I look at our schedule..."
+
+REQUIRED PARAMETERS:
+- startDate: string (MM/DD/YYYY format, MUST be today or future)
+- endDate: string (MM/DD/YYYY format, within 28 days of startDate)
+
+OPTIONAL PARAMETERS:
+- locationGuid: string (filter by specific location)
+- appointmentTypeGuid: string (filter by appointment type)
+
+RETURNS:
+{
+  "slots": [
+    {
+      "startTime": "2024-12-30T09:00:00",
+      "scheduleViewGUID": "guid-here",
+      "scheduleColumnGUID": "guid-here",
+      "appointmentTypeGUID": "guid-here",
+      "providerGUID": "guid-here",
+      "locationGUID": "guid-here",
+      "minutes": 45
+    }
+  ]
+}
+
+USAGE RULE: NEVER skip this action. NEVER transfer for "Unable to retrieve availability" without calling this first.
+</action>
+
+<action name="grouped_slots">
+PURPOSE: Find consecutive slots for multiple patients (siblings)
+WHEN TO USE: When booking appointments for 2+ children at the same time
+
+REQUIRED PARAMETERS:
+- startDate: string (MM/DD/YYYY format)
+- endDate: string (MM/DD/YYYY format)
+- numberOfPatients: number (2-5)
+
+RETURNS: Groups of consecutive time slots that can accommodate all patients back-to-back
+</action>
+
+<action name="book_child">
+PURPOSE: Book a confirmed appointment
+WHEN TO USE: ONLY after caller explicitly confirms a time slot
+
+REQUIRED PARAMETERS (all from slots response):
+- patientGUID: string (CRITICAL - from chord_dso_patient_V3 create action)
+- startTime: string (ISO format from slots response)
+- scheduleViewGUID: string (from slots response)
+- scheduleColumnGUID: string (from slots response)
+- appointmentTypeGUID: string (from slots response)
+- minutes: number (from slots response)
+
+RETURNS:
+{
+  "success": true,
+  "appointmentGUID": "guid-of-new-appointment",
+  "message": "Appointment booked successfully"
+}
+
+CRITICAL: You MUST have a valid patientGUID before calling this action. If you don't have a patientGUID, call chord_dso_patient_V3 action='create' first.
+</action>
+
+<action name="cancel">
+PURPOSE: Cancel an existing appointment
+WHEN TO USE: When caller requests to cancel
+
+REQUIRED PARAMETERS:
+- appointmentGUID: string (the appointment to cancel)
+
+RETURNS: Confirmation of cancellation
+</action>
+
+</actions>
+
+<error_handling>
+If tool returns error:
+1. Check that dates are in correct format (MM/DD/YYYY)
+2. Verify startDate is not in the past
+3. Retry once with corrected parameters
+4. If still failing, apologize and offer to transfer with SPECIFIC error reason
+</error_handling>
+
+<example_flow>
+User: "I'd like to schedule an appointment for next week"
+Agent thinking: Need to check availability first
+Agent action: Call chord_dso_scheduling action='slots' startDate='12/30/2024' endDate='01/06/2025'
+Agent response: "Let me check what times we have available next week... I have openings on Monday December 30th at 9 AM, Tuesday December 31st at 2 PM, or Thursday January 2nd at 10 AM. Which works best for you?"
+</example_flow>
+
+================================================================================

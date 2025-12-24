@@ -1,0 +1,60 @@
+================================================================================
+FLOWISE TOOL PROMPT UPDATES
+================================================================================
+Updated: 2025-12-24
+Purpose: Fix tool calling issues - make descriptions more directive
+
+================================================================================
+IMPORTANT: PATIENT GUID TRACKING
+================================================================================
+For Test Monitor patient linking to work, the agent MUST include the patientGUID
+in the final PAYLOAD when a patient is created or looked up.
+
+When creating a patient with chord_dso_patient_V3 action 'create':
+1. Store the returned patientGUID
+2. Include it in the final PAYLOAD as "Child1_PatientGUID" (or Child2, Child3)
+3. Example: "Child1_PatientGUID": "59D26B3E-2725-460D-9FD7-BD9C03452B86"
+
+This allows the Test Monitor dashboard to create clickable links to patient details.
+
+================================================================================
+TOOL: schedule_appointment_dso
+================================================================================
+
+NAME (must match exactly):
+schedule_appointment_dso
+
+DESCRIPTION (copy this entire block):
+Appointment scheduling operations. Use action 'slots' to get available times, 'grouped_slots' for siblings, 'book_child' to book, 'cancel' to cancel. Dates in MM/DD/YYYY format. Past dates are auto-corrected to tomorrow.
+
+ACTION 'slots': Get available appointment times. Returns startTime, scheduleViewGUID, scheduleColumnGUID, appointmentTypeGUID, minutes.
+
+ACTION 'grouped_slots': MUST call for siblings or multiple patients. Provide startDate, endDate, and numberOfPatients. Returns grouped consecutive slots.
+
+ACTION 'book_child': MUST call AFTER caller confirms appointment time. REQUIRES: patientGUID, startTime, scheduleViewGUID, scheduleColumnGUID, appointmentTypeGUID, minutes. All values come from the slots response.
+
+ACTION 'cancel': Call to cancel an existing appointment. Requires appointmentGUID.
+
+CRITICAL: Never transfer to live agent with reason "Unable to retrieve appointment availability" without first calling this tool with action 'slots'.
+
+================================================================================
+TOOL: chord_dso_patient_V3
+================================================================================
+
+NAME (must match exactly):
+chord_dso_patient_V3
+
+DESCRIPTION (copy this entire block):
+REQUIRED: Use this tool for ALL patient operations including creating patients, looking up existing patients, and getting clinic information.
+
+ACTION 'create': Call to create a new patient record. Provide patientFirstName, patientLastName, phoneNumber, birthdayDateTime (MM/DD/YYYY), and emailAddress.
+
+ACTION 'lookup': Call to search for existing patients by phone number or name.
+
+ACTION 'get': Call to retrieve patient details by patientGUID.
+
+ACTION 'clinic_info': Call to get list of clinic locations and their GUIDs.
+
+CRITICAL: You must create a patient (action 'create') before booking an appointment. Store the returned patientGUID for use with chord_dso_scheduling book_child action.
+
+================================================================================

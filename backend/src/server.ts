@@ -1,0 +1,86 @@
+import dotenv from 'dotenv';
+import app from './app';
+import logger from './utils/logger';
+import { getDatabase } from './config/database';
+
+// Load environment variables
+dotenv.config();
+
+const PORT = process.env.PORT || 3001;
+const HOST = process.env.HOST || '0.0.0.0';
+
+// Initialize database connection
+try {
+  getDatabase();
+  logger.info('Database initialized successfully');
+} catch (error) {
+  logger.error('Failed to initialize database', {
+    error: error instanceof Error ? error.message : String(error),
+  });
+  process.exit(1);
+}
+
+// Start server
+const server = app.listen(Number(PORT), HOST, () => {
+  logger.info(`Server started successfully`, {
+    host: HOST,
+    port: PORT,
+    environment: process.env.NODE_ENV || 'development',
+    nodeVersion: process.version,
+  });
+
+  console.log(`
+╔═══════════════════════════════════════════════╗
+║                                               ║
+║   Cloud 9 Ortho CRM API Server                ║
+║                                               ║
+║   Host: ${HOST}                              ║
+║   Port: ${PORT}                                   ║
+║   Environment: ${process.env.NODE_ENV || 'development'}              ║
+║                                               ║
+║   Local:   http://localhost:${PORT}/api         ║
+║   Network: http://<your-ip>:${PORT}/api         ║
+║                                               ║
+╚═══════════════════════════════════════════════╝
+  `);
+});
+
+// Graceful shutdown
+const gracefulShutdown = (signal: string) => {
+  logger.info(`Received ${signal}, shutting down gracefully...`);
+
+  server.close(() => {
+    logger.info('HTTP server closed');
+    process.exit(0);
+  });
+
+  // Force shutdown after 10 seconds
+  setTimeout(() => {
+    logger.error('Forced shutdown after timeout');
+    process.exit(1);
+  }, 10000);
+};
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (reason: any) => {
+  logger.error('Unhandled Promise Rejection', {
+    reason: reason instanceof Error ? reason.message : String(reason),
+    stack: reason instanceof Error ? reason.stack : undefined,
+  });
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error: Error) => {
+  logger.error('Uncaught Exception', {
+    message: error.message,
+    stack: error.stack,
+  });
+
+  // Exit process (let process manager restart it)
+  process.exit(1);
+});
+
+export default server;

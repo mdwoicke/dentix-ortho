@@ -1,0 +1,16 @@
+{
+  "name": "dentix-ortho",
+  "version": "1.0.0",
+  "description": "A full-stack CRM dashboard for Cloud 9 Ortho (Dentrix Orthodontic) practice management system integration.",
+  "main": "test-appointment-lookup.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "node-fetch": "^2.7.0",
+    "playwright": "^1.57.0"
+  }
+}

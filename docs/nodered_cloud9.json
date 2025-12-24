@@ -1,0 +1,1842 @@
+[
+    {
+        "id": "8dd34f467e047f48",
+        "type": "tab",
+        "label": "Chord-Cloud9",
+        "disabled": false,
+        "info": "",
+        "env": [
+            {
+                "name": "clientIdSand",
+                "value": "c15aa02a-adc1-40ae-a2b5-d2e39173ae56",
+                "type": "str"
+            },
+            {
+                "name": "userNameSand",
+                "value": "IntelepeerTest",
+                "type": "str"
+            },
+            {
+                "name": "passwordSand",
+                "value": "#!InteleP33rTest!#",
+                "type": "str"
+            },
+            {
+                "name": "endpointSand",
+                "value": "https://us-ea1-partnertest.cloud9ortho.com/GetData.ashx",
+                "type": "str"
+            },
+            {
+                "name": "clientIdProd",
+                "value": "",
+                "type": "str"
+            },
+            {
+                "name": "userNameProd",
+                "value": "",
+                "type": "str"
+            },
+            {
+                "name": "passwordProd",
+                "value": "",
+                "type": "str"
+            },
+            {
+                "name": "endpointProd",
+                "value": "",
+                "type": "str"
+            },
+            {
+                "name": "cloud9ClientId",
+                "value": "clientIdSand",
+                "type": "env"
+            },
+            {
+                "name": "cloud9UserName",
+                "value": "userNameSand",
+                "type": "env"
+            },
+            {
+                "name": "cloud9Password",
+                "value": "passwordSand",
+                "type": "env"
+            },
+            {
+                "name": "cloud9Endpoint",
+                "value": "endpointSand",
+                "type": "env"
+            }
+        ]
+    },
+    {
+        "id": "0b54d215bfc419e6",
+        "type": "xml",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "property": "payload",
+        "attr": "",
+        "chr": "",
+        "x": 790,
+        "y": 160,
+        "wires": [
+            [
+                "2fa3890f5052760b"
+            ]
+        ]
+    },
+    {
+        "id": "fa730c6c84d718c8",
+        "type": "http in",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "url": "/chord/cloud9/getLocations",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 260,
+        "y": 160,
+        "wires": [
+            [
+                "97b80fcdb6765ed6",
+                "ca0120fdf7d2a168"
+            ]
+        ]
+    },
+    {
+        "id": "97b80fcdb6765ed6",
+        "type": "function",
+        "z": "8dd34f467e047f48",
+        "name": "getLocations",
+        "func": "// Node-RED Function Node - Cloud9 Get Locations\n// This code is designed to run inside a Node-RED Function node\n// Uncomment the line below if fetch is not available globally in your Node-RED version\n// You may need to install node-fetch: npm install node-fetch\n// const fetch = require('node-fetch');\n\n// Get parameters from msg object or use defaults\nconst clientId = env.get(\"cloud9ClientId\");\nconst userName = env.get(\"cloud9UserName\");\nconst password = env.get(\"cloud9Password\");\nconst endpoint = env.get(\"cloud9Endpoint\");\n\nasync function getLocations() {\n    try {\n        // Input validation\n        if (!clientId) {\n            throw new Error('Client ID is required');\n        }\n\n        if (!userName) {\n            throw new Error('Username is required');\n        }\n\n        if (!password) {\n            throw new Error('Password is required');\n        }\n\n        // Build XML request body\n        const xmlBody = `<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<GetDataRequest xmlns=\"http://schemas.practica.ws/cloud9/partners/\" \n                xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">\n    <ClientID>${clientId}</ClientID>\n    <UserName>${userName}</UserName>\n    <Password>${password}</Password>\n    <Procedure>GetLocations</Procedure>\n</GetDataRequest>`;\n\n        const requestOptions = {\n            method: \"POST\",\n            headers: {\n                \"Content-Type\": \"application/xml\"\n            },\n            body: xmlBody,\n            redirect: \"follow\"\n        };\n\n        node.warn('Fetching Cloud9 locations...');\n        const response = await fetch(endpoint, requestOptions);\n\n        // Check for HTTP errors\n        if (!response.ok) {\n            const errorText = await response.text().catch(() => 'Unable to read error response');\n            throw new Error(`Get locations failed with status ${response.status}: ${errorText}`);\n        }\n\n        // Get the XML response as text\n        let xmlResult;\n        try {\n            xmlResult = await response.text();\n        } catch (parseError) {\n            throw new Error(`Failed to read response: ${parseError.message}`);\n        }\n\n        node.warn('Locations retrieved successfully');\n        node.warn('XML Response length: ' + xmlResult.length);\n\n        // Parse XML to JSON using Node-RED's built-in RED.util.parseXML or store as text\n        // Note: The calling flow should have an XML parser node after this function node\n        // to convert XML to JSON\n        \n        // Set the payload with the XML response (to be parsed by xml node in flow)\n        msg.payload = xmlResult;\n        msg.responseType = 'xml';\n        \n        return msg;\n\n    } catch (error) {\n        node.error('Error getting Cloud9 locations: ' + error.message, msg);\n\n        // Set error payload\n        msg.payload = {\n            success: false,\n            error: error.message || 'Unknown error occurred while retrieving locations',\n            errorType: error.name || 'Error',\n            timestamp: new Date().toISOString()\n        };\n\n        return msg;\n    }\n}\n\n// Execute the function and return the message\nreturn getLocations();\n\n\n",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [
+            {
+                "var": "fetch",
+                "module": "node-fetch"
+            }
+        ],
+        "x": 610,
+        "y": 160,
+        "wires": [
+            [
+                "0b54d215bfc419e6",
+                "43118e92bcee5994"
+            ]
+        ]
+    },
+    {
+        "id": "ca0120fdf7d2a168",
+        "type": "debug",
+        "z": "8dd34f467e047f48",
+        "name": "Ingress GetLocations",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 580,
+        "y": 120,
+        "wires": []
+    },
+    {
+        "id": "86833f99f72d575a",
+        "type": "debug",
+        "z": "8dd34f467e047f48",
+        "name": "getLocations Egress",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1280,
+        "y": 160,
+        "wires": []
+    },
+    {
+        "id": "a8f136dd4aac0154",
+        "type": "inject",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "props": [
+            {
+                "p": "OGpatientId",
+                "v": "427698262",
+                "vt": "str"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            },
+            {
+                "p": "payload.phoneNumber",
+                "v": "3212002331",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 390,
+        "y": 120,
+        "wires": [
+            [
+                "97b80fcdb6765ed6"
+            ]
+        ]
+    },
+    {
+        "id": "674513874673c7ca",
+        "type": "http response",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 1110,
+        "y": 160,
+        "wires": []
+    },
+    {
+        "id": "43118e92bcee5994",
+        "type": "debug",
+        "z": "8dd34f467e047f48",
+        "name": "GetLocations",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 820,
+        "y": 120,
+        "wires": []
+    },
+    {
+        "id": "98fcd8916aaa5f44",
+        "type": "xml",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "property": "payload",
+        "attr": "",
+        "chr": "",
+        "x": 790,
+        "y": 320,
+        "wires": [
+            [
+                "fb8fd3ec85da1f17"
+            ]
+        ]
+    },
+    {
+        "id": "6b67fc578c1ceda8",
+        "type": "http in",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "url": "/chord/cloud9/getAvailAppts",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 240,
+        "y": 320,
+        "wires": [
+            [
+                "d4bc0ba601a87d78",
+                "fa0a10c76f8f1b4a"
+            ]
+        ]
+    },
+    {
+        "id": "d4bc0ba601a87d78",
+        "type": "function",
+        "z": "8dd34f467e047f48",
+        "name": "getAvailAppts",
+        "func": "// Node-RED Function Node - Cloud9 Get Locations\n// This code is designed to run inside a Node-RED Function node\n// Uncomment the line below if fetch is not available globally in your Node-RED version\n// You may need to install node-fetch: npm install node-fetch\n// const fetch = require('node-fetch');\n\n// Get parameters from msg object or use defaults\nconst clientId = msg.payload.clientId || env.get(\"cloud9ClientId\");\nconst userName = msg.payload.userName || env.get(\"cloud9UserName\");\nconst password = msg.payload.password || env.get(\"cloud9Password\");\nconst endpoint = msg.payload.endpoint || env.get(\"cloud9Endpoint\");\n\nnode.warn(\"Config: \"+ clientId +\"\\n\"+userName + \"\\n\" + password + \"\\n\" + endpoint);\n\nasync function getLocations() {\n    try {\n        // Input validation\n        if (!clientId) {\n            throw new Error('Client ID is required');\n        }\n\n        if (!userName) {\n            throw new Error('Username is required');\n        }\n\n        if (!password) {\n            throw new Error('Password is required');\n        }\n\n        // Build XML request body\n        const xmlBody = `<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<GetDataRequest xmlns=\"http://schemas.practica.ws/cloud9/partners/\" \n                xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">\n    <ClientID>${clientId}</ClientID>\n    <UserName>${userName}</UserName>\n    <Password>${password}</Password>\n    <Procedure>GetLocations</Procedure>\n</GetDataRequest>`;\n\n        const requestOptions = {\n            method: \"POST\",\n            headers: {\n                \"Content-Type\": \"application/xml\"\n            },\n            body: xmlBody,\n            redirect: \"follow\"\n        };\n\n        node.warn('Fetching Cloud9 locations...');\n        const response = await fetch(endpoint, requestOptions);\n\n        // Check for HTTP errors\n        if (!response.ok) {\n            const errorText = await response.text().catch(() => 'Unable to read error response');\n            throw new Error(`Get locations failed with status ${response.status}: ${errorText}`);\n        }\n\n        // Get the XML response as text\n        let xmlResult;\n        try {\n            xmlResult = await response.text();\n        } catch (parseError) {\n            throw new Error(`Failed to read response: ${parseError.message}`);\n        }\n\n        node.warn('Locations retrieved successfully');\n        node.warn('XML Response length: ' + xmlResult.length);\n\n        // Parse XML to JSON using Node-RED's built-in RED.util.parseXML or store as text\n        // Note: The calling flow should have an XML parser node after this function node\n        // to convert XML to JSON\n        \n        // Set the payload with the XML response (to be parsed by xml node in flow)\n        msg.payload = xmlResult;\n        msg.responseType = 'xml';\n        \n        return msg;\n\n    } catch (error) {\n        node.error('Error getting Cloud9 locations: ' + error.message, msg);\n\n        // Set error payload\n        msg.payload = {\n            success: false,\n            error: error.message || 'Unknown error occurred while retrieving locations',\n            errorType: error.name || 'Error',\n            timestamp: new Date().toISOString()\n        };\n\n        return msg;\n    }\n}\n\n// Execute the function and return the message\nreturn getLocations();\n\n\n",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [
+            {
+                "var": "fetch",
+                "module": "node-fetch"
+            }
+        ],
+        "x": 600,
+        "y": 320,
+        "wires": [
+            [
+                "98fcd8916aaa5f44",
+                "06c01802484387c2"
+            ]
+        ]
+    },
+    {
+        "id": "fa0a10c76f8f1b4a",
+        "type": "debug",
+        "z": "8dd34f467e047f48",
+        "name": "Ingress getAvailAppts",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 560,
+        "y": 280,
+        "wires": []
+    },
+    {
+        "id": "b89cd804936eb3fe",
+        "type": "debug",
+        "z": "8dd34f467e047f48",
+        "name": "getAvailAppts Egress",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1320,
+        "y": 320,
+        "wires": []
+    },
+    {
+        "id": "7728d6dff8909989",
+        "type": "inject",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "props": [
+            {
+                "p": "OGpatientId",
+                "v": "427698262",
+                "vt": "str"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            },
+            {
+                "p": "payload.phoneNumber",
+                "v": "3212002331",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 370,
+        "y": 280,
+        "wires": [
+            [
+                "d4bc0ba601a87d78"
+            ]
+        ]
+    },
+    {
+        "id": "f8a3863d6eb1f963",
+        "type": "http response",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 1150,
+        "y": 320,
+        "wires": []
+    },
+    {
+        "id": "06c01802484387c2",
+        "type": "debug",
+        "z": "8dd34f467e047f48",
+        "name": "getAvailAppts",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 800,
+        "y": 280,
+        "wires": []
+    },
+    {
+        "id": "454cdfadc01205ba",
+        "type": "xml",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "property": "payload",
+        "attr": "",
+        "chr": "",
+        "x": 750,
+        "y": 480,
+        "wires": [
+            [
+                "8c646762c376dce1",
+                "2e22a6ba7fb371b7"
+            ]
+        ]
+    },
+    {
+        "id": "d91e25ce8f2f1311",
+        "type": "http in",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "url": "/chord/cloud9/getExistingAppts",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 230,
+        "y": 480,
+        "wires": [
+            [
+                "20b5612d7b4eb29e",
+                "7ef10854a06bbeb1"
+            ]
+        ]
+    },
+    {
+        "id": "20b5612d7b4eb29e",
+        "type": "function",
+        "z": "8dd34f467e047f48",
+        "name": "getExistingAppts",
+        "func": "// Node-RED Function Node - Cloud9 Get Existing Appointments\n// This code is designed to run inside a Node-RED Function node\n// Uncomment the line below if fetch is not available globally in your Node-RED version\n// You may need to install node-fetch: npm install node-fetch\n// const fetch = require('node-fetch');\n\n// Get parameters from msg object or use defaults\nconst clientId = msg.payload.clientId || env.get(\"cloud9ClientId\");\nconst userName = msg.payload.userName || env.get(\"cloud9UserName\");\nconst password = msg.payload.password || env.get(\"cloud9Password\");\nconst endpoint = msg.payload.endpoint || env.get(\"cloud9Endpoint\");\n\n// Patient GUID parameter\nconst patGUID = msg.payload.patGUID || msg.patGUID;\n\nnode.warn(\"Config: \"+ clientId +\"\\n\"+userName + \"\\n\" + password + \"\\n\" + endpoint);\n\nasync function getExistingAppts() {\n    try {\n        // Input validation\n        if (!clientId) {\n            throw new Error('Client ID is required');\n        }\n\n        if (!userName) {\n            throw new Error('Username is required');\n        }\n\n        if (!password) {\n            throw new Error('Password is required');\n        }\n\n        if (!patGUID) {\n            throw new Error('Patient GUID (patGUID) is required');\n        }\n\n        // Build XML request body\n        const xmlBody = `<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<GetDataRequest xmlns=\"http://schemas.practica.ws/cloud9/partners/\" \n                xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">\n    <ClientID>${clientId}</ClientID>\n    <UserName>${userName}</UserName>\n    <Password>${password}</Password>\n    <Procedure>GetAppointmentListByPatient</Procedure>\n    <Parameters>\n        <patGUID>${patGUID}</patGUID>\n    </Parameters>\n</GetDataRequest>`;\n\n        const requestOptions = {\n            method: \"POST\",\n            headers: {\n                \"Content-Type\": \"application/xml\"\n            },\n            body: xmlBody,\n            redirect: \"follow\"\n        };\n\n        node.warn('Fetching Cloud9 existing appointments for patient...');\n        node.warn('Patient GUID: ' + patGUID);\n        const response = await fetch(endpoint, requestOptions);\n\n        // Check for HTTP errors\n        if (!response.ok) {\n            const errorText = await response.text().catch(() => 'Unable to read error response');\n            throw new Error(`Get existing appointments failed with status ${response.status}: ${errorText}`);\n        }\n\n        // Get the XML response as text\n        let xmlResult;\n        try {\n            xmlResult = await response.text();\n        } catch (parseError) {\n            throw new Error(`Failed to read response: ${parseError.message}`);\n        }\n\n        node.warn('Existing appointments retrieved successfully');\n        node.warn('XML Response length: ' + xmlResult.length);\n\n        // Parse XML to JSON using Node-RED's built-in RED.util.parseXML or store as text\n        // Note: The calling flow should have an XML parser node after this function node\n        // to convert XML to JSON\n        \n        // Set the payload with the XML response (to be parsed by xml node in flow)\n        msg.payload = xmlResult;\n        msg.responseType = 'xml';\n        \n        return msg;\n\n    } catch (error) {\n        node.error('Error getting Cloud9 existing appointments: ' + error.message, msg);\n\n        // Set error payload\n        msg.payload = {\n            success: false,\n            error: error.message || 'Unknown error occurred while retrieving existing appointments',\n            errorType: error.name || 'Error',\n            timestamp: new Date().toISOString()\n        };\n\n        return msg;\n    }\n}\n\n// Execute the function and return the message\nreturn getExistingAppts();\n\n\n",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [
+            {
+                "var": "fetch",
+                "module": "node-fetch"
+            }
+        ],
+        "x": 590,
+        "y": 480,
+        "wires": [
+            [
+                "454cdfadc01205ba",
+                "e7a19822e3cfa8b1"
+            ]
+        ]
+    },
+    {
+        "id": "7ef10854a06bbeb1",
+        "type": "debug",
+        "z": "8dd34f467e047f48",
+        "name": "Ingress getExistingAppts",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 550,
+        "y": 440,
+        "wires": []
+    },
+    {
+        "id": "2e22a6ba7fb371b7",
+        "type": "debug",
+        "z": "8dd34f467e047f48",
+        "name": "getExistingAppts Egress",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1130,
+        "y": 480,
+        "wires": []
+    },
+    {
+        "id": "d895f6a1bb1801af",
+        "type": "inject",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "props": [
+            {
+                "p": "OGpatientId",
+                "v": "427698262",
+                "vt": "str"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            },
+            {
+                "p": "payload.phoneNumber",
+                "v": "3212002331",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 350,
+        "y": 440,
+        "wires": [
+            [
+                "20b5612d7b4eb29e"
+            ]
+        ]
+    },
+    {
+        "id": "8c646762c376dce1",
+        "type": "http response",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 930,
+        "y": 480,
+        "wires": []
+    },
+    {
+        "id": "e7a19822e3cfa8b1",
+        "type": "debug",
+        "z": "8dd34f467e047f48",
+        "name": "getExistingAppts",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 790,
+        "y": 440,
+        "wires": []
+    },
+    {
+        "id": "8651692b80e414a6",
+        "type": "xml",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "property": "payload",
+        "attr": "",
+        "chr": "",
+        "x": 870,
+        "y": 660,
+        "wires": [
+            [
+                "1bd53b3d7dc33de6"
+            ]
+        ]
+    },
+    {
+        "id": "3cbf6ba203748d02",
+        "type": "http in",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "url": "/chord/cloud9/getPatientsByBirthdate",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 290,
+        "y": 660,
+        "wires": [
+            [
+                "9f63c50ee95b42f6",
+                "13f7858f4f8d289e"
+            ]
+        ]
+    },
+    {
+        "id": "9f63c50ee95b42f6",
+        "type": "function",
+        "z": "8dd34f467e047f48",
+        "name": "getPatientsByBirthdate",
+        "func": "// Node-RED Function Node - Cloud9 Get Patients By Birthdate\n// This code is designed to run inside a Node-RED Function node\n// Uncomment the line below if fetch is not available globally in your Node-RED version\n// You may need to install node-fetch: npm install node-fetch\n// const fetch = require('node-fetch');\n\n// Get parameters from msg object or use defaults\nconst clientId = msg.payload.clientId || env.get(\"cloud9ClientId\");\nconst userName = msg.payload.userName || env.get(\"cloud9UserName\");\nconst password = msg.payload.password || env.get(\"cloud9Password\");\nconst endpoint = msg.payload.endpoint || env.get(\"cloud9Endpoint\");\n\n// Birthday parameter - format: MM/DD (e.g., \"7/03\" for July 3rd)\nconst dtBirthday = msg.payload.dtBirthday;\n\nnode.warn(\"Config: \"+ clientId +\"\\n\"+userName + \"\\n\" + password + \"\\n\" + endpoint);\n\nasync function getPatientsByBirthdate() {\n    try {\n        // Input validation\n        if (!clientId) {\n            throw new Error('Client ID is required');\n        }\n\n        if (!userName) {\n            throw new Error('Username is required');\n        }\n\n        if (!password) {\n            throw new Error('Password is required');\n        }\n\n        if (!dtBirthday) {\n            throw new Error('Birthday date (dtBirthday) is required. Format: MM/DD (e.g., \"7/03\")');\n        }\n\n        // Build XML request body\n        const xmlBody = `<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<GetDataRequest xmlns=\"http://schemas.practica.ws/cloud9/partners/\" \n                xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">\n    <ClientID>${clientId}</ClientID>\n    <UserName>${userName}</UserName>\n    <Password>${password}</Password>\n    <Procedure>GetBirthdayList</Procedure>\n    <Parameters>\n        <dtBirthday>${dtBirthday}</dtBirthday>\n    </Parameters>\n</GetDataRequest>`;\n\n        const requestOptions = {\n            method: \"POST\",\n            headers: {\n                \"Content-Type\": \"application/xml\"\n            },\n            body: xmlBody,\n            redirect: \"follow\"\n        };\n\n        node.warn('Fetching Cloud9 patients by birthdate...');\n        node.warn('Birthday: ' + dtBirthday);\n        const response = await fetch(endpoint, requestOptions);\n\n        // Check for HTTP errors\n        if (!response.ok) {\n            const errorText = await response.text().catch(() => 'Unable to read error response');\n            throw new Error(`Get patients by birthdate failed with status ${response.status}: ${errorText}`);\n        }\n\n        // Get the XML response as text\n        let xmlResult;\n        try {\n            xmlResult = await response.text();\n        } catch (parseError) {\n            throw new Error(`Failed to read response: ${parseError.message}`);\n        }\n\n        node.warn('Patients by birthdate retrieved successfully');\n        node.warn('XML Response length: ' + xmlResult.length);\n\n        // Parse XML to JSON using Node-RED's built-in RED.util.parseXML or store as text\n        // Note: The calling flow should have an XML parser node after this function node\n        // to convert XML to JSON\n        \n        // Set the payload with the XML response (to be parsed by xml node in flow)\n        msg.payload = xmlResult;\n        msg.responseType = 'xml';\n        \n        return msg;\n\n    } catch (error) {\n        node.error('Error getting Cloud9 patients by birthdate: ' + error.message, msg);\n\n        // Set error payload\n        msg.payload = {\n            success: false,\n            error: error.message || 'Unknown error occurred while retrieving patients by birthdate',\n            errorType: error.name || 'Error',\n            timestamp: new Date().toISOString()\n        };\n\n        return msg;\n    }\n}\n\n// Execute the function and return the message\nreturn getPatientsByBirthdate();\n\n\n",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [
+            {
+                "var": "fetch",
+                "module": "node-fetch"
+            }
+        ],
+        "x": 650,
+        "y": 660,
+        "wires": [
+            [
+                "8651692b80e414a6",
+                "4ad44fef44fa525c"
+            ]
+        ]
+    },
+    {
+        "id": "13f7858f4f8d289e",
+        "type": "debug",
+        "z": "8dd34f467e047f48",
+        "name": "Ingress getPatientsByBirthdate",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 610,
+        "y": 620,
+        "wires": []
+    },
+    {
+        "id": "8393cfe4e0a63fe5",
+        "type": "debug",
+        "z": "8dd34f467e047f48",
+        "name": "getPatientsByBirthdate Egress",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1370,
+        "y": 660,
+        "wires": []
+    },
+    {
+        "id": "fb0b41cab0bdf368",
+        "type": "inject",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "props": [
+            {
+                "p": "OGpatientId",
+                "v": "427698262",
+                "vt": "str"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            },
+            {
+                "p": "payload.dtBirthday",
+                "v": "07/03",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 390,
+        "y": 620,
+        "wires": [
+            [
+                "9f63c50ee95b42f6"
+            ]
+        ]
+    },
+    {
+        "id": "784fa9bfa0af8f21",
+        "type": "http response",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 1230,
+        "y": 700,
+        "wires": []
+    },
+    {
+        "id": "4ad44fef44fa525c",
+        "type": "debug",
+        "z": "8dd34f467e047f48",
+        "name": "getPatientsByBirthdate",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 890,
+        "y": 620,
+        "wires": []
+    },
+    {
+        "id": "203e30e63c30b108",
+        "type": "xml",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "property": "payload",
+        "attr": "",
+        "chr": "",
+        "x": 750,
+        "y": 800,
+        "wires": [
+            [
+                "be87b8c3d30ce5c0",
+                "70d79cdb0dd4a1c8"
+            ]
+        ]
+    },
+    {
+        "id": "b80f04ccd7a7e9c4",
+        "type": "http in",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "url": "/chord/cloud9/getLocations",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 220,
+        "y": 800,
+        "wires": [
+            [
+                "63ce954990e20059",
+                "1c49b7ca35c7321f"
+            ]
+        ]
+    },
+    {
+        "id": "63ce954990e20059",
+        "type": "function",
+        "z": "8dd34f467e047f48",
+        "name": "getLocations",
+        "func": "// Node-RED Function Node - Cloud9 Get Locations\n// This code is designed to run inside a Node-RED Function node\n// Uncomment the line below if fetch is not available globally in your Node-RED version\n// You may need to install node-fetch: npm install node-fetch\n// const fetch = require('node-fetch');\n\n// Get parameters from msg object or use defaults\nconst clientId = msg.payload.clientId || env.get(\"cloud9ClientId\") || \"c15aa02a-adc1-40ae-a2b5-d2e39173ae56\";\nconst userName = msg.payload.userName || env.get(\"cloud9UserName\") || \"IntelepeerTest\";\nconst password = msg.payload.password || env.get(\"cloud9Password\") || \"#!InteleP33rTest!#\";\nconst endpoint = msg.payload.endpoint || env.get(\"cloud9Endpoint\") || \"https://us-ea1-partnertest.cloud9ortho.com/GetData.ashx\";\n\nasync function getLocations() {\n    try {\n        // Input validation\n        if (!clientId) {\n            throw new Error('Client ID is required');\n        }\n\n        if (!userName) {\n            throw new Error('Username is required');\n        }\n\n        if (!password) {\n            throw new Error('Password is required');\n        }\n\n        // Build XML request body\n        const xmlBody = `<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<GetDataRequest xmlns=\"http://schemas.practica.ws/cloud9/partners/\" \n                xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">\n    <ClientID>${clientId}</ClientID>\n    <UserName>${userName}</UserName>\n    <Password>${password}</Password>\n    <Procedure>GetLocations</Procedure>\n</GetDataRequest>`;\n\n        const requestOptions = {\n            method: \"POST\",\n            headers: {\n                \"Content-Type\": \"application/xml\"\n            },\n            body: xmlBody,\n            redirect: \"follow\"\n        };\n\n        node.warn('Fetching Cloud9 locations...');\n        const response = await fetch(endpoint, requestOptions);\n\n        // Check for HTTP errors\n        if (!response.ok) {\n            const errorText = await response.text().catch(() => 'Unable to read error response');\n            throw new Error(`Get locations failed with status ${response.status}: ${errorText}`);\n        }\n\n        // Get the XML response as text\n        let xmlResult;\n        try {\n            xmlResult = await response.text();\n        } catch (parseError) {\n            throw new Error(`Failed to read response: ${parseError.message}`);\n        }\n\n        node.warn('Locations retrieved successfully');\n        node.warn('XML Response length: ' + xmlResult.length);\n\n        // Parse XML to JSON using Node-RED's built-in RED.util.parseXML or store as text\n        // Note: The calling flow should have an XML parser node after this function node\n        // to convert XML to JSON\n        \n        // Set the payload with the XML response (to be parsed by xml node in flow)\n        msg.payload = xmlResult;\n        msg.responseType = 'xml';\n        \n        return msg;\n\n    } catch (error) {\n        node.error('Error getting Cloud9 locations: ' + error.message, msg);\n\n        // Set error payload\n        msg.payload = {\n            success: false,\n            error: error.message || 'Unknown error occurred while retrieving locations',\n            errorType: error.name || 'Error',\n            timestamp: new Date().toISOString()\n        };\n\n        return msg;\n    }\n}\n\n// Execute the function and return the message\nreturn getLocations();\n\n\n",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [
+            {
+                "var": "fetch",
+                "module": "node-fetch"
+            }
+        ],
+        "x": 570,
+        "y": 800,
+        "wires": [
+            [
+                "203e30e63c30b108",
+                "153c8afd3c772cb9"
+            ]
+        ]
+    },
+    {
+        "id": "1c49b7ca35c7321f",
+        "type": "debug",
+        "z": "8dd34f467e047f48",
+        "name": "Ingress GetLocations",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 540,
+        "y": 760,
+        "wires": []
+    },
+    {
+        "id": "70d79cdb0dd4a1c8",
+        "type": "debug",
+        "z": "8dd34f467e047f48",
+        "name": "getLocations Egress",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1100,
+        "y": 800,
+        "wires": []
+    },
+    {
+        "id": "42ebee338df8b5eb",
+        "type": "inject",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "props": [
+            {
+                "p": "OGpatientId",
+                "v": "427698262",
+                "vt": "str"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            },
+            {
+                "p": "payload.phoneNumber",
+                "v": "3212002331",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 350,
+        "y": 760,
+        "wires": [
+            [
+                "63ce954990e20059"
+            ]
+        ]
+    },
+    {
+        "id": "be87b8c3d30ce5c0",
+        "type": "http response",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 930,
+        "y": 800,
+        "wires": []
+    },
+    {
+        "id": "153c8afd3c772cb9",
+        "type": "debug",
+        "z": "8dd34f467e047f48",
+        "name": "GetLocations",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 780,
+        "y": 760,
+        "wires": []
+    },
+    {
+        "id": "d1e96ae7f0c5f383",
+        "type": "xml",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "property": "payload",
+        "attr": "",
+        "chr": "",
+        "x": 750,
+        "y": 940,
+        "wires": [
+            [
+                "658af446cd18ddbe",
+                "9f5bf7044ab3a255"
+            ]
+        ]
+    },
+    {
+        "id": "30f2d1285c5522da",
+        "type": "http in",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "url": "/chord/cloud9/getLocations",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 220,
+        "y": 940,
+        "wires": [
+            [
+                "44f55e23f2780880",
+                "c4df1b375f319bd2"
+            ]
+        ]
+    },
+    {
+        "id": "44f55e23f2780880",
+        "type": "function",
+        "z": "8dd34f467e047f48",
+        "name": "getLocations",
+        "func": "// Node-RED Function Node - Cloud9 Get Locations\n// This code is designed to run inside a Node-RED Function node\n// Uncomment the line below if fetch is not available globally in your Node-RED version\n// You may need to install node-fetch: npm install node-fetch\n// const fetch = require('node-fetch');\n\n// Get parameters from msg object or use defaults\nconst clientId = msg.payload.clientId || env.get(\"cloud9ClientId\") || \"c15aa02a-adc1-40ae-a2b5-d2e39173ae56\";\nconst userName = msg.payload.userName || env.get(\"cloud9UserName\") || \"IntelepeerTest\";\nconst password = msg.payload.password || env.get(\"cloud9Password\") || \"#!InteleP33rTest!#\";\nconst endpoint = msg.payload.endpoint || env.get(\"cloud9Endpoint\") || \"https://us-ea1-partnertest.cloud9ortho.com/GetData.ashx\";\n\nasync function getLocations() {\n    try {\n        // Input validation\n        if (!clientId) {\n            throw new Error('Client ID is required');\n        }\n\n        if (!userName) {\n            throw new Error('Username is required');\n        }\n\n        if (!password) {\n            throw new Error('Password is required');\n        }\n\n        // Build XML request body\n        const xmlBody = `<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<GetDataRequest xmlns=\"http://schemas.practica.ws/cloud9/partners/\" \n                xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">\n    <ClientID>${clientId}</ClientID>\n    <UserName>${userName}</UserName>\n    <Password>${password}</Password>\n    <Procedure>GetLocations</Procedure>\n</GetDataRequest>`;\n\n        const requestOptions = {\n            method: \"POST\",\n            headers: {\n                \"Content-Type\": \"application/xml\"\n            },\n            body: xmlBody,\n            redirect: \"follow\"\n        };\n\n        node.warn('Fetching Cloud9 locations...');\n        const response = await fetch(endpoint, requestOptions);\n\n        // Check for HTTP errors\n        if (!response.ok) {\n            const errorText = await response.text().catch(() => 'Unable to read error response');\n            throw new Error(`Get locations failed with status ${response.status}: ${errorText}`);\n        }\n\n        // Get the XML response as text\n        let xmlResult;\n        try {\n            xmlResult = await response.text();\n        } catch (parseError) {\n            throw new Error(`Failed to read response: ${parseError.message}`);\n        }\n\n        node.warn('Locations retrieved successfully');\n        node.warn('XML Response length: ' + xmlResult.length);\n\n        // Parse XML to JSON using Node-RED's built-in RED.util.parseXML or store as text\n        // Note: The calling flow should have an XML parser node after this function node\n        // to convert XML to JSON\n        \n        // Set the payload with the XML response (to be parsed by xml node in flow)\n        msg.payload = xmlResult;\n        msg.responseType = 'xml';\n        \n        return msg;\n\n    } catch (error) {\n        node.error('Error getting Cloud9 locations: ' + error.message, msg);\n\n        // Set error payload\n        msg.payload = {\n            success: false,\n            error: error.message || 'Unknown error occurred while retrieving locations',\n            errorType: error.name || 'Error',\n            timestamp: new Date().toISOString()\n        };\n\n        return msg;\n    }\n}\n\n// Execute the function and return the message\nreturn getLocations();\n\n\n",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [
+            {
+                "var": "fetch",
+                "module": "node-fetch"
+            }
+        ],
+        "x": 570,
+        "y": 940,
+        "wires": [
+            [
+                "d1e96ae7f0c5f383",
+                "1c69561f16f4b072"
+            ]
+        ]
+    },
+    {
+        "id": "c4df1b375f319bd2",
+        "type": "debug",
+        "z": "8dd34f467e047f48",
+        "name": "Ingress GetLocations",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 540,
+        "y": 900,
+        "wires": []
+    },
+    {
+        "id": "9f5bf7044ab3a255",
+        "type": "debug",
+        "z": "8dd34f467e047f48",
+        "name": "getLocations Egress",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1100,
+        "y": 940,
+        "wires": []
+    },
+    {
+        "id": "752977730ba074ec",
+        "type": "inject",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "props": [
+            {
+                "p": "OGpatientId",
+                "v": "427698262",
+                "vt": "str"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            },
+            {
+                "p": "payload.phoneNumber",
+                "v": "3212002331",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 350,
+        "y": 900,
+        "wires": [
+            [
+                "44f55e23f2780880"
+            ]
+        ]
+    },
+    {
+        "id": "658af446cd18ddbe",
+        "type": "http response",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 930,
+        "y": 940,
+        "wires": []
+    },
+    {
+        "id": "1c69561f16f4b072",
+        "type": "debug",
+        "z": "8dd34f467e047f48",
+        "name": "GetLocations",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 780,
+        "y": 900,
+        "wires": []
+    },
+    {
+        "id": "e8149cf03551f83d",
+        "type": "xml",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "property": "payload",
+        "attr": "",
+        "chr": "",
+        "x": 750,
+        "y": 1080,
+        "wires": [
+            [
+                "4aa3550785c8378a",
+                "273db184b636ca9f"
+            ]
+        ]
+    },
+    {
+        "id": "2bda58c712508e35",
+        "type": "http in",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "url": "/chord/cloud9/getLocations",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 220,
+        "y": 1080,
+        "wires": [
+            [
+                "97ca0d9ec3af6c25",
+                "519a7723559082a0"
+            ]
+        ]
+    },
+    {
+        "id": "97ca0d9ec3af6c25",
+        "type": "function",
+        "z": "8dd34f467e047f48",
+        "name": "getLocations",
+        "func": "// Node-RED Function Node - Cloud9 Get Locations\n// This code is designed to run inside a Node-RED Function node\n// Uncomment the line below if fetch is not available globally in your Node-RED version\n// You may need to install node-fetch: npm install node-fetch\n// const fetch = require('node-fetch');\n\n// Get parameters from msg object or use defaults\nconst clientId = msg.payload.clientId || env.get(\"cloud9ClientId\") || \"c15aa02a-adc1-40ae-a2b5-d2e39173ae56\";\nconst userName = msg.payload.userName || env.get(\"cloud9UserName\") || \"IntelepeerTest\";\nconst password = msg.payload.password || env.get(\"cloud9Password\") || \"#!InteleP33rTest!#\";\nconst endpoint = msg.payload.endpoint || env.get(\"cloud9Endpoint\") || \"https://us-ea1-partnertest.cloud9ortho.com/GetData.ashx\";\n\nasync function getLocations() {\n    try {\n        // Input validation\n        if (!clientId) {\n            throw new Error('Client ID is required');\n        }\n\n        if (!userName) {\n            throw new Error('Username is required');\n        }\n\n        if (!password) {\n            throw new Error('Password is required');\n        }\n\n        // Build XML request body\n        const xmlBody = `<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<GetDataRequest xmlns=\"http://schemas.practica.ws/cloud9/partners/\" \n                xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">\n    <ClientID>${clientId}</ClientID>\n    <UserName>${userName}</UserName>\n    <Password>${password}</Password>\n    <Procedure>GetLocations</Procedure>\n</GetDataRequest>`;\n\n        const requestOptions = {\n            method: \"POST\",\n            headers: {\n                \"Content-Type\": \"application/xml\"\n            },\n            body: xmlBody,\n            redirect: \"follow\"\n        };\n\n        node.warn('Fetching Cloud9 locations...');\n        const response = await fetch(endpoint, requestOptions);\n\n        // Check for HTTP errors\n        if (!response.ok) {\n            const errorText = await response.text().catch(() => 'Unable to read error response');\n            throw new Error(`Get locations failed with status ${response.status}: ${errorText}`);\n        }\n\n        // Get the XML response as text\n        let xmlResult;\n        try {\n            xmlResult = await response.text();\n        } catch (parseError) {\n            throw new Error(`Failed to read response: ${parseError.message}`);\n        }\n\n        node.warn('Locations retrieved successfully');\n        node.warn('XML Response length: ' + xmlResult.length);\n\n        // Parse XML to JSON using Node-RED's built-in RED.util.parseXML or store as text\n        // Note: The calling flow should have an XML parser node after this function node\n        // to convert XML to JSON\n        \n        // Set the payload with the XML response (to be parsed by xml node in flow)\n        msg.payload = xmlResult;\n        msg.responseType = 'xml';\n        \n        return msg;\n\n    } catch (error) {\n        node.error('Error getting Cloud9 locations: ' + error.message, msg);\n\n        // Set error payload\n        msg.payload = {\n            success: false,\n            error: error.message || 'Unknown error occurred while retrieving locations',\n            errorType: error.name || 'Error',\n            timestamp: new Date().toISOString()\n        };\n\n        return msg;\n    }\n}\n\n// Execute the function and return the message\nreturn getLocations();\n\n\n",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [
+            {
+                "var": "fetch",
+                "module": "node-fetch"
+            }
+        ],
+        "x": 570,
+        "y": 1080,
+        "wires": [
+            [
+                "e8149cf03551f83d",
+                "64594dc6c8103f0e"
+            ]
+        ]
+    },
+    {
+        "id": "519a7723559082a0",
+        "type": "debug",
+        "z": "8dd34f467e047f48",
+        "name": "Ingress GetLocations",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 540,
+        "y": 1040,
+        "wires": []
+    },
+    {
+        "id": "273db184b636ca9f",
+        "type": "debug",
+        "z": "8dd34f467e047f48",
+        "name": "getLocations Egress",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1100,
+        "y": 1080,
+        "wires": []
+    },
+    {
+        "id": "c634f85cd40febcf",
+        "type": "inject",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "props": [
+            {
+                "p": "OGpatientId",
+                "v": "427698262",
+                "vt": "str"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            },
+            {
+                "p": "payload.phoneNumber",
+                "v": "3212002331",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 350,
+        "y": 1040,
+        "wires": [
+            [
+                "97ca0d9ec3af6c25"
+            ]
+        ]
+    },
+    {
+        "id": "4aa3550785c8378a",
+        "type": "http response",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 930,
+        "y": 1080,
+        "wires": []
+    },
+    {
+        "id": "64594dc6c8103f0e",
+        "type": "debug",
+        "z": "8dd34f467e047f48",
+        "name": "GetLocations",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 780,
+        "y": 1040,
+        "wires": []
+    },
+    {
+        "id": "efd7a1b0a0b33ece",
+        "type": "xml",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "property": "payload",
+        "attr": "",
+        "chr": "",
+        "x": 770,
+        "y": 1220,
+        "wires": [
+            [
+                "4ea8ce1adb477811",
+                "c50aa3ea5ed22216"
+            ]
+        ]
+    },
+    {
+        "id": "c488c5a8bd61b9a3",
+        "type": "http in",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "url": "/chord/cloud9/getLocations",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 240,
+        "y": 1220,
+        "wires": [
+            [
+                "936cb298010f3db9",
+                "0994533bbbdb393b"
+            ]
+        ]
+    },
+    {
+        "id": "936cb298010f3db9",
+        "type": "function",
+        "z": "8dd34f467e047f48",
+        "name": "getLocations",
+        "func": "// Node-RED Function Node - Cloud9 Get Locations\n// This code is designed to run inside a Node-RED Function node\n// Uncomment the line below if fetch is not available globally in your Node-RED version\n// You may need to install node-fetch: npm install node-fetch\n// const fetch = require('node-fetch');\n\n// Get parameters from msg object or use defaults\nconst clientId = msg.payload.clientId || env.get(\"cloud9ClientId\") || \"c15aa02a-adc1-40ae-a2b5-d2e39173ae56\";\nconst userName = msg.payload.userName || env.get(\"cloud9UserName\") || \"IntelepeerTest\";\nconst password = msg.payload.password || env.get(\"cloud9Password\") || \"#!InteleP33rTest!#\";\nconst endpoint = msg.payload.endpoint || env.get(\"cloud9Endpoint\") || \"https://us-ea1-partnertest.cloud9ortho.com/GetData.ashx\";\n\nasync function getLocations() {\n    try {\n        // Input validation\n        if (!clientId) {\n            throw new Error('Client ID is required');\n        }\n\n        if (!userName) {\n            throw new Error('Username is required');\n        }\n\n        if (!password) {\n            throw new Error('Password is required');\n        }\n\n        // Build XML request body\n        const xmlBody = `<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<GetDataRequest xmlns=\"http://schemas.practica.ws/cloud9/partners/\" \n                xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">\n    <ClientID>${clientId}</ClientID>\n    <UserName>${userName}</UserName>\n    <Password>${password}</Password>\n    <Procedure>GetLocations</Procedure>\n</GetDataRequest>`;\n\n        const requestOptions = {\n            method: \"POST\",\n            headers: {\n                \"Content-Type\": \"application/xml\"\n            },\n            body: xmlBody,\n            redirect: \"follow\"\n        };\n\n        node.warn('Fetching Cloud9 locations...');\n        const response = await fetch(endpoint, requestOptions);\n\n        // Check for HTTP errors\n        if (!response.ok) {\n            const errorText = await response.text().catch(() => 'Unable to read error response');\n            throw new Error(`Get locations failed with status ${response.status}: ${errorText}`);\n        }\n\n        // Get the XML response as text\n        let xmlResult;\n        try {\n            xmlResult = await response.text();\n        } catch (parseError) {\n            throw new Error(`Failed to read response: ${parseError.message}`);\n        }\n\n        node.warn('Locations retrieved successfully');\n        node.warn('XML Response length: ' + xmlResult.length);\n\n        // Parse XML to JSON using Node-RED's built-in RED.util.parseXML or store as text\n        // Note: The calling flow should have an XML parser node after this function node\n        // to convert XML to JSON\n        \n        // Set the payload with the XML response (to be parsed by xml node in flow)\n        msg.payload = xmlResult;\n        msg.responseType = 'xml';\n        \n        return msg;\n\n    } catch (error) {\n        node.error('Error getting Cloud9 locations: ' + error.message, msg);\n\n        // Set error payload\n        msg.payload = {\n            success: false,\n            error: error.message || 'Unknown error occurred while retrieving locations',\n            errorType: error.name || 'Error',\n            timestamp: new Date().toISOString()\n        };\n\n        return msg;\n    }\n}\n\n// Execute the function and return the message\nreturn getLocations();\n\n\n",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [
+            {
+                "var": "fetch",
+                "module": "node-fetch"
+            }
+        ],
+        "x": 590,
+        "y": 1220,
+        "wires": [
+            [
+                "efd7a1b0a0b33ece",
+                "f14459ef3abfcd9a"
+            ]
+        ]
+    },
+    {
+        "id": "0994533bbbdb393b",
+        "type": "debug",
+        "z": "8dd34f467e047f48",
+        "name": "Ingress GetLocations",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 560,
+        "y": 1180,
+        "wires": []
+    },
+    {
+        "id": "c50aa3ea5ed22216",
+        "type": "debug",
+        "z": "8dd34f467e047f48",
+        "name": "getLocations Egress",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1120,
+        "y": 1220,
+        "wires": []
+    },
+    {
+        "id": "a587803971d47f41",
+        "type": "inject",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "props": [
+            {
+                "p": "OGpatientId",
+                "v": "427698262",
+                "vt": "str"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            },
+            {
+                "p": "payload.phoneNumber",
+                "v": "3212002331",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 370,
+        "y": 1180,
+        "wires": [
+            [
+                "936cb298010f3db9"
+            ]
+        ]
+    },
+    {
+        "id": "4ea8ce1adb477811",
+        "type": "http response",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 950,
+        "y": 1220,
+        "wires": []
+    },
+    {
+        "id": "f14459ef3abfcd9a",
+        "type": "debug",
+        "z": "8dd34f467e047f48",
+        "name": "GetLocations",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 800,
+        "y": 1180,
+        "wires": []
+    },
+    {
+        "id": "30426ee9b0456611",
+        "type": "xml",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "property": "payload",
+        "attr": "",
+        "chr": "",
+        "x": 770,
+        "y": 1400,
+        "wires": [
+            [
+                "d3b46f78e43be5e1",
+                "e60a74be711e84e7"
+            ]
+        ]
+    },
+    {
+        "id": "ee8e8f7a3c05938b",
+        "type": "http in",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "url": "/chord/cloud9/getLocations",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 240,
+        "y": 1400,
+        "wires": [
+            [
+                "75719a05df35127c",
+                "7f239fab3425690f"
+            ]
+        ]
+    },
+    {
+        "id": "75719a05df35127c",
+        "type": "function",
+        "z": "8dd34f467e047f48",
+        "name": "getLocations",
+        "func": "// Node-RED Function Node - Cloud9 Get Locations\n// This code is designed to run inside a Node-RED Function node\n// Uncomment the line below if fetch is not available globally in your Node-RED version\n// You may need to install node-fetch: npm install node-fetch\n// const fetch = require('node-fetch');\n\n// Get parameters from msg object or use defaults\nconst clientId = msg.payload.clientId || env.get(\"cloud9ClientId\") || \"c15aa02a-adc1-40ae-a2b5-d2e39173ae56\";\nconst userName = msg.payload.userName || env.get(\"cloud9UserName\") || \"IntelepeerTest\";\nconst password = msg.payload.password || env.get(\"cloud9Password\") || \"#!InteleP33rTest!#\";\nconst endpoint = msg.payload.endpoint || env.get(\"cloud9Endpoint\") || \"https://us-ea1-partnertest.cloud9ortho.com/GetData.ashx\";\n\nasync function getLocations() {\n    try {\n        // Input validation\n        if (!clientId) {\n            throw new Error('Client ID is required');\n        }\n\n        if (!userName) {\n            throw new Error('Username is required');\n        }\n\n        if (!password) {\n            throw new Error('Password is required');\n        }\n\n        // Build XML request body\n        const xmlBody = `<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<GetDataRequest xmlns=\"http://schemas.practica.ws/cloud9/partners/\" \n                xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">\n    <ClientID>${clientId}</ClientID>\n    <UserName>${userName}</UserName>\n    <Password>${password}</Password>\n    <Procedure>GetLocations</Procedure>\n</GetDataRequest>`;\n\n        const requestOptions = {\n            method: \"POST\",\n            headers: {\n                \"Content-Type\": \"application/xml\"\n            },\n            body: xmlBody,\n            redirect: \"follow\"\n        };\n\n        node.warn('Fetching Cloud9 locations...');\n        const response = await fetch(endpoint, requestOptions);\n\n        // Check for HTTP errors\n        if (!response.ok) {\n            const errorText = await response.text().catch(() => 'Unable to read error response');\n            throw new Error(`Get locations failed with status ${response.status}: ${errorText}`);\n        }\n\n        // Get the XML response as text\n        let xmlResult;\n        try {\n            xmlResult = await response.text();\n        } catch (parseError) {\n            throw new Error(`Failed to read response: ${parseError.message}`);\n        }\n\n        node.warn('Locations retrieved successfully');\n        node.warn('XML Response length: ' + xmlResult.length);\n\n        // Parse XML to JSON using Node-RED's built-in RED.util.parseXML or store as text\n        // Note: The calling flow should have an XML parser node after this function node\n        // to convert XML to JSON\n        \n        // Set the payload with the XML response (to be parsed by xml node in flow)\n        msg.payload = xmlResult;\n        msg.responseType = 'xml';\n        \n        return msg;\n\n    } catch (error) {\n        node.error('Error getting Cloud9 locations: ' + error.message, msg);\n\n        // Set error payload\n        msg.payload = {\n            success: false,\n            error: error.message || 'Unknown error occurred while retrieving locations',\n            errorType: error.name || 'Error',\n            timestamp: new Date().toISOString()\n        };\n\n        return msg;\n    }\n}\n\n// Execute the function and return the message\nreturn getLocations();\n\n\n",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [
+            {
+                "var": "fetch",
+                "module": "node-fetch"
+            }
+        ],
+        "x": 590,
+        "y": 1400,
+        "wires": [
+            [
+                "30426ee9b0456611",
+                "4955283962f8f7ee"
+            ]
+        ]
+    },
+    {
+        "id": "7f239fab3425690f",
+        "type": "debug",
+        "z": "8dd34f467e047f48",
+        "name": "Ingress GetLocations",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 560,
+        "y": 1360,
+        "wires": []
+    },
+    {
+        "id": "e60a74be711e84e7",
+        "type": "debug",
+        "z": "8dd34f467e047f48",
+        "name": "getLocations Egress",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1120,
+        "y": 1400,
+        "wires": []
+    },
+    {
+        "id": "4ebb406214595dcc",
+        "type": "inject",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "props": [
+            {
+                "p": "OGpatientId",
+                "v": "427698262",
+                "vt": "str"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            },
+            {
+                "p": "payload.phoneNumber",
+                "v": "3212002331",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 370,
+        "y": 1360,
+        "wires": [
+            [
+                "75719a05df35127c"
+            ]
+        ]
+    },
+    {
+        "id": "d3b46f78e43be5e1",
+        "type": "http response",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 950,
+        "y": 1400,
+        "wires": []
+    },
+    {
+        "id": "4955283962f8f7ee",
+        "type": "debug",
+        "z": "8dd34f467e047f48",
+        "name": "GetLocations",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 800,
+        "y": 1360,
+        "wires": []
+    },
+    {
+        "id": "6acaab1bb728a398",
+        "type": "xml",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "property": "payload",
+        "attr": "",
+        "chr": "",
+        "x": 750,
+        "y": 1560,
+        "wires": [
+            [
+                "b338fe4c99255761",
+                "4a5ea1da16664b4b"
+            ]
+        ]
+    },
+    {
+        "id": "4858c6d550095bb5",
+        "type": "http in",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "url": "/chord/cloud9/getLocations",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 220,
+        "y": 1560,
+        "wires": [
+            [
+                "6a67d666f0e2da23",
+                "71e3dc4848636f75"
+            ]
+        ]
+    },
+    {
+        "id": "6a67d666f0e2da23",
+        "type": "function",
+        "z": "8dd34f467e047f48",
+        "name": "getLocations",
+        "func": "// Node-RED Function Node - Cloud9 Get Locations\n// This code is designed to run inside a Node-RED Function node\n// Uncomment the line below if fetch is not available globally in your Node-RED version\n// You may need to install node-fetch: npm install node-fetch\n// const fetch = require('node-fetch');\n\n// Get parameters from msg object or use defaults\nconst clientId = msg.payload.clientId || env.get(\"cloud9ClientId\") || \"c15aa02a-adc1-40ae-a2b5-d2e39173ae56\";\nconst userName = msg.payload.userName || env.get(\"cloud9UserName\") || \"IntelepeerTest\";\nconst password = msg.payload.password || env.get(\"cloud9Password\") || \"#!InteleP33rTest!#\";\nconst endpoint = msg.payload.endpoint || env.get(\"cloud9Endpoint\") || \"https://us-ea1-partnertest.cloud9ortho.com/GetData.ashx\";\n\nasync function getLocations() {\n    try {\n        // Input validation\n        if (!clientId) {\n            throw new Error('Client ID is required');\n        }\n\n        if (!userName) {\n            throw new Error('Username is required');\n        }\n\n        if (!password) {\n            throw new Error('Password is required');\n        }\n\n        // Build XML request body\n        const xmlBody = `<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<GetDataRequest xmlns=\"http://schemas.practica.ws/cloud9/partners/\" \n                xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">\n    <ClientID>${clientId}</ClientID>\n    <UserName>${userName}</UserName>\n    <Password>${password}</Password>\n    <Procedure>GetLocations</Procedure>\n</GetDataRequest>`;\n\n        const requestOptions = {\n            method: \"POST\",\n            headers: {\n                \"Content-Type\": \"application/xml\"\n            },\n            body: xmlBody,\n            redirect: \"follow\"\n        };\n\n        node.warn('Fetching Cloud9 locations...');\n        const response = await fetch(endpoint, requestOptions);\n\n        // Check for HTTP errors\n        if (!response.ok) {\n            const errorText = await response.text().catch(() => 'Unable to read error response');\n            throw new Error(`Get locations failed with status ${response.status}: ${errorText}`);\n        }\n\n        // Get the XML response as text\n        let xmlResult;\n        try {\n            xmlResult = await response.text();\n        } catch (parseError) {\n            throw new Error(`Failed to read response: ${parseError.message}`);\n        }\n\n        node.warn('Locations retrieved successfully');\n        node.warn('XML Response length: ' + xmlResult.length);\n\n        // Parse XML to JSON using Node-RED's built-in RED.util.parseXML or store as text\n        // Note: The calling flow should have an XML parser node after this function node\n        // to convert XML to JSON\n        \n        // Set the payload with the XML response (to be parsed by xml node in flow)\n        msg.payload = xmlResult;\n        msg.responseType = 'xml';\n        \n        return msg;\n\n    } catch (error) {\n        node.error('Error getting Cloud9 locations: ' + error.message, msg);\n\n        // Set error payload\n        msg.payload = {\n            success: false,\n            error: error.message || 'Unknown error occurred while retrieving locations',\n            errorType: error.name || 'Error',\n            timestamp: new Date().toISOString()\n        };\n\n        return msg;\n    }\n}\n\n// Execute the function and return the message\nreturn getLocations();\n\n\n",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [
+            {
+                "var": "fetch",
+                "module": "node-fetch"
+            }
+        ],
+        "x": 570,
+        "y": 1560,
+        "wires": [
+            [
+                "6acaab1bb728a398",
+                "409eae7f1d4c8f17"
+            ]
+        ]
+    },
+    {
+        "id": "71e3dc4848636f75",
+        "type": "debug",
+        "z": "8dd34f467e047f48",
+        "name": "Ingress GetLocations",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 540,
+        "y": 1520,
+        "wires": []
+    },
+    {
+        "id": "4a5ea1da16664b4b",
+        "type": "debug",
+        "z": "8dd34f467e047f48",
+        "name": "getLocations Egress",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1100,
+        "y": 1560,
+        "wires": []
+    },
+    {
+        "id": "899ace2458c579e4",
+        "type": "inject",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "props": [
+            {
+                "p": "OGpatientId",
+                "v": "427698262",
+                "vt": "str"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            },
+            {
+                "p": "payload.phoneNumber",
+                "v": "3212002331",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 350,
+        "y": 1520,
+        "wires": [
+            [
+                "6a67d666f0e2da23"
+            ]
+        ]
+    },
+    {
+        "id": "b338fe4c99255761",
+        "type": "http response",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 930,
+        "y": 1560,
+        "wires": []
+    },
+    {
+        "id": "409eae7f1d4c8f17",
+        "type": "debug",
+        "z": "8dd34f467e047f48",
+        "name": "GetLocations",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 780,
+        "y": 1520,
+        "wires": []
+    },
+    {
+        "id": "2fa3890f5052760b",
+        "type": "change",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "rules": [
+            {
+                "t": "set",
+                "p": "temp",
+                "pt": "msg",
+                "to": "payload",
+                "tot": "msg"
+            },
+            {
+                "t": "set",
+                "p": "payload",
+                "pt": "msg",
+                "to": "{}",
+                "tot": "json"
+            },
+            {
+                "t": "set",
+                "p": "payload.location",
+                "pt": "msg",
+                "to": "temp.GetDataResponse.Records[0]",
+                "tot": "msg"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 960,
+        "y": 160,
+        "wires": [
+            [
+                "674513874673c7ca",
+                "86833f99f72d575a"
+            ]
+        ]
+    },
+    {
+        "id": "fb8fd3ec85da1f17",
+        "type": "change",
+        "z": "8dd34f467e047f48",
+        "name": "",
+        "rules": [
+            {
+                "t": "set",
+                "p": "temp",
+                "pt": "msg",
+                "to": "payload",
+                "tot": "msg"
+            },
+            {
+                "t": "set",
+                "p": "payload",
+                "pt": "msg",
+                "to": "{}",
+                "tot": "json"
+            },
+            {
+                "t": "set",
+                "p": "payload.appointments",
+                "pt": "msg",
+                "to": "temp.GetDataResponse.Records[0].Record",
+                "tot": "msg"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 960,
+        "y": 320,
+        "wires": [
+            [
+                "f8a3863d6eb1f963",
+                "b89cd804936eb3fe"
+            ]
+        ]
+    },
+    {
+        "id": "1bd53b3d7dc33de6",
+        "type": "change",
+        "z": "8dd34f467e047f48",
+        "name": "convert",
+        "rules": [
+            {
+                "t": "set",
+                "p": "temp",
+                "pt": "msg",
+                "to": "payload",
+                "tot": "msg"
+            },
+            {
+                "t": "set",
+                "p": "payload",
+                "pt": "msg",
+                "to": "{}",
+                "tot": "json"
+            },
+            {
+                "t": "set",
+                "p": "payload.patients",
+                "pt": "msg",
+                "to": "temp.GetDataResponse.Records[0].Record",
+                "tot": "msg"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 1020,
+        "y": 660,
+        "wires": [
+            [
+                "784fa9bfa0af8f21",
+                "8393cfe4e0a63fe5"
+            ]
+        ]
+    },
+    {
+        "id": "6f026f824f513271",
+        "type": "change",
+        "z": "8dd34f467e047f48",
+        "name": "ListConvert",
+        "rules": [
+            {
+                "t": "set",
+                "p": "temp",
+                "pt": "msg",
+                "to": "payload",
+                "tot": "msg"
+            },
+            {
+                "t": "set",
+                "p": "payload",
+                "pt": "msg",
+                "to": "{}",
+                "tot": "json"
+            },
+            {
+                "t": "set",
+                "p": "payload.appointments",
+                "pt": "msg",
+                "to": "temp.GetDataResponse.Records[0].Record",
+                "tot": "msg"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 1350,
+        "y": 580,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "6370fbda9740e11b",
+        "type": "change",
+        "z": "8dd34f467e047f48",
+        "name": "SingleConvert",
+        "rules": [
+            {
+                "t": "set",
+                "p": "temp",
+                "pt": "msg",
+                "to": "payload",
+                "tot": "msg"
+            },
+            {
+                "t": "set",
+                "p": "payload",
+                "pt": "msg",
+                "to": "{}",
+                "tot": "json"
+            },
+            {
+                "t": "set",
+                "p": "payload.location",
+                "pt": "msg",
+                "to": "temp.GetDataResponse.Records[0]",
+                "tot": "msg"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 1340,
+        "y": 540,
+        "wires": [
+            []
+        ]
+    }
+]

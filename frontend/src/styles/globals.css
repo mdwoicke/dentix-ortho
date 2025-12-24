@@ -1,0 +1,451 @@
+/**
+ * Global Styles
+ * Tailwind CSS v4 imports and custom global styles
+ */
+
+@import "tailwindcss";
+
+/* Configure dark mode variant for class-based dark mode */
+@variant dark (.dark &);
+
+@theme {
+  --color-slate-50: #f8fafc;
+  --color-slate-100: #f1f5f9;
+  --color-slate-200: #e2e8f0;
+  --color-slate-300: #cbd5e1;
+  --color-slate-400: #94a3b8;
+  --color-slate-500: #64748b;
+  --color-slate-600: #475569;
+  --color-slate-700: #334155;
+  --color-slate-800: #1e293b;
+  --color-slate-900: #0f172a;
+  --color-slate-950: #020617;
+}
+
+/* Custom CSS Variables for theming */
+:root {
+  /* Light mode colors */
+  --color-primary: #2563eb; /* blue-600 */
+  --color-primary-hover: #1d4ed8; /* blue-700 */
+  --color-secondary: #6b7280; /* gray-500 */
+  --color-success: #10b981; /* green-500 */
+  --color-error: #ef4444; /* red-500 */
+  --color-warning: #f59e0b; /* amber-500 */
+  --color-info: #3b82f6; /* blue-500 */
+
+  /* Background colors */
+  --bg-primary: #ffffff;
+  --bg-secondary: #f9fafb;
+  --bg-tertiary: #f3f4f6;
+  --bg-hover: #f3f4f6;
+  --bg-active: #e5e7eb;
+
+  /* Text colors */
+  --text-primary: #111827;
+  --text-secondary: #6b7280;
+  --text-tertiary: #9ca3af;
+
+  /* Border colors */
+  --border-primary: #e5e7eb;
+  --border-secondary: #d1d5db;
+  --border-hover: #9ca3af;
+
+  /* Shadow colors */
+  --shadow-sm: rgba(0, 0, 0, 0.05);
+  --shadow-md: rgba(0, 0, 0, 0.1);
+  --shadow-lg: rgba(0, 0, 0, 0.15);
+}
+
+/* Dark mode colors - Professional theme */
+.dark {
+  --color-primary: #60a5fa; /* blue-400 */
+  --color-primary-hover: #3b82f6; /* blue-500 */
+  --color-secondary: #9ca3af; /* gray-400 */
+  --color-success: #34d399; /* green-400 */
+  --color-error: #f87171; /* red-400 */
+  --color-warning: #fbbf24; /* amber-400 */
+  --color-info: #60a5fa; /* blue-400 */
+
+  /* Background colors - Better contrast */
+  --bg-primary: #1e293b; /* slate-800 - Cards and elevated surfaces */
+  --bg-secondary: #0f172a; /* slate-900 - Main background */
+  --bg-tertiary: #020617; /* slate-950 - Deeper backgrounds */
+  --bg-hover: #334155; /* slate-700 - Hover states */
+  --bg-active: #475569; /* slate-600 - Active states */
+
+  /* Text colors - Better readability */
+  --text-primary: #f8fafc; /* slate-50 - Primary text */
+  --text-secondary: #cbd5e1; /* slate-300 - Secondary text */
+  --text-tertiary: #94a3b8; /* slate-400 - Tertiary text */
+
+  /* Border colors - Subtle but visible */
+  --border-primary: #334155; /* slate-700 */
+  --border-secondary: #475569; /* slate-600 */
+  --border-hover: #64748b; /* slate-500 */
+
+  /* Shadow colors - More pronounced */
+  --shadow-sm: rgba(0, 0, 0, 0.4);
+  --shadow-md: rgba(0, 0, 0, 0.5);
+  --shadow-lg: rgba(0, 0, 0, 0.6);
+}
+
+/* Base styles */
+body {
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* Remove focus outline for mouse users, keep for keyboard users */
+*:focus:not(:focus-visible) {
+  outline: none;
+}
+
+*:focus-visible {
+  outline: 2px solid #2563eb; /* blue-600 */
+  outline-offset: 2px;
+}
+
+/* Screen reader only utility */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* Custom scrollbar */
+.scrollbar-thin {
+  scrollbar-width: thin;
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-track {
+  background-color: var(--bg-tertiary);
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background-color: var(--border-secondary);
+  border-radius: 0.375rem;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background-color: var(--border-hover);
+}
+
+/* Smooth transitions for theme changes */
+* {
+  transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
+}
+
+/* Dark mode calendar picker icon - force bright white */
+.dark input[type="date"]::-webkit-calendar-picker-indicator,
+.dark input[type="date"]::-webkit-inner-spin-button {
+  filter: invert(1) brightness(5) !important;
+  cursor: pointer !important;
+  opacity: 1 !important;
+  background-color: white !important;
+}
+
+/* For Firefox */
+.dark input[type="date"]::-moz-calendar-picker-indicator {
+  filter: invert(1) brightness(5) !important;
+  cursor: pointer !important;
+  opacity: 1 !important;
+  background-color: white !important;
+}
+
+/* Alternative approach - replace with custom icon */
+.dark input[type="date"] {
+  color-scheme: light;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 20 20' fill='white'%3E%3Cpath d='M6 2a1 1 0 00-1 1v1H4a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2h-1V3a1 1 0 10-2 0v1H7V3a1 1 0 00-1-1zm0 5a1 1 0 000 2h8a1 1 0 100-2H6z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+}
+
+/* Style the date picker popup for better visibility */
+.dark input[type="date"]::-webkit-datetime-edit-fields-wrapper {
+  color: white !important;
+}
+
+.dark input[type="date"]::-webkit-datetime-edit-text {
+  color: white !important;
+}
+
+.dark input[type="date"]::-webkit-datetime-edit-month-field,
+.dark input[type="date"]::-webkit-datetime-edit-day-field,
+.dark input[type="date"]::-webkit-datetime-edit-year-field {
+  color: white !important;
+}
+
+/* FullCalendar Base Styles (v6 doesn't ship CSS) */
+.fc {
+  display: flex;
+  flex-direction: column;
+  font-size: 1em;
+  height: 100%;
+}
+
+.fc *,
+.fc *::before,
+.fc *::after {
+  box-sizing: border-box;
+}
+
+.fc table {
+  border-collapse: collapse;
+  border-spacing: 0;
+  font-size: 1em;
+}
+
+.fc th {
+  text-align: center;
+}
+
+.fc th,
+.fc td {
+  border-style: solid;
+  border-width: 1px;
+  padding: 0;
+  vertical-align: top;
+}
+
+.fc .fc-scrollgrid {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.fc .fc-scrollgrid-section > td {
+  border-width: 0;
+}
+
+.fc .fc-scrollgrid-section-header > *,
+.fc .fc-scrollgrid-section-body > *,
+.fc .fc-scrollgrid-section-footer > * {
+  border-top-width: 0;
+}
+
+.fc .fc-col-header-cell {
+  padding: 8px 4px;
+}
+
+.fc .fc-daygrid-day {
+  position: relative;
+}
+
+.fc .fc-daygrid-day-top {
+  display: flex;
+  flex-direction: row;
+}
+
+.fc .fc-daygrid-day-number {
+  padding: 4px;
+  position: relative;
+  z-index: 4;
+}
+
+.fc .fc-daygrid-event {
+  position: relative;
+  white-space: nowrap;
+  border-radius: 3px;
+  font-size: 0.85em;
+  padding: 2px 4px;
+  margin: 1px;
+}
+
+.fc .fc-event {
+  cursor: pointer;
+}
+
+.fc .fc-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 0;
+}
+
+.fc .fc-toolbar-chunk {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.fc .fc-button {
+  padding: 0.5rem 1rem;
+  border-radius: 0.375rem;
+  border: 1px solid;
+  background-color: transparent;
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.fc .fc-button:hover {
+  opacity: 0.9;
+}
+
+.fc .fc-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.fc .fc-button-primary {
+  background-color: var(--fc-button-bg-color);
+  border-color: var(--fc-button-border-color);
+  color: var(--fc-button-text-color);
+}
+
+.fc .fc-button-primary:hover:not(:disabled) {
+  background-color: var(--fc-button-hover-bg-color);
+  border-color: var(--fc-button-hover-border-color);
+}
+
+.fc .fc-button-primary:active {
+  background-color: var(--fc-button-active-bg-color);
+  border-color: var(--fc-button-active-border-color);
+}
+
+.fc .fc-button-active {
+  background-color: var(--fc-button-active-bg-color);
+  border-color: var(--fc-button-active-border-color);
+}
+
+.fc .fc-toolbar-title {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.fc .fc-view-harness {
+  flex-grow: 1;
+  position: relative;
+}
+
+.fc .fc-timegrid-slot {
+  height: 3em;
+}
+
+.fc .fc-timegrid-slot-label {
+  vertical-align: middle;
+  padding: 0 4px;
+}
+
+.fc .fc-timegrid-event {
+  border-radius: 3px;
+  padding: 2px 4px;
+}
+
+.fc .fc-highlight {
+  background-color: rgba(188, 232, 241, 0.3);
+}
+
+.fc .fc-today {
+  background-color: var(--fc-today-bg-color);
+}
+
+/* FullCalendar Theme Customization */
+.fc {
+  --fc-border-color: #d1d5db;
+  --fc-button-bg-color: #ffffff;
+  --fc-button-text-color: #1f2937;
+  --fc-button-border-color: #d1d5db;
+  --fc-button-hover-bg-color: #f3f4f6;
+  --fc-button-hover-border-color: #9ca3af;
+  --fc-button-active-bg-color: #e5e7eb;
+  --fc-button-active-border-color: #9ca3af;
+  --fc-event-bg-color: #10b981;
+  --fc-event-border-color: #059669;
+  --fc-today-bg-color: rgba(59, 130, 246, 0.1);
+}
+
+.fc-theme-standard .fc-scrollgrid,
+.fc-theme-standard th,
+.fc-theme-standard td {
+  border-color: #e5e7eb;
+}
+
+.fc-theme-standard .fc-col-header-cell {
+  background-color: #f9fafb;
+  color: #1f2937;
+  font-weight: 600;
+  border-color: #e5e7eb;
+}
+
+.fc .fc-toolbar-title,
+.fc-toolbar-title,
+.fc .fc-toolbar .fc-toolbar-title {
+  color: #111827 !important;
+  -webkit-text-fill-color: #111827 !important;
+}
+
+.fc .fc-button,
+.fc-button {
+  color: #1f2937 !important;
+}
+
+.fc .fc-timegrid-slot-label {
+  color: #4b5563;
+}
+
+.fc .fc-daygrid-day-number {
+  color: #1f2937;
+}
+
+/* Dark mode */
+.dark .fc {
+  --fc-border-color: #374151;
+  --fc-button-bg-color: #374151;
+  --fc-button-text-color: #f3f4f6;
+  --fc-button-border-color: #4b5563;
+  --fc-button-hover-bg-color: #4b5563;
+  --fc-button-hover-border-color: #6b7280;
+  --fc-button-active-bg-color: #1f2937;
+  --fc-button-active-border-color: #374151;
+  --fc-event-bg-color: #10b981;
+  --fc-event-border-color: #059669;
+  --fc-today-bg-color: rgba(59, 130, 246, 0.15);
+}
+
+.dark .fc-theme-standard th,
+.dark .fc-theme-standard td,
+.dark .fc-theme-standard .fc-scrollgrid {
+  border-color: #374151;
+  background-color: #1f2937;
+}
+
+.dark .fc-theme-standard .fc-col-header-cell {
+  background-color: #374151;
+  color: #f3f4f6;
+}
+
+.dark .fc .fc-toolbar-title,
+.dark .fc-toolbar-title,
+.dark .fc .fc-toolbar .fc-toolbar-title {
+  color: #f8fafc !important;
+  -webkit-text-fill-color: #f8fafc !important;
+}
+
+.dark .fc .fc-button,
+.dark .fc-button {
+  color: #f3f4f6 !important;
+}
+
+.dark .fc .fc-timegrid-slot-label {
+  color: #9ca3af;
+}
+
+.dark .fc .fc-daygrid-day-number {
+  color: #e5e7eb;
+}

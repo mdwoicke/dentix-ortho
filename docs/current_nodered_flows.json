@@ -1,0 +1,2262 @@
+[
+    {
+        "id": "cloud9_ortho_tab",
+        "type": "tab",
+        "label": "Chord-Cloud9-Ortho",
+        "disabled": false,
+        "info": "Cloud9 Ortho API Integration for Allie IVA - CDH Ortho Alleghany",
+        "env": [
+            {
+                "name": "clientIdSand",
+                "value": "c15aa02a-adc1-40ae-a2b5-d2e39173ae56",
+                "type": "str"
+            },
+            {
+                "name": "userNameSand",
+                "value": "IntelepeerTest",
+                "type": "str"
+            },
+            {
+                "name": "passwordSand",
+                "value": "#!InteleP33rTest!#",
+                "type": "str"
+            },
+            {
+                "name": "endpointSand",
+                "value": "https://us-ea1-partnertest.cloud9ortho.com/GetData.ashx",
+                "type": "str"
+            },
+            {
+                "name": "clientIdProd",
+                "value": "",
+                "type": "str"
+            },
+            {
+                "name": "userNameProd",
+                "value": "",
+                "type": "str"
+            },
+            {
+                "name": "passwordProd",
+                "value": "",
+                "type": "str"
+            },
+            {
+                "name": "endpointProd",
+                "value": "https://us-ea1-partner.cloud9ortho.com/GetData.ashx",
+                "type": "str"
+            },
+            {
+                "name": "cloud9ClientId",
+                "value": "clientIdSand",
+                "type": "env"
+            },
+            {
+                "name": "cloud9UserName",
+                "value": "userNameSand",
+                "type": "env"
+            },
+            {
+                "name": "cloud9Password",
+                "value": "passwordSand",
+                "type": "env"
+            },
+            {
+                "name": "cloud9Endpoint",
+                "value": "endpointSand",
+                "type": "env"
+            },
+            {
+                "name": "vendorUserName",
+                "value": "ChordIVA",
+                "type": "str"
+            },
+            {
+                "name": "defaultLocationGUID",
+                "value": "",
+                "type": "str"
+            },
+            {
+                "name": "defaultProviderGUID",
+                "value": "",
+                "type": "str"
+            }
+        ]
+    },
+    {
+        "id": "inject_getPatientByPhone",
+        "type": "inject",
+        "z": "cloud9_ortho_tab",
+        "name": "Test getPatientByPhone",
+        "props": [
+            {
+                "p": "payload.phoneNumber",
+                "v": "9132209085",
+                "vt": "str"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 160,
+        "y": 60,
+        "wires": [
+            [
+                "func_getPatientByPhone"
+            ]
+        ]
+    },
+    {
+        "id": "http_in_getPatientByPhone",
+        "type": "http in",
+        "z": "cloud9_ortho_tab",
+        "name": "",
+        "url": "/chord/cloud9/getPatientByPhone",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 200,
+        "y": 100,
+        "wires": [
+            [
+                "func_getPatientByPhone",
+                "debug_ingress_getPatientByPhone"
+            ]
+        ]
+    },
+    {
+        "id": "debug_ingress_getPatientByPhone",
+        "type": "debug",
+        "z": "cloud9_ortho_tab",
+        "name": "Ingress getPatientByPhone",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 550,
+        "y": 60,
+        "wires": []
+    },
+    {
+        "id": "func_getPatientByPhone",
+        "type": "function",
+        "z": "cloud9_ortho_tab",
+        "name": "getPatientByPhone",
+        "func": "// Cloud9 Get Patient By Phone Number\n// Uses GetPortalPatientLookup procedure\n\nconst clientId = env.get(\"cloud9ClientId\");\nconst userName = env.get(\"cloud9UserName\");\nconst password = env.get(\"cloud9Password\");\nconst endpoint = env.get(\"cloud9Endpoint\");\n\nconst phoneNumber = msg.payload.phoneNumber || msg.payload.filter;\n\nasync function getPatientByPhone() {\n    try {\n        if (!phoneNumber) {\n            throw new Error('Phone number is required');\n        }\n\n        const xmlBody = `<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<GetDataRequest xmlns=\"http://schemas.practica.ws/cloud9/partners/\" \n                xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">\n    <ClientID>${clientId}</ClientID>\n    <UserName>${userName}</UserName>\n    <Password>${password}</Password>\n    <Procedure>GetPortalPatientLookup</Procedure>\n    <Parameters>\n        <filter>${phoneNumber}</filter>\n        <lookupByPatient>1</lookupByPatient>\n        <showInactive>0</showInactive>\n    </Parameters>\n</GetDataRequest>`;\n\n        const requestOptions = {\n            method: \"POST\",\n            headers: { \"Content-Type\": \"application/xml\" },\n            body: xmlBody,\n            redirect: \"follow\"\n        };\n\n        node.warn('Looking up patient by phone: ' + phoneNumber);\n        const response = await fetch(endpoint, requestOptions);\n\n        if (!response.ok) {\n            const errorText = await response.text().catch(() => 'Unable to read error response');\n            throw new Error(`API call failed with status ${response.status}: ${errorText}`);\n        }\n\n        const xmlResult = await response.text();\n        msg.payload = xmlResult;\n        msg.responseType = 'xml';\n        return msg;\n\n    } catch (error) {\n        node.error('Error in getPatientByPhone: ' + error.message, msg);\n        msg.payload = {\n            success: false,\n            error: error.message,\n            timestamp: new Date().toISOString()\n        };\n        msg.statusCode = 500;\n        return msg;\n    }\n}\n\nreturn getPatientByPhone();",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [
+            {
+                "var": "fetch",
+                "module": "node-fetch"
+            }
+        ],
+        "x": 530,
+        "y": 100,
+        "wires": [
+            [
+                "xml_getPatientByPhone"
+            ]
+        ]
+    },
+    {
+        "id": "xml_getPatientByPhone",
+        "type": "xml",
+        "z": "cloud9_ortho_tab",
+        "name": "",
+        "property": "payload",
+        "attr": "",
+        "chr": "",
+        "x": 710,
+        "y": 100,
+        "wires": [
+            [
+                "transform_getPatientByPhone"
+            ]
+        ]
+    },
+    {
+        "id": "transform_getPatientByPhone",
+        "type": "change",
+        "z": "cloud9_ortho_tab",
+        "name": "transform",
+        "rules": [
+            {
+                "t": "set",
+                "p": "temp",
+                "pt": "msg",
+                "to": "payload",
+                "tot": "msg"
+            },
+            {
+                "t": "set",
+                "p": "payload",
+                "pt": "msg",
+                "to": "{}",
+                "tot": "json"
+            },
+            {
+                "t": "set",
+                "p": "payload.success",
+                "pt": "msg",
+                "to": "true",
+                "tot": "bool"
+            },
+            {
+                "t": "set",
+                "p": "payload.patients",
+                "pt": "msg",
+                "to": "temp.GetDataResponse.Records[0].Record",
+                "tot": "msg"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 880,
+        "y": 100,
+        "wires": [
+            [
+                "http_resp_getPatientByPhone",
+                "debug_egress_getPatientByPhone"
+            ]
+        ]
+    },
+    {
+        "id": "http_resp_getPatientByPhone",
+        "type": "http response",
+        "z": "cloud9_ortho_tab",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 1070,
+        "y": 100,
+        "wires": []
+    },
+    {
+        "id": "debug_egress_getPatientByPhone",
+        "type": "debug",
+        "z": "cloud9_ortho_tab",
+        "name": "Egress getPatientByPhone",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1110,
+        "y": 60,
+        "wires": []
+    },
+    {
+        "id": "inject_getPatient",
+        "type": "inject",
+        "z": "cloud9_ortho_tab",
+        "name": "Test getPatient",
+        "props": [
+            {
+                "p": "payload.patientGUID",
+                "v": "59D26B3E-2725-460D-9FD7-BD9C03452B86",
+                "vt": "str"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 140,
+        "y": 160,
+        "wires": [
+            [
+                "func_getPatient"
+            ]
+        ]
+    },
+    {
+        "id": "http_in_getPatient",
+        "type": "http in",
+        "z": "cloud9_ortho_tab",
+        "name": "",
+        "url": "/chord/cloud9/getPatient",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 180,
+        "y": 200,
+        "wires": [
+            [
+                "func_getPatient",
+                "debug_ingress_getPatient"
+            ]
+        ]
+    },
+    {
+        "id": "debug_ingress_getPatient",
+        "type": "debug",
+        "z": "cloud9_ortho_tab",
+        "name": "Ingress getPatient",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 530,
+        "y": 160,
+        "wires": []
+    },
+    {
+        "id": "func_getPatient",
+        "type": "function",
+        "z": "cloud9_ortho_tab",
+        "name": "getPatient",
+        "func": "// Cloud9 Get Patient by GUID\n// Uses GetPatientInformation procedure\n\nconst clientId = env.get(\"cloud9ClientId\");\nconst userName = env.get(\"cloud9UserName\");\nconst password = env.get(\"cloud9Password\");\nconst endpoint = env.get(\"cloud9Endpoint\");\n\nconst patGUID = msg.payload.patientGUID || msg.payload.patGUID;\n\nasync function getPatient() {\n    try {\n        if (!patGUID) {\n            throw new Error('Patient GUID is required');\n        }\n\n        const xmlBody = `<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<GetDataRequest xmlns=\"http://schemas.practica.ws/cloud9/partners/\" \n                xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">\n    <ClientID>${clientId}</ClientID>\n    <UserName>${userName}</UserName>\n    <Password>${password}</Password>\n    <Procedure>GetPatientInformation</Procedure>\n    <Parameters>\n        <patguid>${patGUID}</patguid>\n    </Parameters>\n</GetDataRequest>`;\n\n        const requestOptions = {\n            method: \"POST\",\n            headers: { \"Content-Type\": \"application/xml\" },\n            body: xmlBody,\n            redirect: \"follow\"\n        };\n\n        node.warn('Getting patient info for GUID: ' + patGUID);\n        const response = await fetch(endpoint, requestOptions);\n\n        if (!response.ok) {\n            const errorText = await response.text().catch(() => 'Unable to read error response');\n            throw new Error(`API call failed with status ${response.status}: ${errorText}`);\n        }\n\n        const xmlResult = await response.text();\n        msg.payload = xmlResult;\n        msg.responseType = 'xml';\n        return msg;\n\n    } catch (error) {\n        node.error('Error in getPatient: ' + error.message, msg);\n        msg.payload = {\n            success: false,\n            error: error.message,\n            timestamp: new Date().toISOString()\n        };\n        msg.statusCode = 500;\n        return msg;\n    }\n}\n\nreturn getPatient();",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [
+            {
+                "var": "fetch",
+                "module": "node-fetch"
+            }
+        ],
+        "x": 510,
+        "y": 200,
+        "wires": [
+            [
+                "xml_getPatient"
+            ]
+        ]
+    },
+    {
+        "id": "xml_getPatient",
+        "type": "xml",
+        "z": "cloud9_ortho_tab",
+        "name": "",
+        "property": "payload",
+        "attr": "",
+        "chr": "",
+        "x": 710,
+        "y": 200,
+        "wires": [
+            [
+                "transform_getPatient"
+            ]
+        ]
+    },
+    {
+        "id": "transform_getPatient",
+        "type": "change",
+        "z": "cloud9_ortho_tab",
+        "name": "transform",
+        "rules": [
+            {
+                "t": "set",
+                "p": "temp",
+                "pt": "msg",
+                "to": "payload",
+                "tot": "msg"
+            },
+            {
+                "t": "set",
+                "p": "payload",
+                "pt": "msg",
+                "to": "{}",
+                "tot": "json"
+            },
+            {
+                "t": "set",
+                "p": "payload.success",
+                "pt": "msg",
+                "to": "true",
+                "tot": "bool"
+            },
+            {
+                "t": "set",
+                "p": "payload.patient",
+                "pt": "msg",
+                "to": "temp.GetDataResponse.Records[0].Record[0]",
+                "tot": "msg"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 880,
+        "y": 200,
+        "wires": [
+            [
+                "http_resp_getPatient",
+                "debug_egress_getPatient"
+            ]
+        ]
+    },
+    {
+        "id": "http_resp_getPatient",
+        "type": "http response",
+        "z": "cloud9_ortho_tab",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 1070,
+        "y": 200,
+        "wires": []
+    },
+    {
+        "id": "debug_egress_getPatient",
+        "type": "debug",
+        "z": "cloud9_ortho_tab",
+        "name": "Egress getPatient",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1090,
+        "y": 160,
+        "wires": []
+    },
+    {
+        "id": "inject_createPatient",
+        "type": "inject",
+        "z": "cloud9_ortho_tab",
+        "name": "Test createPatient",
+        "props": [
+            {
+                "p": "payload.patientFirstName",
+                "v": "TestChild",
+                "vt": "str"
+            },
+            {
+                "p": "payload.patientLastName",
+                "v": "TestFamily",
+                "vt": "str"
+            },
+            {
+                "p": "payload.birthdayDateTime",
+                "v": "07/15/2015",
+                "vt": "str"
+            },
+            {
+                "p": "payload.gender",
+                "v": "M",
+                "vt": "str"
+            },
+            {
+                "p": "payload.phoneNumber",
+                "v": "2675290990",
+                "vt": "str"
+            },
+            {
+                "p": "payload.emailAddress",
+                "v": "test@example.com",
+                "vt": "str"
+            },
+            {
+                "p": "payload.providerGUID",
+                "v": "",
+                "vt": "str"
+            },
+            {
+                "p": "payload.locationGUID",
+                "v": "",
+                "vt": "str"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 150,
+        "y": 260,
+        "wires": [
+            [
+                "func_createPatient"
+            ]
+        ]
+    },
+    {
+        "id": "http_in_createPatient",
+        "type": "http in",
+        "z": "cloud9_ortho_tab",
+        "name": "",
+        "url": "/chord/cloud9/createPatient",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 190,
+        "y": 300,
+        "wires": [
+            [
+                "func_createPatient",
+                "debug_ingress_createPatient"
+            ]
+        ]
+    },
+    {
+        "id": "debug_ingress_createPatient",
+        "type": "debug",
+        "z": "cloud9_ortho_tab",
+        "name": "Ingress createPatient",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 540,
+        "y": 260,
+        "wires": []
+    },
+    {
+        "id": "func_createPatient",
+        "type": "function",
+        "z": "cloud9_ortho_tab",
+        "name": "createPatient",
+        "func": "// Cloud9 Create Patient\n// Uses SetPatient procedure\n\nconst clientId = env.get(\"cloud9ClientId\");\nconst userName = env.get(\"cloud9UserName\");\nconst password = env.get(\"cloud9Password\");\nconst endpoint = env.get(\"cloud9Endpoint\");\nconst vendorUserName = env.get(\"vendorUserName\") || \"ChordIVA\";\n\n// Required parameters\nconst patientFirstName = msg.payload.patientFirstName;\nconst patientLastName = msg.payload.patientLastName;\nconst providerGUID = msg.payload.providerGUID || env.get(\"defaultProviderGUID\");\nconst locationGUID = msg.payload.locationGUID || env.get(\"defaultLocationGUID\");\n\n// Optional parameters\nconst birthdayDateTime = msg.payload.birthdayDateTime || msg.payload.dateOfBirth;\nconst gender = msg.payload.gender;\nconst phoneNumber = msg.payload.phoneNumber;\nconst emailAddress = msg.payload.emailAddress;\nconst addressStreet = msg.payload.addressStreet;\nconst patComment = msg.payload.specialNeeds || msg.payload.patComment;\n\nasync function createPatient() {\n    try {\n        if (!patientFirstName) {\n            throw new Error('Patient first name is required');\n        }\n        if (!patientLastName) {\n            throw new Error('Patient last name is required');\n        }\n        if (!providerGUID) {\n            throw new Error('Provider GUID is required');\n        }\n        if (!locationGUID) {\n            throw new Error('Location GUID is required');\n        }\n\n        // Build optional parameters\n        let optionalParams = '';\n        if (birthdayDateTime) {\n            optionalParams += `<birthdayDateTime>${birthdayDateTime}</birthdayDateTime>\\n        `;\n        }\n        if (gender) {\n            optionalParams += `<gender>${gender}</gender>\\n        `;\n        }\n        if (phoneNumber) {\n            optionalParams += `<phoneNumber>${phoneNumber}</phoneNumber>\\n        `;\n        }\n        if (emailAddress) {\n            optionalParams += `<emailAddress>${emailAddress}</emailAddress>\\n        `;\n        }\n        if (addressStreet) {\n            optionalParams += `<addressStreet>${addressStreet}</addressStreet>\\n        `;\n        }\n\n        const xmlBody = `<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<GetDataRequest xmlns=\"http://schemas.practica.ws/cloud9/partners/\" \n                xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">\n    <ClientID>${clientId}</ClientID>\n    <UserName>${userName}</UserName>\n    <Password>${password}</Password>\n    <Procedure>SetPatient</Procedure>\n    <Parameters>\n        <patientFirstName>${patientFirstName}</patientFirstName>\n        <patientLastName>${patientLastName}</patientLastName>\n        <providerGUID>${providerGUID}</providerGUID>\n        <locationGUID>${locationGUID}</locationGUID>\n        <VendorUserName>${vendorUserName}</VendorUserName>\n        ${optionalParams}\n    </Parameters>\n</GetDataRequest>`;\n\n        const requestOptions = {\n            method: \"POST\",\n            headers: { \"Content-Type\": \"application/xml\" },\n            body: xmlBody,\n            redirect: \"follow\"\n        };\n\n        node.warn('Creating patient: ' + patientFirstName + ' ' + patientLastName);\n        const response = await fetch(endpoint, requestOptions);\n\n        if (!response.ok) {\n            const errorText = await response.text().catch(() => 'Unable to read error response');\n            throw new Error(`API call failed with status ${response.status}: ${errorText}`);\n        }\n\n        const xmlResult = await response.text();\n        \n        // If there's a comment/special needs, add it separately\n        if (patComment && xmlResult.includes('Success')) {\n            // Extract patient GUID from response and add comment\n            // This would require a follow-up SetPatientComment call\n            msg.patComment = patComment;\n        }\n        \n        msg.payload = xmlResult;\n        msg.responseType = 'xml';\n        return msg;\n\n    } catch (error) {\n        node.error('Error in createPatient: ' + error.message, msg);\n        msg.payload = {\n            success: false,\n            error: error.message,\n            timestamp: new Date().toISOString()\n        };\n        msg.statusCode = 500;\n        return msg;\n    }\n}\n\nreturn createPatient();",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [
+            {
+                "var": "fetch",
+                "module": "node-fetch"
+            }
+        ],
+        "x": 520,
+        "y": 300,
+        "wires": [
+            [
+                "xml_createPatient"
+            ]
+        ]
+    },
+    {
+        "id": "xml_createPatient",
+        "type": "xml",
+        "z": "cloud9_ortho_tab",
+        "name": "",
+        "property": "payload",
+        "attr": "",
+        "chr": "",
+        "x": 710,
+        "y": 300,
+        "wires": [
+            [
+                "transform_createPatient"
+            ]
+        ]
+    },
+    {
+        "id": "transform_createPatient",
+        "type": "change",
+        "z": "cloud9_ortho_tab",
+        "name": "transform",
+        "rules": [
+            {
+                "t": "set",
+                "p": "temp",
+                "pt": "msg",
+                "to": "payload",
+                "tot": "msg"
+            },
+            {
+                "t": "set",
+                "p": "payload",
+                "pt": "msg",
+                "to": "{}",
+                "tot": "json"
+            },
+            {
+                "t": "set",
+                "p": "payload.success",
+                "pt": "msg",
+                "to": "true",
+                "tot": "bool"
+            },
+            {
+                "t": "set",
+                "p": "payload.response",
+                "pt": "msg",
+                "to": "temp.GetDataResponse",
+                "tot": "msg"
+            },
+            {
+                "t": "set",
+                "p": "payload.patientGUID",
+                "pt": "msg",
+                "to": "temp.GetDataResponse.Records[0].Record[0].PatientGUID[0]",
+                "tot": "msg"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 880,
+        "y": 300,
+        "wires": [
+            [
+                "http_resp_createPatient",
+                "debug_egress_createPatient"
+            ]
+        ]
+    },
+    {
+        "id": "http_resp_createPatient",
+        "type": "http response",
+        "z": "cloud9_ortho_tab",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 1070,
+        "y": 300,
+        "wires": []
+    },
+    {
+        "id": "debug_egress_createPatient",
+        "type": "debug",
+        "z": "cloud9_ortho_tab",
+        "name": "Egress createPatient",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1100,
+        "y": 260,
+        "wires": []
+    },
+    {
+        "id": "inject_getPatientAppts",
+        "type": "inject",
+        "z": "cloud9_ortho_tab",
+        "name": "Test getPatientAppts",
+        "props": [
+            {
+                "p": "payload.patientGUID",
+                "v": "865c8fa6-caf8-4e30-b152-82da6e93f33b",
+                "vt": "str"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 160,
+        "y": 360,
+        "wires": [
+            [
+                "func_getPatientAppts"
+            ]
+        ]
+    },
+    {
+        "id": "http_in_getPatientAppts",
+        "type": "http in",
+        "z": "cloud9_ortho_tab",
+        "name": "",
+        "url": "/chord/cloud9/getPatientAppts",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 200,
+        "y": 400,
+        "wires": [
+            [
+                "func_getPatientAppts",
+                "debug_ingress_getPatientAppts"
+            ]
+        ]
+    },
+    {
+        "id": "debug_ingress_getPatientAppts",
+        "type": "debug",
+        "z": "cloud9_ortho_tab",
+        "name": "Ingress getPatientAppts",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 550,
+        "y": 360,
+        "wires": []
+    },
+    {
+        "id": "func_getPatientAppts",
+        "type": "function",
+        "z": "cloud9_ortho_tab",
+        "name": "getPatientAppts",
+        "func": "// Cloud9 Get Patient Appointments\n// Uses GetAppointmentListByPatient procedure\n\nconst clientId = env.get(\"cloud9ClientId\");\nconst userName = env.get(\"cloud9UserName\");\nconst password = env.get(\"cloud9Password\");\nconst endpoint = env.get(\"cloud9Endpoint\");\n\nconst patGUID = msg.payload.patientGUID || msg.payload.patGUID;\n\nasync function getPatientAppts() {\n    try {\n        if (!patGUID) {\n            throw new Error('Patient GUID is required');\n        }\n\n        const xmlBody = `<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<GetDataRequest xmlns=\"http://schemas.practica.ws/cloud9/partners/\" \n                xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">\n    <ClientID>${clientId}</ClientID>\n    <UserName>${userName}</UserName>\n    <Password>${password}</Password>\n    <Procedure>GetAppointmentListByPatient</Procedure>\n    <Parameters>\n        <patGUID>${patGUID}</patGUID>\n    </Parameters>\n</GetDataRequest>`;\n\n        const requestOptions = {\n            method: \"POST\",\n            headers: { \"Content-Type\": \"application/xml\" },\n            body: xmlBody,\n            redirect: \"follow\"\n        };\n\n        node.warn('Getting appointments for patient GUID: ' + patGUID);\n        const response = await fetch(endpoint, requestOptions);\n\n        if (!response.ok) {\n            const errorText = await response.text().catch(() => 'Unable to read error response');\n            throw new Error(`API call failed with status ${response.status}: ${errorText}`);\n        }\n\n        const xmlResult = await response.text();\n        msg.payload = xmlResult;\n        msg.responseType = 'xml';\n        return msg;\n\n    } catch (error) {\n        node.error('Error in getPatientAppts: ' + error.message, msg);\n        msg.payload = {\n            success: false,\n            error: error.message,\n            timestamp: new Date().toISOString()\n        };\n        msg.statusCode = 500;\n        return msg;\n    }\n}\n\nreturn getPatientAppts();",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [
+            {
+                "var": "fetch",
+                "module": "node-fetch"
+            }
+        ],
+        "x": 530,
+        "y": 400,
+        "wires": [
+            [
+                "xml_getPatientAppts"
+            ]
+        ]
+    },
+    {
+        "id": "xml_getPatientAppts",
+        "type": "xml",
+        "z": "cloud9_ortho_tab",
+        "name": "",
+        "property": "payload",
+        "attr": "",
+        "chr": "",
+        "x": 710,
+        "y": 400,
+        "wires": [
+            [
+                "transform_getPatientAppts"
+            ]
+        ]
+    },
+    {
+        "id": "transform_getPatientAppts",
+        "type": "change",
+        "z": "cloud9_ortho_tab",
+        "name": "transform",
+        "rules": [
+            {
+                "t": "set",
+                "p": "temp",
+                "pt": "msg",
+                "to": "payload",
+                "tot": "msg"
+            },
+            {
+                "t": "set",
+                "p": "payload",
+                "pt": "msg",
+                "to": "{}",
+                "tot": "json"
+            },
+            {
+                "t": "set",
+                "p": "payload.success",
+                "pt": "msg",
+                "to": "true",
+                "tot": "bool"
+            },
+            {
+                "t": "set",
+                "p": "payload.appointments",
+                "pt": "msg",
+                "to": "temp.GetDataResponse.Records[0].Record",
+                "tot": "msg"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 880,
+        "y": 400,
+        "wires": [
+            [
+                "http_resp_getPatientAppts",
+                "debug_egress_getPatientAppts"
+            ]
+        ]
+    },
+    {
+        "id": "http_resp_getPatientAppts",
+        "type": "http response",
+        "z": "cloud9_ortho_tab",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 1070,
+        "y": 400,
+        "wires": []
+    },
+    {
+        "id": "debug_egress_getPatientAppts",
+        "type": "debug",
+        "z": "cloud9_ortho_tab",
+        "name": "Egress getPatientAppts",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1110,
+        "y": 360,
+        "wires": []
+    },
+    {
+        "id": "inject_getClinicInfo",
+        "type": "inject",
+        "z": "cloud9_ortho_tab",
+        "name": "Test getClinicInfo",
+        "props": [
+            {
+                "p": "payload.locationGUID",
+                "v": "",
+                "vt": "str"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 150,
+        "y": 460,
+        "wires": [
+            [
+                "func_getClinicInfo"
+            ]
+        ]
+    },
+    {
+        "id": "http_in_getClinicInfo",
+        "type": "http in",
+        "z": "cloud9_ortho_tab",
+        "name": "",
+        "url": "/chord/cloud9/getClinicInfo",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 190,
+        "y": 500,
+        "wires": [
+            [
+                "func_getClinicInfo",
+                "debug_ingress_getClinicInfo"
+            ]
+        ]
+    },
+    {
+        "id": "debug_ingress_getClinicInfo",
+        "type": "debug",
+        "z": "cloud9_ortho_tab",
+        "name": "Ingress getClinicInfo",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 540,
+        "y": 460,
+        "wires": []
+    },
+    {
+        "id": "func_getClinicInfo",
+        "type": "function",
+        "z": "cloud9_ortho_tab",
+        "name": "getClinicInfo",
+        "func": "// Cloud9 Get Clinic/Location Info\n// Uses GetLocations procedure\n\nconst clientId = env.get(\"cloud9ClientId\");\nconst userName = env.get(\"cloud9UserName\");\nconst password = env.get(\"cloud9Password\");\nconst endpoint = env.get(\"cloud9Endpoint\");\n\nconst locationGUID = msg.payload.locationGUID;\n\nasync function getClinicInfo() {\n    try {\n        const xmlBody = `<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<GetDataRequest xmlns=\"http://schemas.practica.ws/cloud9/partners/\" \n                xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">\n    <ClientID>${clientId}</ClientID>\n    <UserName>${userName}</UserName>\n    <Password>${password}</Password>\n    <Procedure>GetLocations</Procedure>\n</GetDataRequest>`;\n\n        const requestOptions = {\n            method: \"POST\",\n            headers: { \"Content-Type\": \"application/xml\" },\n            body: xmlBody,\n            redirect: \"follow\"\n        };\n\n        node.warn('Getting clinic/location info');\n        const response = await fetch(endpoint, requestOptions);\n\n        if (!response.ok) {\n            const errorText = await response.text().catch(() => 'Unable to read error response');\n            throw new Error(`API call failed with status ${response.status}: ${errorText}`);\n        }\n\n        const xmlResult = await response.text();\n        msg.payload = xmlResult;\n        msg.responseType = 'xml';\n        msg.filterLocationGUID = locationGUID;\n        return msg;\n\n    } catch (error) {\n        node.error('Error in getClinicInfo: ' + error.message, msg);\n        msg.payload = {\n            success: false,\n            error: error.message,\n            timestamp: new Date().toISOString()\n        };\n        msg.statusCode = 500;\n        return msg;\n    }\n}\n\nreturn getClinicInfo();",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [
+            {
+                "var": "fetch",
+                "module": "node-fetch"
+            }
+        ],
+        "x": 510,
+        "y": 500,
+        "wires": [
+            [
+                "xml_getClinicInfo"
+            ]
+        ]
+    },
+    {
+        "id": "xml_getClinicInfo",
+        "type": "xml",
+        "z": "cloud9_ortho_tab",
+        "name": "",
+        "property": "payload",
+        "attr": "",
+        "chr": "",
+        "x": 710,
+        "y": 500,
+        "wires": [
+            [
+                "transform_getClinicInfo"
+            ]
+        ]
+    },
+    {
+        "id": "transform_getClinicInfo",
+        "type": "change",
+        "z": "cloud9_ortho_tab",
+        "name": "transform",
+        "rules": [
+            {
+                "t": "set",
+                "p": "temp",
+                "pt": "msg",
+                "to": "payload",
+                "tot": "msg"
+            },
+            {
+                "t": "set",
+                "p": "payload",
+                "pt": "msg",
+                "to": "{}",
+                "tot": "json"
+            },
+            {
+                "t": "set",
+                "p": "payload.success",
+                "pt": "msg",
+                "to": "true",
+                "tot": "bool"
+            },
+            {
+                "t": "set",
+                "p": "payload.locations",
+                "pt": "msg",
+                "to": "temp.GetDataResponse.Records[0].Record",
+                "tot": "msg"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 880,
+        "y": 500,
+        "wires": [
+            [
+                "http_resp_getClinicInfo",
+                "debug_egress_getClinicInfo"
+            ]
+        ]
+    },
+    {
+        "id": "http_resp_getClinicInfo",
+        "type": "http response",
+        "z": "cloud9_ortho_tab",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 1070,
+        "y": 500,
+        "wires": []
+    },
+    {
+        "id": "debug_egress_getClinicInfo",
+        "type": "debug",
+        "z": "cloud9_ortho_tab",
+        "name": "Egress getClinicInfo",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1100,
+        "y": 460,
+        "wires": []
+    },
+    {
+        "id": "inject_editPatientInsurance",
+        "type": "inject",
+        "z": "cloud9_ortho_tab",
+        "name": "Test editPatientInsurance",
+        "props": [
+            {
+                "p": "payload.patientGUID",
+                "v": "59D26B3E-2725-460D-9FD7-BD9C03452B86",
+                "vt": "str"
+            },
+            {
+                "p": "payload.insuranceProvider",
+                "v": "Keystone First",
+                "vt": "str"
+            },
+            {
+                "p": "payload.insuranceGroupId",
+                "v": "GRP123456",
+                "vt": "str"
+            },
+            {
+                "p": "payload.insuranceMemberId",
+                "v": "MEM789012",
+                "vt": "str"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 170,
+        "y": 560,
+        "wires": [
+            [
+                "func_editPatientInsurance"
+            ]
+        ]
+    },
+    {
+        "id": "http_in_editPatientInsurance",
+        "type": "http in",
+        "z": "cloud9_ortho_tab",
+        "name": "",
+        "url": "/chord/cloud9/editPatientInsurance",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 210,
+        "y": 600,
+        "wires": [
+            [
+                "func_editPatientInsurance",
+                "debug_ingress_editPatientInsurance"
+            ]
+        ]
+    },
+    {
+        "id": "debug_ingress_editPatientInsurance",
+        "type": "debug",
+        "z": "cloud9_ortho_tab",
+        "name": "Ingress editPatientInsurance",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 560,
+        "y": 560,
+        "wires": []
+    },
+    {
+        "id": "func_editPatientInsurance",
+        "type": "function",
+        "z": "cloud9_ortho_tab",
+        "name": "editPatientInsurance",
+        "func": "// Cloud9 Edit Patient Insurance\n// Uses SetPatientComment procedure to store insurance info\n\nconst clientId = env.get(\"cloud9ClientId\");\nconst userName = env.get(\"cloud9UserName\");\nconst password = env.get(\"cloud9Password\");\nconst endpoint = env.get(\"cloud9Endpoint\");\n\nconst patGUID = msg.payload.patientGUID || msg.payload.patGUID;\nconst insuranceProvider = msg.payload.insuranceProvider;\nconst insuranceGroupId = msg.payload.insuranceGroupId || msg.payload.groupNumber;\nconst insuranceMemberId = msg.payload.insuranceMemberId || msg.payload.policyNumber;\n\nasync function editPatientInsurance() {\n    try {\n        if (!patGUID) {\n            throw new Error('Patient GUID is required');\n        }\n\n        // Build insurance comment for patient record\n        let insuranceNote = '';\n        if (insuranceProvider) {\n            insuranceNote = `Insurance: ${insuranceProvider}`;\n            if (insuranceGroupId) insuranceNote += `, Group: ${insuranceGroupId}`;\n            if (insuranceMemberId) insuranceNote += `, Member ID: ${insuranceMemberId}`;\n        }\n\n        // Use SetPatientComment to add insurance info as a note\n        const xmlBody = `<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<GetDataRequest xmlns=\"http://schemas.practica.ws/cloud9/partners/\" \n                xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">\n    <ClientID>${clientId}</ClientID>\n    <UserName>${userName}</UserName>\n    <Password>${password}</Password>\n    <Procedure>SetPatientComment</Procedure>\n    <Parameters>\n        <patGUID>${patGUID}</patGUID>\n        <patComment>${insuranceNote}</patComment>\n    </Parameters>\n</GetDataRequest>`;\n\n        const requestOptions = {\n            method: \"POST\",\n            headers: { \"Content-Type\": \"application/xml\" },\n            body: xmlBody,\n            redirect: \"follow\"\n        };\n\n        node.warn('Updating patient insurance info for GUID: ' + patGUID);\n        const response = await fetch(endpoint, requestOptions);\n\n        if (!response.ok) {\n            const errorText = await response.text().catch(() => 'Unable to read error response');\n            throw new Error(`API call failed with status ${response.status}: ${errorText}`);\n        }\n\n        const xmlResult = await response.text();\n        msg.payload = xmlResult;\n        msg.responseType = 'xml';\n        return msg;\n\n    } catch (error) {\n        node.error('Error in editPatientInsurance: ' + error.message, msg);\n        msg.payload = {\n            success: false,\n            error: error.message,\n            timestamp: new Date().toISOString()\n        };\n        msg.statusCode = 500;\n        return msg;\n    }\n}\n\nreturn editPatientInsurance();",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [
+            {
+                "var": "fetch",
+                "module": "node-fetch"
+            }
+        ],
+        "x": 540,
+        "y": 600,
+        "wires": [
+            [
+                "xml_editPatientInsurance"
+            ]
+        ]
+    },
+    {
+        "id": "xml_editPatientInsurance",
+        "type": "xml",
+        "z": "cloud9_ortho_tab",
+        "name": "",
+        "property": "payload",
+        "attr": "",
+        "chr": "",
+        "x": 710,
+        "y": 600,
+        "wires": [
+            [
+                "transform_editPatientInsurance"
+            ]
+        ]
+    },
+    {
+        "id": "transform_editPatientInsurance",
+        "type": "change",
+        "z": "cloud9_ortho_tab",
+        "name": "transform",
+        "rules": [
+            {
+                "t": "set",
+                "p": "temp",
+                "pt": "msg",
+                "to": "payload",
+                "tot": "msg"
+            },
+            {
+                "t": "set",
+                "p": "payload",
+                "pt": "msg",
+                "to": "{}",
+                "tot": "json"
+            },
+            {
+                "t": "set",
+                "p": "payload.success",
+                "pt": "msg",
+                "to": "true",
+                "tot": "bool"
+            },
+            {
+                "t": "set",
+                "p": "payload.response",
+                "pt": "msg",
+                "to": "temp.GetDataResponse",
+                "tot": "msg"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 880,
+        "y": 600,
+        "wires": [
+            [
+                "http_resp_editPatientInsurance",
+                "debug_egress_editPatientInsurance"
+            ]
+        ]
+    },
+    {
+        "id": "http_resp_editPatientInsurance",
+        "type": "http response",
+        "z": "cloud9_ortho_tab",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 1070,
+        "y": 600,
+        "wires": []
+    },
+    {
+        "id": "debug_egress_editPatientInsurance",
+        "type": "debug",
+        "z": "cloud9_ortho_tab",
+        "name": "Egress editPatientInsurance",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1120,
+        "y": 560,
+        "wires": []
+    },
+    {
+        "id": "inject_getApptSlots",
+        "type": "inject",
+        "z": "cloud9_ortho_tab",
+        "name": "Test getApptSlots",
+        "props": [
+            {
+                "p": "payload.startDate",
+                "v": "01/01/2025",
+                "vt": "str"
+            },
+            {
+                "p": "payload.endDate",
+                "v": "01/31/2025",
+                "vt": "str"
+            },
+            {
+                "p": "payload.scheduleViewGUIDs",
+                "v": "",
+                "vt": "str"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 150,
+        "y": 660,
+        "wires": [
+            [
+                "func_getApptSlots"
+            ]
+        ]
+    },
+    {
+        "id": "http_in_getApptSlots",
+        "type": "http in",
+        "z": "cloud9_ortho_tab",
+        "name": "",
+        "url": "/chord/cloud9/getApptSlots",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 190,
+        "y": 700,
+        "wires": [
+            [
+                "func_getApptSlots",
+                "debug_ingress_getApptSlots"
+            ]
+        ]
+    },
+    {
+        "id": "debug_ingress_getApptSlots",
+        "type": "debug",
+        "z": "cloud9_ortho_tab",
+        "name": "Ingress getApptSlots",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 540,
+        "y": 660,
+        "wires": []
+    },
+    {
+        "id": "func_getApptSlots",
+        "type": "function",
+        "z": "cloud9_ortho_tab",
+        "name": "getApptSlots",
+        "func": "// Cloud9 Get Available Appointment Slots\n// Uses GetOnlineReservations procedure\n\nconst clientId = env.get(\"cloud9ClientId\");\nconst userName = env.get(\"cloud9UserName\");\nconst password = env.get(\"cloud9Password\");\nconst endpoint = env.get(\"cloud9Endpoint\");\n\nconst startDate = msg.payload.startDate;\nconst endDate = msg.payload.endDate;\nconst schdvwGUIDs = msg.payload.scheduleViewGUIDs || msg.payload.schdvwGUIDs;\n\nasync function getApptSlots() {\n    try {\n        if (!startDate) {\n            throw new Error('Start date is required (format: MM/DD/YYYY)');\n        }\n        if (!endDate) {\n            throw new Error('End date is required (format: MM/DD/YYYY)');\n        }\n\n        let optionalParams = '';\n        if (schdvwGUIDs) {\n            optionalParams = `<schdvwGUIDs>${schdvwGUIDs}</schdvwGUIDs>`;\n        }\n\n        const xmlBody = `<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<GetDataRequest xmlns=\"http://schemas.practica.ws/cloud9/partners/\" \n                xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">\n    <ClientID>${clientId}</ClientID>\n    <UserName>${userName}</UserName>\n    <Password>${password}</Password>\n    <Procedure>GetOnlineReservations</Procedure>\n    <Parameters>\n        <startDate>${startDate}</startDate>\n        <endDate>${endDate}</endDate>\n        ${optionalParams}\n    </Parameters>\n</GetDataRequest>`;\n\n        const requestOptions = {\n            method: \"POST\",\n            headers: { \"Content-Type\": \"application/xml\" },\n            body: xmlBody,\n            redirect: \"follow\"\n        };\n\n        node.warn('Getting appointment slots from ' + startDate + ' to ' + endDate);\n        const response = await fetch(endpoint, requestOptions);\n\n        if (!response.ok) {\n            const errorText = await response.text().catch(() => 'Unable to read error response');\n            throw new Error(`API call failed with status ${response.status}: ${errorText}`);\n        }\n\n        const xmlResult = await response.text();\n        msg.payload = xmlResult;\n        msg.responseType = 'xml';\n        return msg;\n\n    } catch (error) {\n        node.error('Error in getApptSlots: ' + error.message, msg);\n        msg.payload = {\n            success: false,\n            error: error.message,\n            timestamp: new Date().toISOString()\n        };\n        msg.statusCode = 500;\n        return msg;\n    }\n}\n\nreturn getApptSlots();",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [
+            {
+                "var": "fetch",
+                "module": "node-fetch"
+            }
+        ],
+        "x": 510,
+        "y": 700,
+        "wires": [
+            [
+                "xml_getApptSlots"
+            ]
+        ]
+    },
+    {
+        "id": "xml_getApptSlots",
+        "type": "xml",
+        "z": "cloud9_ortho_tab",
+        "name": "",
+        "property": "payload",
+        "attr": "",
+        "chr": "",
+        "x": 710,
+        "y": 700,
+        "wires": [
+            [
+                "transform_getApptSlots"
+            ]
+        ]
+    },
+    {
+        "id": "transform_getApptSlots",
+        "type": "change",
+        "z": "cloud9_ortho_tab",
+        "name": "transform",
+        "rules": [
+            {
+                "t": "set",
+                "p": "temp",
+                "pt": "msg",
+                "to": "payload",
+                "tot": "msg"
+            },
+            {
+                "t": "set",
+                "p": "payload",
+                "pt": "msg",
+                "to": "{}",
+                "tot": "json"
+            },
+            {
+                "t": "set",
+                "p": "payload.success",
+                "pt": "msg",
+                "to": "true",
+                "tot": "bool"
+            },
+            {
+                "t": "set",
+                "p": "payload.slots",
+                "pt": "msg",
+                "to": "temp.GetDataResponse.Records[0].Record",
+                "tot": "msg"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 880,
+        "y": 700,
+        "wires": [
+            [
+                "http_resp_getApptSlots",
+                "debug_egress_getApptSlots"
+            ]
+        ]
+    },
+    {
+        "id": "http_resp_getApptSlots",
+        "type": "http response",
+        "z": "cloud9_ortho_tab",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 1070,
+        "y": 700,
+        "wires": []
+    },
+    {
+        "id": "debug_egress_getApptSlots",
+        "type": "debug",
+        "z": "cloud9_ortho_tab",
+        "name": "Egress getApptSlots",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1100,
+        "y": 660,
+        "wires": []
+    },
+    {
+        "id": "inject_getGroupedApptSlots",
+        "type": "inject",
+        "z": "cloud9_ortho_tab",
+        "name": "Test getGroupedApptSlots (2 siblings)",
+        "props": [
+            {
+                "p": "payload.startDate",
+                "v": "01/01/2025",
+                "vt": "str"
+            },
+            {
+                "p": "payload.endDate",
+                "v": "01/31/2025",
+                "vt": "str"
+            },
+            {
+                "p": "payload.numberOfPatients",
+                "v": "2",
+                "vt": "num"
+            },
+            {
+                "p": "payload.appointmentDuration",
+                "v": "30",
+                "vt": "num"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 200,
+        "y": 760,
+        "wires": [
+            [
+                "func_getGroupedApptSlots"
+            ]
+        ]
+    },
+    {
+        "id": "http_in_getGroupedApptSlots",
+        "type": "http in",
+        "z": "cloud9_ortho_tab",
+        "name": "",
+        "url": "/chord/cloud9/getGroupedApptSlots",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 210,
+        "y": 800,
+        "wires": [
+            [
+                "func_getGroupedApptSlots",
+                "debug_ingress_getGroupedApptSlots"
+            ]
+        ]
+    },
+    {
+        "id": "debug_ingress_getGroupedApptSlots",
+        "type": "debug",
+        "z": "cloud9_ortho_tab",
+        "name": "Ingress getGroupedApptSlots",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 560,
+        "y": 760,
+        "wires": []
+    },
+    {
+        "id": "func_getGroupedApptSlots",
+        "type": "function",
+        "z": "cloud9_ortho_tab",
+        "name": "getGroupedApptSlots",
+        "func": "// Cloud9 Get Grouped Appointment Slots (for siblings)\n// Uses GetOnlineReservations procedure with grouping logic\n\nconst clientId = env.get(\"cloud9ClientId\");\nconst userName = env.get(\"cloud9UserName\");\nconst password = env.get(\"cloud9Password\");\nconst endpoint = env.get(\"cloud9Endpoint\");\n\nconst startDate = msg.payload.startDate;\nconst endDate = msg.payload.endDate;\nconst schdvwGUIDs = msg.payload.scheduleViewGUIDs || msg.payload.schdvwGUIDs;\nconst numberOfPatients = msg.payload.numberOfPatients || 2;\nconst appointmentDuration = msg.payload.appointmentDuration || 30; // minutes per patient\n\nasync function getGroupedApptSlots() {\n    try {\n        if (!startDate) {\n            throw new Error('Start date is required (format: MM/DD/YYYY)');\n        }\n        if (!endDate) {\n            throw new Error('End date is required (format: MM/DD/YYYY)');\n        }\n\n        let optionalParams = '';\n        if (schdvwGUIDs) {\n            optionalParams = `<schdvwGUIDs>${schdvwGUIDs}</schdvwGUIDs>`;\n        }\n\n        const xmlBody = `<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<GetDataRequest xmlns=\"http://schemas.practica.ws/cloud9/partners/\" \n                xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">\n    <ClientID>${clientId}</ClientID>\n    <UserName>${userName}</UserName>\n    <Password>${password}</Password>\n    <Procedure>GetOnlineReservations</Procedure>\n    <Parameters>\n        <startDate>${startDate}</startDate>\n        <endDate>${endDate}</endDate>\n        ${optionalParams}\n    </Parameters>\n</GetDataRequest>`;\n\n        const requestOptions = {\n            method: \"POST\",\n            headers: { \"Content-Type\": \"application/xml\" },\n            body: xmlBody,\n            redirect: \"follow\"\n        };\n\n        node.warn('Getting grouped appointment slots for ' + numberOfPatients + ' patients from ' + startDate + ' to ' + endDate);\n        const response = await fetch(endpoint, requestOptions);\n\n        if (!response.ok) {\n            const errorText = await response.text().catch(() => 'Unable to read error response');\n            throw new Error(`API call failed with status ${response.status}: ${errorText}`);\n        }\n\n        const xmlResult = await response.text();\n        msg.payload = xmlResult;\n        msg.responseType = 'xml';\n        msg.numberOfPatients = numberOfPatients;\n        msg.appointmentDuration = appointmentDuration;\n        return msg;\n\n    } catch (error) {\n        node.error('Error in getGroupedApptSlots: ' + error.message, msg);\n        msg.payload = {\n            success: false,\n            error: error.message,\n            timestamp: new Date().toISOString()\n        };\n        msg.statusCode = 500;\n        return msg;\n    }\n}\n\nreturn getGroupedApptSlots();",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [
+            {
+                "var": "fetch",
+                "module": "node-fetch"
+            }
+        ],
+        "x": 540,
+        "y": 800,
+        "wires": [
+            [
+                "xml_getGroupedApptSlots"
+            ]
+        ]
+    },
+    {
+        "id": "xml_getGroupedApptSlots",
+        "type": "xml",
+        "z": "cloud9_ortho_tab",
+        "name": "",
+        "property": "payload",
+        "attr": "",
+        "chr": "",
+        "x": 730,
+        "y": 800,
+        "wires": [
+            [
+                "transform_getGroupedApptSlots"
+            ]
+        ]
+    },
+    {
+        "id": "transform_getGroupedApptSlots",
+        "type": "function",
+        "z": "cloud9_ortho_tab",
+        "name": "filterGroupedSlots",
+        "func": "// Filter slots to find consecutive slots for multiple patients\nconst slots = msg.payload.GetDataResponse?.Records?.[0]?.Record || [];\nconst numberOfPatients = msg.numberOfPatients || 2;\nconst appointmentDuration = msg.appointmentDuration || 30;\n\n// Group slots by date and find consecutive time slots\nconst groupedSlots = [];\n\n// Simple implementation - return all slots with grouping info\n// Production implementation would filter for consecutive slots\n\nmsg.payload = {\n    success: true,\n    slots: slots,\n    groupingInfo: {\n        numberOfPatients: numberOfPatients,\n        appointmentDuration: appointmentDuration,\n        totalDurationNeeded: numberOfPatients * appointmentDuration\n    }\n};\n\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 910,
+        "y": 800,
+        "wires": [
+            [
+                "http_resp_getGroupedApptSlots",
+                "debug_egress_getGroupedApptSlots"
+            ]
+        ]
+    },
+    {
+        "id": "http_resp_getGroupedApptSlots",
+        "type": "http response",
+        "z": "cloud9_ortho_tab",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 1110,
+        "y": 800,
+        "wires": []
+    },
+    {
+        "id": "debug_egress_getGroupedApptSlots",
+        "type": "debug",
+        "z": "cloud9_ortho_tab",
+        "name": "Egress getGroupedApptSlots",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1160,
+        "y": 760,
+        "wires": []
+    },
+    {
+        "id": "inject_createChildAppt",
+        "type": "inject",
+        "z": "cloud9_ortho_tab",
+        "name": "Test createChildAppt",
+        "props": [
+            {
+                "p": "payload.patientGUID",
+                "v": "59D26B3E-2725-460D-9FD7-BD9C03452B86",
+                "vt": "str"
+            },
+            {
+                "p": "payload.startTime",
+                "v": "01/15/2025 09:00 AM",
+                "vt": "str"
+            },
+            {
+                "p": "payload.scheduleViewGUID",
+                "v": "",
+                "vt": "str"
+            },
+            {
+                "p": "payload.scheduleColumnGUID",
+                "v": "",
+                "vt": "str"
+            },
+            {
+                "p": "payload.appointmentTypeGUID",
+                "v": "",
+                "vt": "str"
+            },
+            {
+                "p": "payload.minutes",
+                "v": "30",
+                "vt": "num"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 160,
+        "y": 860,
+        "wires": [
+            [
+                "func_createChildAppt"
+            ]
+        ]
+    },
+    {
+        "id": "http_in_createChildAppt",
+        "type": "http in",
+        "z": "cloud9_ortho_tab",
+        "name": "",
+        "url": "/chord/cloud9/createChildAppt",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 200,
+        "y": 900,
+        "wires": [
+            [
+                "func_createChildAppt",
+                "debug_ingress_createChildAppt"
+            ]
+        ]
+    },
+    {
+        "id": "debug_ingress_createChildAppt",
+        "type": "debug",
+        "z": "cloud9_ortho_tab",
+        "name": "Ingress createChildAppt",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 550,
+        "y": 860,
+        "wires": []
+    },
+    {
+        "id": "func_createChildAppt",
+        "type": "function",
+        "z": "cloud9_ortho_tab",
+        "name": "createChildAppt",
+        "func": "// Cloud9 Create Child Appointment\n// Uses SetAppointment procedure\n\nconst clientId = env.get(\"cloud9ClientId\");\nconst userName = env.get(\"cloud9UserName\");\nconst password = env.get(\"cloud9Password\");\nconst endpoint = env.get(\"cloud9Endpoint\");\nconst vendorUserName = env.get(\"vendorUserName\") || \"ChordIVA\";\n\n// Required parameters\nconst patientGUID = msg.payload.patientGUID || msg.payload.PatientGUID;\nconst startTime = msg.payload.startTime || msg.payload.StartTime;\nconst scheduleViewGUID = msg.payload.scheduleViewGUID || msg.payload.ScheduleViewGUID;\nconst scheduleColumnGUID = msg.payload.scheduleColumnGUID || msg.payload.ScheduleColumnGUID;\nconst appointmentTypeGUID = msg.payload.appointmentTypeGUID || msg.payload.AppointmentTypeGUID;\nconst minutes = msg.payload.minutes || msg.payload.Minutes || 30;\n\nasync function createChildAppt() {\n    try {\n        if (!patientGUID) {\n            throw new Error('Patient GUID is required');\n        }\n        if (!startTime) {\n            throw new Error('Start time is required (format: MM/DD/YYYY HH:MM AM/PM)');\n        }\n        if (!scheduleViewGUID) {\n            throw new Error('Schedule View GUID is required');\n        }\n        if (!scheduleColumnGUID) {\n            throw new Error('Schedule Column GUID is required');\n        }\n        if (!appointmentTypeGUID) {\n            throw new Error('Appointment Type GUID is required');\n        }\n\n        const xmlBody = `<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<GetDataRequest xmlns=\"http://schemas.practica.ws/cloud9/partners/\" \n                xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">\n    <ClientID>${clientId}</ClientID>\n    <UserName>${userName}</UserName>\n    <Password>${password}</Password>\n    <Procedure>SetAppointment</Procedure>\n    <Parameters>\n        <PatientGUID>${patientGUID}</PatientGUID>\n        <StartTime>${startTime}</StartTime>\n        <ScheduleViewGUID>${scheduleViewGUID}</ScheduleViewGUID>\n        <ScheduleColumnGUID>${scheduleColumnGUID}</ScheduleColumnGUID>\n        <AppointmentTypeGUID>${appointmentTypeGUID}</AppointmentTypeGUID>\n        <Minutes>${minutes}</Minutes>\n        <VendorUserName>${vendorUserName}</VendorUserName>\n    </Parameters>\n</GetDataRequest>`;\n\n        const requestOptions = {\n            method: \"POST\",\n            headers: { \"Content-Type\": \"application/xml\" },\n            body: xmlBody,\n            redirect: \"follow\"\n        };\n\n        node.warn('Creating appointment for patient GUID: ' + patientGUID + ' at ' + startTime);\n        const response = await fetch(endpoint, requestOptions);\n\n        if (!response.ok) {\n            const errorText = await response.text().catch(() => 'Unable to read error response');\n            throw new Error(`API call failed with status ${response.status}: ${errorText}`);\n        }\n\n        const xmlResult = await response.text();\n        msg.payload = xmlResult;\n        msg.responseType = 'xml';\n        return msg;\n\n    } catch (error) {\n        node.error('Error in createChildAppt: ' + error.message, msg);\n        msg.payload = {\n            success: false,\n            error: error.message,\n            timestamp: new Date().toISOString()\n        };\n        msg.statusCode = 500;\n        return msg;\n    }\n}\n\nreturn createChildAppt();",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [
+            {
+                "var": "fetch",
+                "module": "node-fetch"
+            }
+        ],
+        "x": 530,
+        "y": 900,
+        "wires": [
+            [
+                "xml_createChildAppt"
+            ]
+        ]
+    },
+    {
+        "id": "xml_createChildAppt",
+        "type": "xml",
+        "z": "cloud9_ortho_tab",
+        "name": "",
+        "property": "payload",
+        "attr": "",
+        "chr": "",
+        "x": 710,
+        "y": 900,
+        "wires": [
+            [
+                "transform_createChildAppt"
+            ]
+        ]
+    },
+    {
+        "id": "transform_createChildAppt",
+        "type": "function",
+        "z": "cloud9_ortho_tab",
+        "name": "extractApptGUID",
+        "func": "// Extract appointment GUID from response\nconst response = msg.payload.GetDataResponse;\nlet appointmentGUID = null;\nlet success = false;\n\nif (response && response.ResponseStatus && response.ResponseStatus[0] === 'Success') {\n    success = true;\n    // Response format: \"Appointment GUID Added: {GUID}\"\n    const message = response.Records?.[0]?.Record?.[0]?.Message?.[0] || '';\n    const match = message.match(/Appointment GUID Added:\\s*([a-f0-9-]+)/i);\n    if (match) {\n        appointmentGUID = match[1];\n    }\n}\n\nmsg.payload = {\n    success: success,\n    appointmentGUID: appointmentGUID,\n    response: response\n};\n\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 890,
+        "y": 900,
+        "wires": [
+            [
+                "http_resp_createChildAppt",
+                "debug_egress_createChildAppt"
+            ]
+        ]
+    },
+    {
+        "id": "http_resp_createChildAppt",
+        "type": "http response",
+        "z": "cloud9_ortho_tab",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 1070,
+        "y": 900,
+        "wires": []
+    },
+    {
+        "id": "debug_egress_createChildAppt",
+        "type": "debug",
+        "z": "cloud9_ortho_tab",
+        "name": "Egress createChildAppt",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1110,
+        "y": 860,
+        "wires": []
+    },
+    {
+        "id": "inject_cancelAppt",
+        "type": "inject",
+        "z": "cloud9_ortho_tab",
+        "name": "Test cancelAppt",
+        "props": [
+            {
+                "p": "payload.appointmentGUID",
+                "v": "A1B2C3D4-E5F6-7890-ABCD-EF1234567890",
+                "vt": "str"
+            },
+            {
+                "p": "payload.cancellationReason",
+                "v": "Patient requested cancellation",
+                "vt": "str"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 140,
+        "y": 960,
+        "wires": [
+            [
+                "func_cancelAppt"
+            ]
+        ]
+    },
+    {
+        "id": "http_in_cancelAppt",
+        "type": "http in",
+        "z": "cloud9_ortho_tab",
+        "name": "",
+        "url": "/chord/cloud9/cancelAppt",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 180,
+        "y": 1000,
+        "wires": [
+            [
+                "func_cancelAppt",
+                "debug_ingress_cancelAppt"
+            ]
+        ]
+    },
+    {
+        "id": "debug_ingress_cancelAppt",
+        "type": "debug",
+        "z": "cloud9_ortho_tab",
+        "name": "Ingress cancelAppt",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 530,
+        "y": 960,
+        "wires": []
+    },
+    {
+        "id": "func_cancelAppt",
+        "type": "function",
+        "z": "cloud9_ortho_tab",
+        "name": "cancelAppt",
+        "func": "// Cloud9 Cancel Appointment\n// Note: Cloud9 API may not have a direct cancel endpoint\n// This is a placeholder - actual implementation depends on Cloud9 API capabilities\n\nconst clientId = env.get(\"cloud9ClientId\");\nconst userName = env.get(\"cloud9UserName\");\nconst password = env.get(\"cloud9Password\");\nconst endpoint = env.get(\"cloud9Endpoint\");\n\nconst appointmentGUID = msg.payload.appointmentGUID || msg.payload.apptGUID;\nconst cancellationReason = msg.payload.cancellationReason || 'Cancelled by IVA';\n\nasync function cancelAppt() {\n    try {\n        if (!appointmentGUID) {\n            throw new Error('Appointment GUID is required');\n        }\n\n        // Note: If Cloud9 doesn't have a cancel API, this would need to use\n        // a different approach (e.g., SetAppointmentStatus or similar)\n        // For now, returning a structured response indicating the operation\n        \n        node.warn('Cancel appointment request for GUID: ' + appointmentGUID);\n        node.warn('Note: Cloud9 cancel API implementation pending');\n        \n        // Placeholder response - implement actual API call when available\n        msg.payload = {\n            success: false,\n            message: 'Appointment cancellation requires manual intervention. Please transfer to live agent.',\n            appointmentGUID: appointmentGUID,\n            cancellationReason: cancellationReason,\n            timestamp: new Date().toISOString()\n        };\n        \n        return msg;\n\n    } catch (error) {\n        node.error('Error in cancelAppt: ' + error.message, msg);\n        msg.payload = {\n            success: false,\n            error: error.message,\n            timestamp: new Date().toISOString()\n        };\n        msg.statusCode = 500;\n        return msg;\n    }\n}\n\nreturn cancelAppt();",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [
+            {
+                "var": "fetch",
+                "module": "node-fetch"
+            }
+        ],
+        "x": 510,
+        "y": 1000,
+        "wires": [
+            [
+                "http_resp_cancelAppt",
+                "debug_egress_cancelAppt"
+            ]
+        ]
+    },
+    {
+        "id": "http_resp_cancelAppt",
+        "type": "http response",
+        "z": "cloud9_ortho_tab",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 710,
+        "y": 1000,
+        "wires": []
+    },
+    {
+        "id": "debug_egress_cancelAppt",
+        "type": "debug",
+        "z": "cloud9_ortho_tab",
+        "name": "Egress cancelAppt",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 730,
+        "y": 960,
+        "wires": []
+    },
+    {
+        "id": "inject_getProviders",
+        "type": "inject",
+        "z": "cloud9_ortho_tab",
+        "name": "Test getProviders",
+        "props": [
+            {
+                "p": "payload",
+                "v": "{}",
+                "vt": "json"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 150,
+        "y": 1060,
+        "wires": [
+            [
+                "func_getProviders"
+            ]
+        ]
+    },
+    {
+        "id": "http_in_getProviders",
+        "type": "http in",
+        "z": "cloud9_ortho_tab",
+        "name": "",
+        "url": "/chord/cloud9/getProviders",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 190,
+        "y": 1100,
+        "wires": [
+            [
+                "func_getProviders",
+                "debug_ingress_getProviders"
+            ]
+        ]
+    },
+    {
+        "id": "debug_ingress_getProviders",
+        "type": "debug",
+        "z": "cloud9_ortho_tab",
+        "name": "Ingress getProviders",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 540,
+        "y": 1060,
+        "wires": []
+    },
+    {
+        "id": "func_getProviders",
+        "type": "function",
+        "z": "cloud9_ortho_tab",
+        "name": "getProviders",
+        "func": "// Cloud9 Get Providers/Doctors\n// Uses GetDoctors or GetProviders procedure\n\nconst clientId = env.get(\"cloud9ClientId\");\nconst userName = env.get(\"cloud9UserName\");\nconst password = env.get(\"cloud9Password\");\nconst endpoint = env.get(\"cloud9Endpoint\");\n\nasync function getProviders() {\n    try {\n        const xmlBody = `<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<GetDataRequest xmlns=\"http://schemas.practica.ws/cloud9/partners/\" \n                xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">\n    <ClientID>${clientId}</ClientID>\n    <UserName>${userName}</UserName>\n    <Password>${password}</Password>\n    <Procedure>GetDoctors</Procedure>\n</GetDataRequest>`;\n\n        const requestOptions = {\n            method: \"POST\",\n            headers: { \"Content-Type\": \"application/xml\" },\n            body: xmlBody,\n            redirect: \"follow\"\n        };\n\n        node.warn('Getting providers/doctors list');\n        const response = await fetch(endpoint, requestOptions);\n\n        if (!response.ok) {\n            const errorText = await response.text().catch(() => 'Unable to read error response');\n            throw new Error(`API call failed with status ${response.status}: ${errorText}`);\n        }\n\n        const xmlResult = await response.text();\n        msg.payload = xmlResult;\n        msg.responseType = 'xml';\n        return msg;\n\n    } catch (error) {\n        node.error('Error in getProviders: ' + error.message, msg);\n        msg.payload = {\n            success: false,\n            error: error.message,\n            timestamp: new Date().toISOString()\n        };\n        msg.statusCode = 500;\n        return msg;\n    }\n}\n\nreturn getProviders();",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [
+            {
+                "var": "fetch",
+                "module": "node-fetch"
+            }
+        ],
+        "x": 510,
+        "y": 1100,
+        "wires": [
+            [
+                "xml_getProviders"
+            ]
+        ]
+    },
+    {
+        "id": "xml_getProviders",
+        "type": "xml",
+        "z": "cloud9_ortho_tab",
+        "name": "",
+        "property": "payload",
+        "attr": "",
+        "chr": "",
+        "x": 710,
+        "y": 1100,
+        "wires": [
+            [
+                "transform_getProviders"
+            ]
+        ]
+    },
+    {
+        "id": "transform_getProviders",
+        "type": "change",
+        "z": "cloud9_ortho_tab",
+        "name": "transform",
+        "rules": [
+            {
+                "t": "set",
+                "p": "temp",
+                "pt": "msg",
+                "to": "payload",
+                "tot": "msg"
+            },
+            {
+                "t": "set",
+                "p": "payload",
+                "pt": "msg",
+                "to": "{}",
+                "tot": "json"
+            },
+            {
+                "t": "set",
+                "p": "payload.success",
+                "pt": "msg",
+                "to": "true",
+                "tot": "bool"
+            },
+            {
+                "t": "set",
+                "p": "payload.providers",
+                "pt": "msg",
+                "to": "temp.GetDataResponse.Records[0].Record",
+                "tot": "msg"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 880,
+        "y": 1100,
+        "wires": [
+            [
+                "http_resp_getProviders",
+                "debug_egress_getProviders"
+            ]
+        ]
+    },
+    {
+        "id": "http_resp_getProviders",
+        "type": "http response",
+        "z": "cloud9_ortho_tab",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 1070,
+        "y": 1100,
+        "wires": []
+    },
+    {
+        "id": "debug_egress_getProviders",
+        "type": "debug",
+        "z": "cloud9_ortho_tab",
+        "name": "Egress getProviders",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1100,
+        "y": 1060,
+        "wires": []
+    },
+    {
+        "id": "inject_getApptTypes",
+        "type": "inject",
+        "z": "cloud9_ortho_tab",
+        "name": "Test getApptTypes",
+        "props": [
+            {
+                "p": "payload",
+                "v": "{}",
+                "vt": "json"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 150,
+        "y": 1160,
+        "wires": [
+            [
+                "func_getApptTypes"
+            ]
+        ]
+    },
+    {
+        "id": "http_in_getApptTypes",
+        "type": "http in",
+        "z": "cloud9_ortho_tab",
+        "name": "",
+        "url": "/chord/cloud9/getApptTypes",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 190,
+        "y": 1200,
+        "wires": [
+            [
+                "func_getApptTypes",
+                "debug_ingress_getApptTypes"
+            ]
+        ]
+    },
+    {
+        "id": "debug_ingress_getApptTypes",
+        "type": "debug",
+        "z": "cloud9_ortho_tab",
+        "name": "Ingress getApptTypes",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 540,
+        "y": 1160,
+        "wires": []
+    },
+    {
+        "id": "func_getApptTypes",
+        "type": "function",
+        "z": "cloud9_ortho_tab",
+        "name": "getApptTypes",
+        "func": "// Cloud9 Get Appointment Types\n// Uses GetApptTypes procedure\n\nconst clientId = env.get(\"cloud9ClientId\");\nconst userName = env.get(\"cloud9UserName\");\nconst password = env.get(\"cloud9Password\");\nconst endpoint = env.get(\"cloud9Endpoint\");\n\nasync function getApptTypes() {\n    try {\n        const xmlBody = `<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<GetDataRequest xmlns=\"http://schemas.practica.ws/cloud9/partners/\" \n                xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">\n    <ClientID>${clientId}</ClientID>\n    <UserName>${userName}</UserName>\n    <Password>${password}</Password>\n    <Procedure>GetApptTypes</Procedure>\n</GetDataRequest>`;\n\n        const requestOptions = {\n            method: \"POST\",\n            headers: { \"Content-Type\": \"application/xml\" },\n            body: xmlBody,\n            redirect: \"follow\"\n        };\n\n        node.warn('Getting appointment types');\n        const response = await fetch(endpoint, requestOptions);\n\n        if (!response.ok) {\n            const errorText = await response.text().catch(() => 'Unable to read error response');\n            throw new Error(`API call failed with status ${response.status}: ${errorText}`);\n        }\n\n        const xmlResult = await response.text();\n        msg.payload = xmlResult;\n        msg.responseType = 'xml';\n        return msg;\n\n    } catch (error) {\n        node.error('Error in getApptTypes: ' + error.message, msg);\n        msg.payload = {\n            success: false,\n            error: error.message,\n            timestamp: new Date().toISOString()\n        };\n        msg.statusCode = 500;\n        return msg;\n    }\n}\n\nreturn getApptTypes();",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [
+            {
+                "var": "fetch",
+                "module": "node-fetch"
+            }
+        ],
+        "x": 510,
+        "y": 1200,
+        "wires": [
+            [
+                "xml_getApptTypes"
+            ]
+        ]
+    },
+    {
+        "id": "xml_getApptTypes",
+        "type": "xml",
+        "z": "cloud9_ortho_tab",
+        "name": "",
+        "property": "payload",
+        "attr": "",
+        "chr": "",
+        "x": 710,
+        "y": 1200,
+        "wires": [
+            [
+                "transform_getApptTypes"
+            ]
+        ]
+    },
+    {
+        "id": "transform_getApptTypes",
+        "type": "change",
+        "z": "cloud9_ortho_tab",
+        "name": "transform",
+        "rules": [
+            {
+                "t": "set",
+                "p": "temp",
+                "pt": "msg",
+                "to": "payload",
+                "tot": "msg"
+            },
+            {
+                "t": "set",
+                "p": "payload",
+                "pt": "msg",
+                "to": "{}",
+                "tot": "json"
+            },
+            {
+                "t": "set",
+                "p": "payload.success",
+                "pt": "msg",
+                "to": "true",
+                "tot": "bool"
+            },
+            {
+                "t": "set",
+                "p": "payload.appointmentTypes",
+                "pt": "msg",
+                "to": "temp.GetDataResponse.Records[0].Record",
+                "tot": "msg"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 880,
+        "y": 1200,
+        "wires": [
+            [
+                "http_resp_getApptTypes",
+                "debug_egress_getApptTypes"
+            ]
+        ]
+    },
+    {
+        "id": "http_resp_getApptTypes",
+        "type": "http response",
+        "z": "cloud9_ortho_tab",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 1070,
+        "y": 1200,
+        "wires": []
+    },
+    {
+        "id": "debug_egress_getApptTypes",
+        "type": "debug",
+        "z": "cloud9_ortho_tab",
+        "name": "Egress getApptTypes",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1100,
+        "y": 1160,
+        "wires": []
+    }
+]

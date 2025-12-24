@@ -1,0 +1,86 @@
+[
+  {
+    "property": "action",
+    "type": "string",
+    "description": "The operation to perform. Valid values: lookup, get, create, appointments, clinic_info, edit_insurance",
+    "required": true
+  },
+  {
+    "property": "phoneNumber",
+    "type": "string",
+    "description": "Phone number for patient lookup",
+    "required": false
+  },
+  {
+    "property": "filter",
+    "type": "string",
+    "description": "LastName, FirstName or Patient ID for lookup",
+    "required": false
+  },
+  {
+    "property": "patientGUID",
+    "type": "string",
+    "description": "Patient GUID for get/appointments/edit_insurance actions",
+    "required": false
+  },
+  {
+    "property": "patientFirstName",
+    "type": "string",
+    "description": "Patient first name for create action",
+    "required": false
+  },
+  {
+    "property": "patientLastName",
+    "type": "string",
+    "description": "Patient last name for create action",
+    "required": false
+  },
+  {
+    "property": "birthdayDateTime",
+    "type": "string",
+    "description": "Patient date of birth in MM/DD/YYYY format",
+    "required": false
+  },
+  {
+    "property": "gender",
+    "type": "string",
+    "description": "Patient gender. Valid values: M, F",
+    "required": false
+  },
+  {
+    "property": "emailAddress",
+    "type": "string",
+    "description": "Email address for patient account",
+    "required": false
+  },
+  {
+    "property": "providerGUID",
+    "type": "string",
+    "description": "Provider GUID",
+    "required": false
+  },
+  {
+    "property": "locationGUID",
+    "type": "string",
+    "description": "Location GUID for the practice",
+    "required": false
+  },
+  {
+    "property": "insuranceProvider",
+    "type": "string",
+    "description": "Insurance provider name",
+    "required": false
+  },
+  {
+    "property": "insuranceGroupId",
+    "type": "string",
+    "description": "Insurance group ID",
+    "required": false
+  },
+  {
+    "property": "insuranceMemberId",
+    "type": "string",
+    "description": "Insurance member ID",
+    "required": false
+  }
+]

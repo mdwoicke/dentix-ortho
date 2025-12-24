@@ -1,0 +1,395 @@
+/**
+ * ============================================================================
+ * CHORD PATIENT - Cloud9 Unified Patient & Clinic Tool
+ * ============================================================================
+ * Consolidates: getPatientByPhone, getPatient, createPatient,
+ *               getPatientAppts, getClinicInfo, editPatientInsurance
+ *
+ * Actions:
+ *   - lookup: Find patient by phone number
+ *   - get: Get patient by GUID
+ *   - create: Register new patient
+ *   - appointments: Get patient's appointments
+ *   - clinic_info: Get clinic location details
+ *   - edit_insurance: Update patient's insurance information
+ * ============================================================================
+ */
+
+const fetch = require('node-fetch');
+
+// ============================================================================
+// 📝 ACTION CONFIGURATIONS
+// ============================================================================
+
+const NODE_RED_URL = process.env.NODE_RED_URL || 'http://localhost:1880';
+
+const ACTIONS = {
+    lookup: {
+        endpoint: `${NODE_RED_URL}/chord/cloud9/getPatientByPhone`,
+        method: 'POST',
+        buildBody: (params) => ({
+            phoneNumber: params.phoneNumber,
+            filter: params.filter
+        }),
+        validate: (params) => {
+            if (!params.phoneNumber && !params.filter) {
+                throw new Error("phoneNumber or filter is required for 'lookup' action");
+            }
+        },
+        successLog: 'Patient lookup completed'
+    },
+    get: {
+        endpoint: `${NODE_RED_URL}/chord/cloud9/getPatient`,
+        method: 'POST',
+        buildBody: (params) => ({
+            patientGUID: params.patientGUID
+        }),
+        validate: (params) => {
+            if (!params.patientGUID) {
+                throw new Error("patientGUID is required for 'get' action");
+            }
+        },
+        successLog: 'Patient retrieved successfully'
+    },
+    create: {
+        endpoint: `${NODE_RED_URL}/chord/cloud9/createPatient`,
+        method: 'POST',
+        buildBody: (params) => {
+            const body = {
+                patientFirstName: params.patientFirstName,
+                patientLastName: params.patientLastName,
+                providerGUID: params.providerGUID,
+                locationGUID: params.locationGUID
+            };
+            if (params.birthdayDateTime) body.birthdayDateTime = params.birthdayDateTime;
+            if (params.gender) body.gender = params.gender;
+            if (params.phoneNumber) body.phoneNumber = params.phoneNumber;
+            if (params.emailAddress) body.emailAddress = params.emailAddress;
+            if (params.specialNeeds) body.specialNeeds = params.specialNeeds;
+            return body;
+        },
+        validate: (params) => {
+            if (!params.patientFirstName) throw new Error("patientFirstName is required for 'create' action");
+            if (!params.patientLastName) throw new Error("patientLastName is required for 'create' action");
+            if (!params.providerGUID) throw new Error("providerGUID is required for 'create' action");
+            if (!params.locationGUID) throw new Error("locationGUID is required for 'create' action");
+        },
+        successLog: 'Patient created successfully'
+    },
+    appointments: {
+        endpoint: `${NODE_RED_URL}/chord/cloud9/getPatientAppts`,
+        method: 'POST',
+        buildBody: (params) => ({
+            patientGUID: params.patientGUID
+        }),
+        validate: (params) => {
+            if (!params.patientGUID) {
+                throw new Error("patientGUID is required for 'appointments' action");
+            }
+        },
+        successLog: 'Patient appointments retrieved'
+    },
+    clinic_info: {
+        endpoint: `${NODE_RED_URL}/chord/cloud9/getClinicInfo`,
+        method: 'POST',
+        buildBody: (params) => ({
+            locationGUID: params.locationGUID,
+            locationName: params.locationName
+        }),
+        validate: () => {},
+        successLog: 'Clinic info retrieved',
+        // Post-process to filter/match location - uses first available if no match
+        postProcess: (data, params) => {
+            if (!data || !data.locations || data.locations.length === 0) {
+                console.log('[chord_patient] No locations returned from API');
+                return { success: false, error: 'No locations available' };
+            }
+
+            const locations = data.locations;
+            const searchName = params.locationName || '';
+            const searchGUID = params.locationGUID || '';
+
+            // Helper to flatten array values from XML parsing
+            function flattenLocation(loc) {
+                const result = {};
+                for (const [key, value] of Object.entries(loc)) {
+                    result[key] = Array.isArray(value) ? value[0] : value;
+                }
+                return result;
+            }
+
+            // Try to find exact match by GUID
+            if (searchGUID) {
+                const guidMatch = locations.find(loc => {
+                    const guid = Array.isArray(loc.LocationGUID) ? loc.LocationGUID[0] : loc.LocationGUID;
+                    return guid && guid.toLowerCase() === searchGUID.toLowerCase();
+                });
+                if (guidMatch) {
+                    return { success: true, location: flattenLocation(guidMatch), matchType: 'guid' };
+                }
+            }
+
+            // Try to find match by name (partial, case-insensitive)
+            if (searchName) {
+                const nameMatch = locations.find(loc => {
+                    const name = Array.isArray(loc.LocationName) ? loc.LocationName[0] : loc.LocationName;
+                    const city = Array.isArray(loc.LocationCity) ? loc.LocationCity[0] : loc.LocationCity;
+                    const code = Array.isArray(loc.LocationCode) ? loc.LocationCode[0] : loc.LocationCode;
+                    const searchLower = searchName.toLowerCase();
+                    return (name && name.toLowerCase().includes(searchLower)) ||
+                           (city && city.toLowerCase().includes(searchLower)) ||
+                           (code && code.toLowerCase().includes(searchLower));
+                });
+                if (nameMatch) {
+                    return { success: true, location: flattenLocation(nameMatch), matchType: 'name' };
+                }
+            }
+
+            // No match found - use first available location as default
+            const defaultLocation = flattenLocation(locations[0]);
+            console.log('[chord_patient] No match for "' + searchName + '", using first available: ' + defaultLocation.LocationName);
+            return {
+                success: true,
+                location: defaultLocation,
+                matchType: 'default',
+                message: 'No exact match found, using first available location'
+            };
+        }
+    },
+    edit_insurance: {
+        endpoint: `${NODE_RED_URL}/chord/cloud9/editPatientInsurance`,
+        method: 'POST',
+        buildBody: (params) => ({
+            patientGUID: params.patientGUID,
+            insuranceProvider: params.insuranceProvider,
+            insuranceGroupId: params.insuranceGroupId,
+            insuranceMemberId: params.insuranceMemberId
+        }),
+        validate: (params) => {
+            if (!params.patientGUID) {
+                throw new Error("patientGUID is required for 'edit_insurance' action");
+            }
+        },
+        successLog: 'Patient insurance updated successfully'
+    }
+};
+
+// ============================================================================
+// 🔐 AUTHENTICATION
+// ============================================================================
+
+function getAuthHeader() {
+    try {
+        const username = process.env.NODE_RED_USERNAME || "workflowapi";
+        const password = process.env.NODE_RED_PASSWORD || "";
+        if (username && password) {
+            const credentials = Buffer.from(`${username}:${password}`).toString('base64');
+            return `Basic ${credentials}`;
+        }
+    } catch (e) {
+        return null;
+    }
+    return null;
+}
+
+// ============================================================================
+// 🧹 NULL VALUE FILTER - Removes null/undefined/empty values
+// ============================================================================
+
+function cleanParams(params) {
+    const cleaned = {};
+    for (const [key, value] of Object.entries(params)) {
+        if (value !== null &&
+            value !== undefined &&
+            value !== '' &&
+            value !== 'NULL' &&
+            value !== 'null' &&
+            value !== 'None' &&
+            value !== 'none' &&
+            value !== 'N/A' &&
+            value !== 'n/a') {
+            cleaned[key] = value;
+        }
+    }
+    return cleaned;
+}
+
+// ============================================================================
+// 🔍 ERROR DETECTION HELPER
+// ============================================================================
+
+function checkForError(data) {
+    if (!data || typeof data !== 'object') return null;
+
+    // Pattern 1: { success: false, error: "..." }
+    if (data.success === false) {
+        return data.error || data.message || 'Operation failed';
+    }
+
+    // Pattern 2: { code: false, error: [...] }
+    if (data.code === false) {
+        if (Array.isArray(data.error)) {
+            return data.error.join(', ');
+        }
+        return data.error || data.message || 'API returned error';
+    }
+
+    // Pattern 3: String response containing error message
+    if (typeof data === 'string' && data.toLowerCase().includes('failed')) {
+        return data;
+    }
+
+    // Pattern 4: { error: "..." } without success/code field
+    if (data.error && !data.data && !data.id) {
+        if (Array.isArray(data.error)) {
+            return data.error.join(', ');
+        }
+        return data.error;
+    }
+
+    return null;
+}
+
+// ============================================================================
+// 🚀 HTTP REQUEST ENGINE
+// ============================================================================
+
+async function executeRequest() {
+    const toolName = 'chord_patient';
+    const action = $action;
+    const timeout = 30000;
+
+    console.log(`[${toolName}] Action: ${action}`);
+
+    // Validate action
+    if (!action || !ACTIONS[action]) {
+        const validActions = Object.keys(ACTIONS).join(', ');
+        throw new Error(`Invalid action '${action}'. Valid actions: ${validActions}`);
+    }
+
+    const config = ACTIONS[action];
+
+    // Build params object from Flowise variables - clean null values
+    const rawParams = {
+        phoneNumber: typeof $phoneNumber !== 'undefined' ? $phoneNumber : null,
+        filter: typeof $filter !== 'undefined' ? $filter : null,
+        patientGUID: typeof $patientGUID !== 'undefined' ? $patientGUID : null,
+        patientFirstName: typeof $patientFirstName !== 'undefined' ? $patientFirstName : null,
+        patientLastName: typeof $patientLastName !== 'undefined' ? $patientLastName : null,
+        birthdayDateTime: typeof $birthdayDateTime !== 'undefined' ? $birthdayDateTime : null,
+        gender: typeof $gender !== 'undefined' ? $gender : null,
+        emailAddress: typeof $emailAddress !== 'undefined' ? $emailAddress : null,
+        providerGUID: typeof $providerGUID !== 'undefined' ? $providerGUID : null,
+        locationGUID: typeof $locationGUID !== 'undefined' ? $locationGUID : null,
+        locationName: typeof $locationName !== 'undefined' ? $locationName : null,
+        insuranceProvider: typeof $insuranceProvider !== 'undefined' ? $insuranceProvider : null,
+        insuranceGroupId: typeof $insuranceGroupId !== 'undefined' ? $insuranceGroupId : null,
+        insuranceMemberId: typeof $insuranceMemberId !== 'undefined' ? $insuranceMemberId : null,
+        specialNeeds: typeof $specialNeeds !== 'undefined' ? $specialNeeds : null
+    };
+
+    // Filter out null/undefined/empty values
+    const params = cleanParams(rawParams);
+
+    try {
+        // Validate required params for this action
+        config.validate(params);
+
+        // Build request body and clean it
+        const rawBody = config.buildBody(params);
+        const body = cleanParams(rawBody);
+
+        console.log(`[${toolName}] Endpoint: ${config.method} ${config.endpoint}`);
+        console.log(`[${toolName}] Request Body:`, JSON.stringify(body, null, 2));
+
+        const headers = {
+            'Content-Type': 'application/json'
+        };
+
+        const authHeader = getAuthHeader();
+        if (authHeader) {
+            headers['Authorization'] = authHeader;
+        }
+
+        const options = {
+            method: config.method,
+            headers: headers,
+            body: JSON.stringify(body)
+        };
+
+        // Add timeout
+        let timeoutId;
+        if (typeof AbortController !== 'undefined') {
+            const controller = new AbortController();
+            timeoutId = setTimeout(() => controller.abort(), timeout);
+            options.signal = controller.signal;
+        }
+
+        console.log(`[${toolName}] Making request...`);
+        const response = await fetch(config.endpoint, options);
+
+        if (timeoutId) clearTimeout(timeoutId);
+
+        console.log(`[${toolName}] Response Status: ${response.status} ${response.statusText}`);
+
+        let data;
+        const contentType = response.headers.get('content-type');
+        if (contentType && contentType.includes('application/json')) {
+            data = await response.json();
+        } else {
+            data = await response.text();
+        }
+
+        // Check HTTP status
+        if (!response.ok) {
+            console.error(`[${toolName}] HTTP Error ${response.status}:`, data);
+            let errorMsg = `HTTP ${response.status}: ${response.statusText}`;
+            if (data) {
+                const bodyError = checkForError(typeof data === 'string' ? (() => { try { return JSON.parse(data); } catch(e) { return data; } })() : data);
+                if (bodyError) errorMsg = bodyError;
+            }
+            throw new Error(errorMsg);
+        }
+
+        // Parse response if string
+        let responseData = data;
+        if (typeof data === 'string') {
+            try { responseData = JSON.parse(data); } catch (e) { responseData = data; }
+        }
+
+        // Check for error patterns in successful HTTP response
+        const errorMessage = checkForError(responseData);
+        if (errorMessage) {
+            console.error(`[${toolName}] API Error:`, responseData);
+            throw new Error(errorMessage);
+        }
+
+        // Apply post-processing if defined for this action
+        let finalData = responseData;
+        if (typeof config.postProcess === 'function') {
+            console.log(`[${toolName}] Applying post-processing for ${action}`);
+            finalData = config.postProcess(responseData, params);
+        }
+
+        console.log(`[${toolName}] ${config.successLog}`);
+        return JSON.stringify(finalData);
+
+    } catch (error) {
+        console.error(`[${toolName}] Error:`, error.message);
+
+        if (error.name === 'AbortError') {
+            error.message = `Request timeout after ${timeout}ms`;
+        }
+
+        const errorResponse = {
+            error: `Failed to execute ${action}`,
+            message: error.message,
+            action: action,
+            timestamp: new Date().toISOString()
+        };
+
+        return JSON.stringify(errorResponse);
+    }
+}
+
+return executeRequest();

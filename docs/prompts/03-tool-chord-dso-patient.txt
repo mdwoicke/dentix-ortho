@@ -1,0 +1,174 @@
+================================================================================
+TOOL: chord_dso_patient_V3
+================================================================================
+Version: 2.0
+Updated: 2024-12-24
+Purpose: Patient management operations
+
+================================================================================
+TOOL NAME (must match exactly in Flowise):
+================================================================================
+chord_dso_patient_V3
+
+================================================================================
+TOOL DESCRIPTION (copy entire block into Flowise tool description):
+================================================================================
+
+<tool_purpose>
+REQUIRED tool for ALL patient operations: creating new patients, looking up existing patients, and retrieving clinic information. You MUST create a patient record before booking an appointment.
+</tool_purpose>
+
+<critical_requirement>
+PATIENT GUID TRACKING:
+When you create or look up a patient, you will receive a patientGUID in the response.
+You MUST:
+1. Store this patientGUID in your conversation state
+2. Include it in your PAYLOAD as "Child1_PatientGUID" (or Child2, Child3 for additional children)
+3. Use it when calling chord_dso_scheduling action='book_child'
+
+WITHOUT a valid patientGUID, appointment booking will FAIL.
+</critical_requirement>
+
+<actions>
+
+<action name="create">
+PURPOSE: Create a new patient record in the system
+WHEN TO USE: For new patients who have never visited the practice
+
+REQUIRED PARAMETERS:
+- patientFirstName: string (child's first name)
+- patientLastName: string (child's last name)
+- phoneNumber: string (10-digit contact number)
+- birthdayDateTime: string (MM/DD/YYYY format - child's date of birth)
+
+OPTIONAL PARAMETERS:
+- emailAddress: string (contact email)
+- locationGuid: string (preferred location)
+- providerGuid: string (preferred orthodontist)
+
+RETURNS:
+{
+  "success": true,
+  "patientGUID": "59D26B3E-2725-460D-9FD7-BD9C03452B86",  <-- STORE THIS!
+  "message": "Patient created successfully"
+}
+
+CRITICAL: Store the returned patientGUID immediately. You will need it to book the appointment.
+
+EXAMPLE STATE UPDATE after create:
+Child1_PatientGUID = "59D26B3E-2725-460D-9FD7-BD9C03452B86"
+</action>
+
+<action name="lookup">
+PURPOSE: Search for existing patients
+WHEN TO USE: When caller mentions they've been to the practice before
+
+PARAMETERS:
+- phoneNumber: string (search by phone)
+OR
+- lastName: string (search by name)
+- firstName: string (optional, with lastName)
+
+RETURNS:
+{
+  "patients": [
+    {
+      "patientGUID": "guid-here",  <-- Use this if patient found
+      "firstName": "Emma",
+      "lastName": "Smith",
+      "birthDate": "2014-02-05"
+    }
+  ]
+}
+
+IF PATIENT FOUND: Store patientGUID and skip creating a new patient
+IF NOT FOUND: Proceed to create new patient
+</action>
+
+<action name="get">
+PURPOSE: Get detailed patient information by GUID
+WHEN TO USE: When you have a patientGUID and need more details
+
+REQUIRED PARAMETERS:
+- patientGUID: string
+
+RETURNS: Full patient demographics, contact info, appointment history
+</action>
+
+<action name="clinic_info">
+PURPOSE: Get list of clinic locations
+WHEN TO USE: When caller asks about locations or you need location GUIDs
+
+PARAMETERS: None required
+
+RETURNS:
+{
+  "locations": [
+    {
+      "locationGUID": "1070d281-0952-4f01-9a6e-1a2e6926a7db",
+      "name": "CDH Ortho Alleghany",
+      "address": "123 Main St",
+      "city": "Alleghany",
+      "state": "PA"
+    }
+  ]
+}
+</action>
+
+</actions>
+
+<workflow_example>
+STEP 1: Collect patient info from caller
+- Child name: Emma Smith
+- Child DOB: 02/05/2014
+- Phone: 215-555-1111
+
+STEP 2: Create patient record
+Call: chord_dso_patient_V3 action='create' patientFirstName='Emma' patientLastName='Smith' phoneNumber='2155551111' birthdayDateTime='02/05/2014'
+
+STEP 3: Store returned GUID
+Response: { "patientGUID": "59D26B3E-2725-460D-9FD7-BD9C03452B86" }
+Store as: Child1_PatientGUID = "59D26B3E-2725-460D-9FD7-BD9C03452B86"
+
+STEP 4: Include in PAYLOAD
+{
+  "Child1_FirstName": "Emma",
+  "Child1_LastName": "Smith",
+  "Child1_DOB": "02/05/2014",
+  "Child1_PatientGUID": "59D26B3E-2725-460D-9FD7-BD9C03452B86"  <-- CRITICAL
+}
+
+STEP 5: Use when booking
+Call: chord_dso_scheduling action='book_child' patientGUID='59D26B3E-2725-460D-9FD7-BD9C03452B86' ...
+</workflow_example>
+
+<multiple_children_handling>
+For siblings, create separate patient records:
+
+Child 1: Emma Smith (DOB: 02/05/2014)
+- Call create -> Store as Child1_PatientGUID
+
+Child 2: Jake Smith (DOB: 08/15/2016)
+- Call create -> Store as Child2_PatientGUID
+
+Child 3: Lily Smith (DOB: 03/22/2019)
+- Call create -> Store as Child3_PatientGUID
+
+Include ALL GUIDs in payload:
+{
+  "Child1_PatientGUID": "guid-1",
+  "Child2_PatientGUID": "guid-2",
+  "Child3_PatientGUID": "guid-3"
+}
+</multiple_children_handling>
+
+<error_handling>
+If create fails:
+1. Verify all required fields are provided
+2. Check date format is MM/DD/YYYY
+3. Ensure phone is 10 digits
+4. Retry once with corrected data
+5. If still failing, apologize and transfer with specific error
+</error_handling>
+
+================================================================================

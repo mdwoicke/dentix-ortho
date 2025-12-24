@@ -1,0 +1,13 @@
+REQUIRED: Use this tool for ALL appointment scheduling operations. You MUST call this tool before offering appointment times or transferring for scheduling issues.
+
+CRITICAL DATE REQUIREMENT: You CANNOT schedule appointments for past dates. ALWAYS use dates AFTER the current date. Use the get_current_date tool to retrieve today's date before searching for slots. If the caller requests a date that has already passed, inform them and offer future dates instead.
+
+ACTION 'slots': MUST call BEFORE offering appointment times to caller. Provide startDate and endDate in MM/DD/YYYY format. The startDate MUST be today or a future date. Returns available appointment slots with startTime, scheduleViewGUID, scheduleColumnGUID, appointmentTypeGUID, and minutes.
+
+ACTION 'grouped_slots': MUST call for siblings or multiple patients. Provide startDate, endDate, and numberOfPatients. Returns grouped consecutive slots.
+
+ACTION 'book_child': MUST call AFTER caller confirms appointment time. REQUIRES: patientGUID, startTime, scheduleViewGUID, scheduleColumnGUID, appointmentTypeGUID, minutes. All values come from the slots response.
+
+ACTION 'cancel': Call to cancel an existing appointment. Requires appointmentGUID.
+
+CRITICAL: Never transfer to live agent with reason "Unable to retrieve appointment availability" without first calling this tool with action 'slots'.

@@ -1,0 +1,311 @@
+/**
+ * ============================================================================
+ * CHORD SCHEDULING - Cloud9 Appointment Scheduling Tool
+ * ============================================================================
+ * Consolidates: getApptSlots, getGroupedApptSlots, createChildAppt, cancelAppt
+ *
+ * Actions:
+ *   - slots: Get available appointment slots
+ *   - grouped_slots: Get slots for multiple patients booking together (siblings)
+ *   - book_child: Create/book appointment for a child patient
+ *   - cancel: Cancel an existing appointment
+ * ============================================================================
+ */
+
+const fetch = require('node-fetch');
+
+// ============================================================================
+// 📝 ACTION CONFIGURATIONS
+// ============================================================================
+
+const NODE_RED_URL = process.env.NODE_RED_URL || 'http://localhost:1880';
+
+const ACTIONS = {
+    slots: {
+        endpoint: `${NODE_RED_URL}/chord/cloud9/getApptSlots`,
+        method: 'POST',
+        buildBody: (params) => ({
+            startDate: params.startDate,
+            endDate: params.endDate,
+            scheduleViewGUIDs: params.scheduleViewGUIDs
+        }),
+        validate: (params) => {
+            if (!params.startDate) throw new Error("startDate is required for 'slots' action (format: MM/DD/YYYY)");
+            if (!params.endDate) throw new Error("endDate is required for 'slots' action (format: MM/DD/YYYY)");
+        },
+        successLog: (data) => `Found ${data.slots ? data.slots.length : 0} available slots`
+    },
+    grouped_slots: {
+        endpoint: `${NODE_RED_URL}/chord/cloud9/getGroupedApptSlots`,
+        method: 'POST',
+        buildBody: (params) => ({
+            startDate: params.startDate,
+            endDate: params.endDate,
+            scheduleViewGUIDs: params.scheduleViewGUIDs,
+            numberOfPatients: params.numberOfPatients,
+            appointmentDuration: params.timeWindowMinutes || (params.numberOfPatients >= 3 ? 45 : 30)
+        }),
+        validate: (params) => {
+            if (!params.startDate) throw new Error("startDate is required for 'grouped_slots' action (format: MM/DD/YYYY)");
+            if (!params.endDate) throw new Error("endDate is required for 'grouped_slots' action (format: MM/DD/YYYY)");
+            if (!params.numberOfPatients) throw new Error("numberOfPatients is required for 'grouped_slots' action");
+        },
+        successLog: (data) => `Found ${data.slots ? data.slots.length : 0} grouped slot options for ${data.groupingInfo?.numberOfPatients || 'multiple'} patients`
+    },
+    book_child: {
+        endpoint: `${NODE_RED_URL}/chord/cloud9/createChildAppt`,
+        method: 'POST',
+        buildBody: (params) => ({
+            patientGUID: params.patientGUID,
+            startTime: params.startTime,
+            scheduleViewGUID: params.scheduleViewGUID,
+            scheduleColumnGUID: params.scheduleColumnGUID,
+            appointmentTypeGUID: params.appointmentTypeGUID,
+            minutes: params.minutes || 30,
+            providerGUID: params.providerGUID,
+            locationGUID: params.locationGUID
+        }),
+        validate: (params) => {
+            if (!params.patientGUID) throw new Error("patientGUID is required for 'book_child' action");
+            if (!params.startTime) throw new Error("startTime is required for 'book_child' action (format: MM/DD/YYYY HH:MM AM)");
+            if (!params.scheduleViewGUID) throw new Error("scheduleViewGUID is required for 'book_child' action");
+            if (!params.scheduleColumnGUID) throw new Error("scheduleColumnGUID is required for 'book_child' action");
+            if (!params.appointmentTypeGUID) throw new Error("appointmentTypeGUID is required for 'book_child' action");
+        },
+        successLog: (data) => `Child appointment booked successfully${data.appointmentGUID ? ` (GUID: ${data.appointmentGUID})` : ''}`
+    },
+    cancel: {
+        endpoint: `${NODE_RED_URL}/chord/cloud9/cancelAppt`,
+        method: 'POST',
+        buildBody: (params) => ({
+            appointmentGUID: params.appointmentGUID,
+            cancellationReason: params.cancellationReason || 'Cancelled by IVA'
+        }),
+        validate: (params) => {
+            if (!params.appointmentGUID) {
+                throw new Error("appointmentGUID is required for 'cancel' action");
+            }
+        },
+        successLog: () => 'Appointment cancellation requested'
+    }
+};
+
+// ============================================================================
+// 🔐 AUTHENTICATION
+// ============================================================================
+
+function getAuthHeader() {
+    try {
+        const username = process.env.NODE_RED_USERNAME || "workflowapi";
+        const password = process.env.NODE_RED_PASSWORD || "";
+        if (username && password) {
+            const credentials = Buffer.from(`${username}:${password}`).toString('base64');
+            return `Basic ${credentials}`;
+        }
+    } catch (e) {
+        return null;
+    }
+    return null;
+}
+
+// ============================================================================
+// 🧹 NULL VALUE FILTER - Removes null/undefined/empty values
+// ============================================================================
+
+function cleanParams(params) {
+    const cleaned = {};
+    for (const [key, value] of Object.entries(params)) {
+        if (value !== null &&
+            value !== undefined &&
+            value !== '' &&
+            value !== 'NULL' &&
+            value !== 'null' &&
+            value !== 'None' &&
+            value !== 'none' &&
+            value !== 'N/A' &&
+            value !== 'n/a') {
+            cleaned[key] = value;
+        }
+    }
+    return cleaned;
+}
+
+// ============================================================================
+// 🔍 ERROR DETECTION HELPER
+// ============================================================================
+
+function checkForError(data) {
+    if (!data || typeof data !== 'object') return null;
+
+    // Pattern 1: { success: false, error: "..." }
+    if (data.success === false) {
+        return data.error || data.message || 'Operation failed';
+    }
+
+    // Pattern 2: { code: false, error: [...] }
+    if (data.code === false) {
+        if (Array.isArray(data.error)) {
+            return data.error.join(', ');
+        }
+        return data.error || data.message || 'API returned error';
+    }
+
+    // Pattern 3: String response containing error message
+    if (typeof data === 'string' && data.toLowerCase().includes('failed')) {
+        return data;
+    }
+
+    // Pattern 4: { error: "..." } without success/code field (but not valid response with data)
+    if (data.error && !data.data && !data.id && !data.slots && !data.groups && !data.appointments && !data.appointmentGUID) {
+        if (Array.isArray(data.error)) {
+            return data.error.join(', ');
+        }
+        return data.error;
+    }
+
+    return null;
+}
+
+// ============================================================================
+// 🚀 HTTP REQUEST ENGINE
+// ============================================================================
+
+async function executeRequest() {
+    const toolName = 'chord_scheduling';
+    const action = $action;
+    const timeout = 30000;
+
+    console.log(`[${toolName}] Action: ${action}`);
+
+    // Validate action
+    if (!action || !ACTIONS[action]) {
+        const validActions = Object.keys(ACTIONS).join(', ');
+        throw new Error(`Invalid action '${action}'. Valid actions: ${validActions}`);
+    }
+
+    const config = ACTIONS[action];
+
+    // Build params object from Flowise variables
+    const rawParams = {
+        // Slot search parameters
+        startDate: typeof $startDate !== 'undefined' ? $startDate : null,
+        endDate: typeof $endDate !== 'undefined' ? $endDate : null,
+        scheduleViewGUIDs: typeof $scheduleViewGUIDs !== 'undefined' ? $scheduleViewGUIDs : null,
+        // Grouped slots parameters
+        numberOfPatients: typeof $numberOfPatients !== 'undefined' ? $numberOfPatients : null,
+        timeWindowMinutes: typeof $timeWindowMinutes !== 'undefined' ? $timeWindowMinutes : null,
+        // Booking parameters
+        patientGUID: typeof $patientGUID !== 'undefined' ? $patientGUID : null,
+        startTime: typeof $startTime !== 'undefined' ? $startTime : null,
+        scheduleViewGUID: typeof $scheduleViewGUID !== 'undefined' ? $scheduleViewGUID : null,
+        scheduleColumnGUID: typeof $scheduleColumnGUID !== 'undefined' ? $scheduleColumnGUID : null,
+        appointmentTypeGUID: typeof $appointmentTypeGUID !== 'undefined' ? $appointmentTypeGUID : null,
+        minutes: typeof $minutes !== 'undefined' ? $minutes : null,
+        providerGUID: typeof $providerGUID !== 'undefined' ? $providerGUID : null,
+        locationGUID: typeof $locationGUID !== 'undefined' ? $locationGUID : null,
+        // Cancel parameters
+        appointmentGUID: typeof $appointmentGUID !== 'undefined' ? $appointmentGUID : null,
+        cancellationReason: typeof $cancellationReason !== 'undefined' ? $cancellationReason : null
+    };
+
+    // Filter out null/undefined/empty values
+    const params = cleanParams(rawParams);
+
+    try {
+        // Validate required params for this action
+        config.validate(params);
+
+        // Build request body and clean it
+        const rawBody = config.buildBody(params);
+        const body = cleanParams(rawBody);
+
+        console.log(`[${toolName}] Endpoint: ${config.method} ${config.endpoint}`);
+        console.log(`[${toolName}] Request Body:`, JSON.stringify(body, null, 2));
+
+        const headers = {
+            'Content-Type': 'application/json'
+        };
+
+        const authHeader = getAuthHeader();
+        if (authHeader) {
+            headers['Authorization'] = authHeader;
+        }
+
+        const options = {
+            method: config.method,
+            headers: headers,
+            body: JSON.stringify(body)
+        };
+
+        // Add timeout
+        let timeoutId;
+        if (typeof AbortController !== 'undefined') {
+            const controller = new AbortController();
+            timeoutId = setTimeout(() => controller.abort(), timeout);
+            options.signal = controller.signal;
+        }
+
+        console.log(`[${toolName}] Making request...`);
+        const response = await fetch(config.endpoint, options);
+
+        if (timeoutId) clearTimeout(timeoutId);
+
+        console.log(`[${toolName}] Response Status: ${response.status} ${response.statusText}`);
+
+        let data;
+        const contentType = response.headers.get('content-type');
+        if (contentType && contentType.includes('application/json')) {
+            data = await response.json();
+        } else {
+            data = await response.text();
+        }
+
+        // Check HTTP status
+        if (!response.ok) {
+            console.error(`[${toolName}] HTTP Error ${response.status}:`, data);
+            let errorMsg = `HTTP ${response.status}: ${response.statusText}`;
+            if (data) {
+                const bodyError = checkForError(typeof data === 'string' ? (() => { try { return JSON.parse(data); } catch(e) { return data; } })() : data);
+                if (bodyError) errorMsg = bodyError;
+            }
+            throw new Error(errorMsg);
+        }
+
+        // Parse response if string
+        let responseData = data;
+        if (typeof data === 'string') {
+            try { responseData = JSON.parse(data); } catch (e) { responseData = data; }
+        }
+
+        // Check for error patterns in successful HTTP response
+        const errorMessage = checkForError(responseData);
+        if (errorMessage) {
+            console.error(`[${toolName}] API Error:`, responseData);
+            throw new Error(errorMessage);
+        }
+
+        // Dynamic success logging
+        const successMsg = typeof config.successLog === 'function' ? config.successLog(responseData) : config.successLog;
+        console.log(`[${toolName}] ${successMsg}`);
+
+        return JSON.stringify(responseData);
+
+    } catch (error) {
+        console.error(`[${toolName}] Error:`, error.message);
+
+        if (error.name === 'AbortError') {
+            error.message = `Request timeout after ${timeout}ms`;
+        }
+
+        const errorResponse = {
+            error: `Failed to execute ${action}`,
+            message: error.message,
+            action: action,
+            timestamp: new Date().toISOString()
+        };
+
+        return JSON.stringify(errorResponse);
+    }
+}
+
+return executeRequest();

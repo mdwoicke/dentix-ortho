@@ -1,0 +1,3 @@
+ultrathink a way to test more dyamically so that the test scripts are not hard coded and
+  anticipating which reaction since the agent gives dynamic answers and reactions. a way for the
+  conversation to be agentic in nature and able to respond dynamical
