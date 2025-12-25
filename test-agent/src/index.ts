@@ -17,7 +17,8 @@ import { GoalTestRunner } from './tests/goal-test-runner';
 import { IntentDetector } from './services/intent-detector';
 import { goalHappyPathScenarios } from './tests/scenarios/goal-happy-path';
 import type { GoalOrientedTestCase } from './tests/types/goal-test';
-import type { TestResult, TestSuiteResult } from './storage/database';
+import type { TestResult } from './storage/database';
+import type { TestSuiteResult } from './core/agent';
 import * as fs from 'fs';
 
 /**
@@ -34,8 +35,15 @@ async function runGoalTests(
   // Get all available goal scenarios
   const allGoalScenarios: GoalOrientedTestCase[] = [...goalHappyPathScenarios];
 
-  // Filter to requested scenarios
-  const scenariosToRun = allGoalScenarios.filter(s => scenarioIds.includes(s.id));
+  // Map scenario IDs to actual scenarios (preserving duplicates for run count feature)
+  // This allows the same scenario to run multiple times when requested
+  const scenariosToRun: GoalOrientedTestCase[] = [];
+  for (const id of scenarioIds) {
+    const scenario = allGoalScenarios.find(s => s.id === id);
+    if (scenario) {
+      scenariosToRun.push(scenario);
+    }
+  }
 
   if (scenariosToRun.length === 0) {
     console.log('No matching goal scenarios found.');
@@ -58,9 +66,19 @@ async function runGoalTests(
   const startTime = Date.now();
   const results: TestResult[] = [];
 
+  // Track run counts per scenario for proper indexing when same test runs multiple times
+  const runCountPerScenario = new Map<string, number>();
+
   // Run tests (sequential for now, can add parallel later)
   for (const scenario of scenariosToRun) {
-    console.log(`[GoalTest] Starting: ${scenario.id} - ${scenario.name}`);
+    // Increment run count for this scenario
+    const currentCount = (runCountPerScenario.get(scenario.id) || 0) + 1;
+    runCountPerScenario.set(scenario.id, currentCount);
+
+    // Generate unique test ID with run index (e.g., GOAL-HAPPY-001#2 for second run)
+    const testIdWithRun = currentCount > 1 ? `${scenario.id}#${currentCount}` : scenario.id;
+
+    console.log(`[GoalTest] Starting: ${testIdWithRun} - ${scenario.name}`);
 
     // Create per-test runner with fresh session
     const flowiseClient = new FlowiseClient();
@@ -72,8 +90,8 @@ async function runGoalTests(
 
       const testResult: TestResult = {
         runId,
-        testId: scenario.id,
-        testName: scenario.name,
+        testId: testIdWithRun,
+        testName: currentCount > 1 ? `${scenario.name} (Run ${currentCount})` : scenario.name,
         category: scenario.category,
         status: result.passed ? 'passed' : 'failed',
         startedAt: new Date(Date.now() - result.durationMs).toISOString(),
@@ -92,12 +110,12 @@ async function runGoalTests(
 
       results.push(testResult);
       const status = result.passed ? '✓ PASSED' : '✗ FAILED';
-      console.log(`[GoalTest] ${status}: ${scenario.id} (${result.durationMs}ms, ${result.turnCount} turns)`);
+      console.log(`[GoalTest] ${status}: ${testIdWithRun} (${result.durationMs}ms, ${result.turnCount} turns)`);
     } catch (error: any) {
       const errorResult: TestResult = {
         runId,
-        testId: scenario.id,
-        testName: scenario.name,
+        testId: testIdWithRun,
+        testName: currentCount > 1 ? `${scenario.name} (Run ${currentCount})` : scenario.name,
         category: scenario.category,
         status: 'error',
         startedAt: new Date().toISOString(),
@@ -109,7 +127,7 @@ async function runGoalTests(
       };
       results.push(errorResult);
       db.saveTestResult(errorResult);
-      console.log(`[GoalTest] ✗ ERROR: ${scenario.id} - ${error.message}`);
+      console.log(`[GoalTest] ✗ ERROR: ${testIdWithRun} - ${error.message}`);
     }
   }
 
