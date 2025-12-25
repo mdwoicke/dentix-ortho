@@ -4,6 +4,7 @@
  * Command-line interface for running tests and viewing results
  */
 
+import 'dotenv/config';
 import { Command } from 'commander';
 import { TestAgent } from './core/agent';
 import { ConsoleReporter } from './reporters/console-reporter';

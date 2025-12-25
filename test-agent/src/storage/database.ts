@@ -183,7 +183,7 @@ export class Database {
         run_id TEXT,
         test_id TEXT,
         type TEXT CHECK(type IN ('bug', 'enhancement', 'prompt-issue', 'tool-issue', 'regression')),
-        severity TEXT CHECK(severity IN ('critical', 'high', 'medium', 'low')),
+        severity TEXT,
         title TEXT NOT NULL,
         description TEXT,
         affected_step TEXT,
