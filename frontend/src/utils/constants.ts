@@ -18,6 +18,8 @@ export const ROUTES = {
   SETTINGS: '/settings',
   TEST_MONITOR: '/test-monitor',
   TEST_MONITOR_DASHBOARD: '/test-monitor',
+  TEST_MONITOR_CASES: '/test-monitor/cases',
+  TEST_MONITOR_GOAL_CASES: '/test-monitor/goal-cases',
   TEST_MONITOR_HISTORY: '/test-monitor/history',
   TEST_MONITOR_TUNING: '/test-monitor/tuning',
   TEST_MONITOR_RUN_DETAIL: '/test-monitor/run/:runId',

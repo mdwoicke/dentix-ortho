@@ -9,6 +9,8 @@ import { ROUTES } from '../../utils/constants';
 
 const tabs = [
   { name: 'Dashboard', path: ROUTES.TEST_MONITOR_DASHBOARD, exact: true },
+  { name: 'Test Cases', path: ROUTES.TEST_MONITOR_CASES },
+  { name: 'Goal Tests', path: ROUTES.TEST_MONITOR_GOAL_CASES },
   { name: 'History', path: ROUTES.TEST_MONITOR_HISTORY },
   { name: 'Tuning', path: ROUTES.TEST_MONITOR_TUNING },
 ];
@@ -63,3 +65,5 @@ export { TestMonitorDashboard } from './TestMonitorDashboard';
 export { TestRunDetail } from './TestRunDetail';
 export { TestRunHistory } from './TestRunHistory';
 export { AgentTuning } from './AgentTuning';
+export { TestCasesPage } from './TestCasesPage';
+export { GoalTestCasesPage } from './GoalTestCasesPage';

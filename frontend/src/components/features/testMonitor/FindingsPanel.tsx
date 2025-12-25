@@ -107,9 +107,9 @@ export function FindingsPanel({ findings, loading }: FindingsPanelProps) {
                 {finding.agentQuestion && (
                   <div className="mb-2">
                     <h4 className="text-xs font-medium uppercase opacity-70 mb-1">
-                      Agent Question
+                      User Input
                     </h4>
-                    <p className="text-sm bg-white/30 dark:bg-black/20 p-2 rounded italic">
+                    <p className="text-sm bg-blue-50/50 dark:bg-blue-900/20 p-2 rounded border-l-2 border-blue-400">
                       "{finding.agentQuestion}"
                     </p>
                   </div>
@@ -127,9 +127,11 @@ export function FindingsPanel({ findings, loading }: FindingsPanelProps) {
                 {finding.actualBehavior && (
                   <div className="mb-2">
                     <h4 className="text-xs font-medium uppercase opacity-70 mb-1">
-                      Actual
+                      Agent Response
                     </h4>
-                    <p className="text-sm">{finding.actualBehavior}</p>
+                    <p className="text-sm bg-green-50/50 dark:bg-green-900/20 p-2 rounded border-l-2 border-green-400">
+                      {finding.actualBehavior}
+                    </p>
                   </div>
                 )}
 

@@ -68,18 +68,59 @@ function extractGuidFromResult(result, pattern) {
     return match ? match[1] : null;
 }
 
-async function callCloud9(procedure, apiParams) {
+// Retry configuration
+const RETRY_CONFIG = {
+    maxRetries: 3,
+    initialDelayMs: 1000,
+    maxDelayMs: 10000,
+    backoffMultiplier: 2,
+    retryableErrors: ['ETIMEDOUT', 'ECONNRESET', 'ENOTFOUND', 'ESOCKETTIMEDOUT', 'timeout', 'network']
+};
+
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function isRetryableError(error) {
+    const errorMsg = (error.message || '').toLowerCase();
+    const errorCode = error.code || '';
+    return RETRY_CONFIG.retryableErrors.some(e =>
+        errorMsg.includes(e.toLowerCase()) || errorCode.includes(e)
+    );
+}
+
+async function callCloud9WithRetry(procedure, apiParams, attempt = 1) {
     const xmlRequest = buildXmlRequest(procedure, apiParams);
-    console.log(`[chord_patient] Calling Cloud9: ${procedure}`);
-    const response = await fetch(CLOUD9.endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/xml' },
-        body: xmlRequest,
-        timeout: 30000
-    });
-    const xmlText = await response.text();
-    if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    return parseXmlResponse(xmlText);
+    console.log(`[chord_patient] Calling Cloud9: ${procedure} (attempt ${attempt}/${RETRY_CONFIG.maxRetries})`);
+
+    try {
+        const response = await fetch(CLOUD9.endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/xml' },
+            body: xmlRequest,
+            timeout: 45000  // Increased timeout to 45 seconds
+        });
+        const xmlText = await response.text();
+        if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        return parseXmlResponse(xmlText);
+    } catch (error) {
+        // Check if we should retry
+        if (attempt < RETRY_CONFIG.maxRetries && isRetryableError(error)) {
+            const delay = Math.min(
+                RETRY_CONFIG.initialDelayMs * Math.pow(RETRY_CONFIG.backoffMultiplier, attempt - 1),
+                RETRY_CONFIG.maxDelayMs
+            );
+            console.log(`[chord_patient] Retryable error: ${error.message}. Retrying in ${delay}ms...`);
+            await sleep(delay);
+            return callCloud9WithRetry(procedure, apiParams, attempt + 1);
+        }
+        // Not retryable or max retries reached
+        throw error;
+    }
+}
+
+async function callCloud9(procedure, apiParams) {
+    return callCloud9WithRetry(procedure, apiParams, 1);
 }
 
 async function executeRequest() {

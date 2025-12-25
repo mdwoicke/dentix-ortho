@@ -224,14 +224,23 @@ export function TestRunDetail() {
     }
   };
 
+  // Handle saving edited prompt content
+  const handleSavePromptContent = async (fileKey: string, content: string, changeDescription: string): Promise<{ newVersion: number } | null> => {
+    const result = await testMonitorApi.savePromptVersion(fileKey, content, changeDescription);
+    // Refresh prompt files and history to reflect new version
+    dispatch(fetchPromptFiles());
+    dispatch(fetchPromptHistory(fileKey));
+    return { newVersion: result.newVersion };
+  };
+
   // Handle selecting a test
   const handleSelectTest = (test: TestResult) => {
     dispatch(setSelectedTest(test));
-    // Only fetch transcript/api calls if not streaming (streaming will send updates)
-    if (!isStreaming) {
-      dispatch(fetchTranscript({ testId: test.testId, runId: test.runId }));
-      dispatch(fetchApiCalls({ testId: test.testId, runId: test.runId }));
-    }
+    // Always fetch transcript/api calls when a test is selected
+    // Even during streaming, we need to fetch the data for the selected test
+    // since the SSE connection may not have the testId for the newly selected test
+    dispatch(fetchTranscript({ testId: test.testId, runId: test.runId }));
+    dispatch(fetchApiCalls({ testId: test.testId, runId: test.runId }));
   };
 
   // Handle refresh
@@ -405,6 +414,7 @@ export function TestRunDetail() {
               loading={promptLoading}
               onSelectFile={handleSelectPromptFile}
               onCopyContent={handleCopyPromptVersion}
+              onSaveContent={handleSavePromptContent}
             />
           </ExpandablePanel>
         </div>

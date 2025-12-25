@@ -85,6 +85,23 @@ const initialState: TestExecutionState = {
 import * as testMonitorApi from '../../services/api/testMonitorApi';
 
 /**
+ * Check for and restore active execution on page load
+ */
+export const checkActiveExecution = createAsyncThunk(
+  'testExecution/checkActive',
+  async (_, { rejectWithValue }) => {
+    try {
+      const result = await testMonitorApi.getActiveExecution();
+      return result;
+    } catch (error) {
+      logError(error, 'checkActiveExecution');
+      const formattedError = handleError(error, 'Failed to check active execution');
+      return rejectWithValue(formattedError.message);
+    }
+  }
+);
+
+/**
  * Fetch available test scenarios
  */
 export const fetchScenarios = createAsyncThunk(
@@ -342,6 +359,27 @@ export const testExecutionSlice = createSlice({
       })
       .addCase(resumeExecution.rejected, (state, action) => {
         state.error = action.payload as string;
+      });
+
+    // Check Active Execution (restore state on page load)
+    builder
+      .addCase(checkActiveExecution.fulfilled, (state, action) => {
+        if (action.payload.active && action.payload.runId) {
+          state.isExecuting = true;
+          state.isPaused = action.payload.status === 'paused';
+          state.currentRunId = action.payload.runId;
+          if (action.payload.progress) {
+            state.progress = action.payload.progress;
+          }
+          if (action.payload.workers) {
+            state.workers = action.payload.workers.map(w => ({
+              workerId: w.workerId,
+              status: w.status as 'idle' | 'running' | 'completed' | 'error',
+              currentTestId: w.currentTestId,
+              currentTestName: w.currentTestName,
+            }));
+          }
+        }
       });
   },
 });

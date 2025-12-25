@@ -16,6 +16,9 @@ interface FixesPanelProps {
   onUpdateStatus?: (fixId: string, status: 'applied' | 'rejected') => void;
   onApplyFix?: (fixId: string, fileKey: string) => Promise<void>;
   onCopyFullPrompt?: (fileKey: string) => Promise<string | null>;
+  onRunDiagnosis?: () => Promise<void>;
+  diagnosisRunning?: boolean;
+  hasFailedTests?: boolean;
 }
 
 const priorityColors: Record<string, string> = {
@@ -44,6 +47,9 @@ export function FixesPanel({
   onUpdateStatus,
   onApplyFix,
   onCopyFullPrompt,
+  onRunDiagnosis,
+  diagnosisRunning,
+  hasFailedTests,
 }: FixesPanelProps) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -111,10 +117,52 @@ export function FixesPanel({
   };
 
   const openApplyModal = (fixId: string, fix: GeneratedFix) => {
-    // Pre-select the file based on fix type
-    const defaultFile = fix.type === 'prompt' ? 'system_prompt' :
-      fix.targetFile?.includes('scheduling') ? 'scheduling_tool' :
-      fix.targetFile?.includes('patient') ? 'patient_tool' : 'system_prompt';
+    // Smart file selection based on targetFile and fix type
+    const targetLower = fix.targetFile?.toLowerCase() || '';
+
+    // Find best matching file from available promptFiles
+    let defaultFile = '';
+
+    // 1. Try to match targetFile against promptFile fileKeys or displayNames
+    if (promptFiles.length > 0) {
+      // Check for scheduling-related files (schedule, scheduling, appointment)
+      if (targetLower.includes('schedule') || targetLower.includes('appointment')) {
+        const schedulingFile = promptFiles.find(f =>
+          f.fileKey.includes('scheduling') ||
+          f.fileKey.includes('schedule') ||
+          f.displayName.toLowerCase().includes('scheduling')
+        );
+        if (schedulingFile) defaultFile = schedulingFile.fileKey;
+      }
+      // Check for patient-related files
+      else if (targetLower.includes('patient')) {
+        const patientFile = promptFiles.find(f =>
+          f.fileKey.includes('patient') ||
+          f.displayName.toLowerCase().includes('patient')
+        );
+        if (patientFile) defaultFile = patientFile.fileKey;
+      }
+    }
+
+    // 2. If no match found, use fix type as fallback
+    if (!defaultFile) {
+      if (fix.type === 'tool') {
+        // For tool fixes, try to find a tool file, not the system prompt
+        const toolFile = promptFiles.find(f =>
+          f.fileKey.includes('tool') ||
+          f.displayName.toLowerCase().includes('tool')
+        );
+        defaultFile = toolFile?.fileKey || 'system_prompt';
+      } else {
+        defaultFile = 'system_prompt';
+      }
+    }
+
+    // 3. Final fallback: use first available file
+    if (!defaultFile && promptFiles.length > 0) {
+      defaultFile = promptFiles[0].fileKey;
+    }
+
     setSelectedFileKey(defaultFile);
     setApplyModalOpen(fixId);
   };
@@ -129,8 +177,32 @@ export function FixesPanel({
 
   if (fixes.length === 0) {
     return (
-      <div className="text-center py-8 text-gray-500 dark:text-gray-400">
-        No fixes generated. Run diagnosis to analyze test failures.
+      <div className="text-center py-8">
+        <p className="text-gray-500 dark:text-gray-400 mb-4">
+          No fixes generated.
+          {hasFailedTests && ' Run diagnosis to analyze test failures.'}
+          {!hasFailedTests && ' All tests passed - no failures to analyze.'}
+        </p>
+        {onRunDiagnosis && hasFailedTests && (
+          <button
+            onClick={onRunDiagnosis}
+            disabled={diagnosisRunning}
+            className={cn(
+              'px-4 py-2 rounded-lg font-medium transition-colors',
+              diagnosisRunning
+                ? 'bg-gray-300 text-gray-500 dark:bg-gray-700 dark:text-gray-400 cursor-not-allowed'
+                : 'bg-blue-600 hover:bg-blue-700 text-white'
+            )}
+          >
+            {diagnosisRunning ? (
+              <span className="flex items-center gap-2">
+                <Spinner size="sm" /> Running Diagnosis...
+              </span>
+            ) : (
+              '🔍 Run Diagnosis'
+            )}
+          </button>
+        )}
       </div>
     );
   }

@@ -3,17 +3,22 @@
  * Main execution control page with test configuration and real-time status
  */
 
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppDispatch, useAppSelector } from '../../hooks';
 import { PageHeader } from '../../components/layout';
 import { Button, Card } from '../../components/ui';
 import {
   fetchScenarios,
+  checkActiveExecution,
   startExecution,
   stopExecution,
   toggleCategory,
   updateConfig,
+  updateProgress,
+  updateWorkers,
+  updateWorkerStatus,
+  resetExecution,
   selectSelectedCategories,
   selectExecutionConfig,
   selectScenariosByCategory,
@@ -30,6 +35,8 @@ import {
   fetchTestRuns,
   selectTestRuns,
 } from '../../store/slices/testMonitorSlice';
+import { subscribeToExecution } from '../../services/api/testMonitorApi';
+import type { ExecutionStreamEvent } from '../../services/api/testMonitorApi';
 
 const CATEGORY_LABELS: Record<string, { name: string; description: string }> = {
   'happy-path': { name: 'Happy Path', description: 'Standard user flows' },
@@ -55,20 +62,81 @@ export function TestMonitorDashboard() {
   const progressPercentage = useAppSelector(selectProgressPercentage);
   const recentRuns = useAppSelector(selectTestRuns);
 
-  // Fetch scenarios on mount
+  // Reference to the SSE EventSource
+  const eventSourceRef = useRef<EventSource | null>(null);
+
+  // Handle SSE events
+  const handleExecutionEvent = useCallback((event: ExecutionStreamEvent) => {
+    console.log('[SSE Event]', event.type, event.data);
+
+    switch (event.type) {
+      case 'progress-update':
+        dispatch(updateProgress(event.data));
+        break;
+      case 'workers-update':
+        dispatch(updateWorkers(event.data));
+        break;
+      case 'worker-status':
+        dispatch(updateWorkerStatus(event.data));
+        break;
+      case 'execution-completed':
+      case 'execution-stopped':
+      case 'complete':
+        dispatch(resetExecution());
+        // Refresh test runs to show the completed run
+        dispatch(fetchTestRuns({}));
+        break;
+      case 'error':
+      case 'execution-error':
+        console.error('[SSE Error]', event.data);
+        break;
+    }
+  }, [dispatch]);
+
+  // Fetch scenarios and check for active execution on mount
   useEffect(() => {
     dispatch(fetchScenarios());
     dispatch(fetchTestRuns({}));
+    // Check if there's an active execution to restore
+    dispatch(checkActiveExecution());
   }, [dispatch]);
+
+  // Subscribe to SSE when execution starts
+  useEffect(() => {
+    if (isExecuting && currentRunId && !eventSourceRef.current) {
+      console.log('[SSE] Subscribing to execution stream:', currentRunId);
+      eventSourceRef.current = subscribeToExecution(
+        currentRunId,
+        handleExecutionEvent,
+        (error) => {
+          console.error('[SSE] Connection error:', error);
+        }
+      );
+    }
+
+    // Cleanup on unmount or when execution stops
+    return () => {
+      if (eventSourceRef.current) {
+        console.log('[SSE] Closing connection');
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
+    };
+  }, [isExecuting, currentRunId, handleExecutionEvent]);
 
   // Handle starting test execution
   const handleStartExecution = async () => {
     try {
-      await dispatch(startExecution({
+      const result = await dispatch(startExecution({
         categories: selectedCategories,
         scenarios: [],
         config,
       })).unwrap();
+
+      // Subscribe to execution stream
+      if (result.runId) {
+        console.log('[SSE] Will subscribe after state update, runId:', result.runId);
+      }
     } catch (err) {
       console.error('Failed to start execution:', err);
     }
@@ -308,17 +376,43 @@ export function TestMonitorDashboard() {
                         {workers.map((worker) => (
                           <div
                             key={worker.workerId}
-                            className="flex items-center gap-3 p-2 bg-gray-50 dark:bg-gray-800 rounded"
+                            className={`flex items-center gap-3 p-2 rounded transition-all ${
+                              worker.status === 'running'
+                                ? 'bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800'
+                                : 'bg-gray-50 dark:bg-gray-800'
+                            }`}
                           >
-                            <span className={`w-2 h-2 rounded-full ${
-                              worker.status === 'running' ? 'bg-green-500 animate-pulse' :
-                              worker.status === 'error' ? 'bg-red-500' :
-                              'bg-gray-400'
-                            }`} />
-                            <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                            {/* Status Icon */}
+                            {worker.status === 'running' ? (
+                              <svg className="w-5 h-5 text-green-500 animate-spin" fill="none" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                              </svg>
+                            ) : worker.status === 'completed' ? (
+                              <svg className="w-5 h-5 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                              </svg>
+                            ) : worker.status === 'error' ? (
+                              <svg className="w-5 h-5 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                              </svg>
+                            ) : (
+                              <svg className="w-5 h-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                              </svg>
+                            )}
+                            <span className={`text-sm font-medium ${
+                              worker.status === 'running'
+                                ? 'text-green-700 dark:text-green-300'
+                                : 'text-gray-700 dark:text-gray-300'
+                            }`}>
                               Worker {worker.workerId}
                             </span>
-                            <span className="text-sm text-gray-500 dark:text-gray-400 truncate flex-1">
+                            <span className={`text-sm truncate flex-1 ${
+                              worker.status === 'running'
+                                ? 'text-green-600 dark:text-green-400 font-medium'
+                                : 'text-gray-500 dark:text-gray-400'
+                            }`}>
                               {worker.currentTestName || 'Idle'}
                             </span>
                           </div>

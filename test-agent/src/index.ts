@@ -12,7 +12,127 @@ import { MarkdownReporter } from './reporters/markdown-reporter';
 import { Database } from './storage/database';
 import { getScenarioSummary, getScenarioById } from './tests/scenarios';
 import { AgentFailureAnalyzer } from './analysis/agent-failure-analyzer';
+import { FlowiseClient } from './core/flowise-client';
+import { GoalTestRunner } from './tests/goal-test-runner';
+import { IntentDetector } from './services/intent-detector';
+import { goalHappyPathScenarios } from './tests/scenarios/goal-happy-path';
+import type { GoalOrientedTestCase } from './tests/types/goal-test';
+import type { TestResult, TestSuiteResult } from './storage/database';
 import * as fs from 'fs';
+
+/**
+ * Run goal-oriented tests
+ */
+async function runGoalTests(
+  scenarioIds: string[],
+  concurrency: number,
+  db: Database
+): Promise<TestSuiteResult> {
+  console.log('\n=== Goal-Oriented Test Runner ===\n');
+  console.log(`Running ${scenarioIds.length} goal test(s) with concurrency ${concurrency}\n`);
+
+  // Get all available goal scenarios
+  const allGoalScenarios: GoalOrientedTestCase[] = [...goalHappyPathScenarios];
+
+  // Filter to requested scenarios
+  const scenariosToRun = allGoalScenarios.filter(s => scenarioIds.includes(s.id));
+
+  if (scenariosToRun.length === 0) {
+    console.log('No matching goal scenarios found.');
+    console.log(`Available: ${allGoalScenarios.map(s => s.id).join(', ')}`);
+    return {
+      runId: '',
+      totalTests: 0,
+      passed: 0,
+      failed: 0,
+      skipped: 0,
+      duration: 0,
+      results: [],
+    };
+  }
+
+  console.log(`Found ${scenariosToRun.length} goal test(s) to run\n`);
+
+  // Create run record
+  const runId = db.createTestRun();
+  const startTime = Date.now();
+  const results: TestResult[] = [];
+
+  // Run tests (sequential for now, can add parallel later)
+  for (const scenario of scenariosToRun) {
+    console.log(`[GoalTest] Starting: ${scenario.id} - ${scenario.name}`);
+
+    // Create per-test runner with fresh session
+    const flowiseClient = new FlowiseClient();
+    const intentDetector = new IntentDetector();
+    const runner = new GoalTestRunner(flowiseClient, db, intentDetector);
+
+    try {
+      const result = await runner.runTest(scenario, runId);
+
+      const testResult: TestResult = {
+        runId,
+        testId: scenario.id,
+        testName: scenario.name,
+        category: scenario.category,
+        status: result.passed ? 'passed' : 'failed',
+        startedAt: new Date(Date.now() - result.durationMs).toISOString(),
+        completedAt: new Date().toISOString(),
+        durationMs: result.durationMs,
+        errorMessage: result.passed ? undefined : result.issues.map(i => i.description).join('; '),
+        transcript: result.transcript,
+        findings: result.issues.map(issue => ({
+          type: issue.type === 'error' ? 'bug' as const : 'prompt-issue' as const,
+          severity: issue.severity,
+          title: `Issue: ${issue.type}`,
+          description: issue.description,
+          affectedStep: `turn-${issue.turnNumber}`,
+        })),
+      };
+
+      results.push(testResult);
+      const status = result.passed ? '✓ PASSED' : '✗ FAILED';
+      console.log(`[GoalTest] ${status}: ${scenario.id} (${result.durationMs}ms, ${result.turnCount} turns)`);
+    } catch (error: any) {
+      const errorResult: TestResult = {
+        runId,
+        testId: scenario.id,
+        testName: scenario.name,
+        category: scenario.category,
+        status: 'error',
+        startedAt: new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+        durationMs: 0,
+        errorMessage: error.message,
+        transcript: [],
+        findings: [],
+      };
+      results.push(errorResult);
+      db.saveTestResult(errorResult);
+      console.log(`[GoalTest] ✗ ERROR: ${scenario.id} - ${error.message}`);
+    }
+  }
+
+  const duration = Date.now() - startTime;
+  const summary: TestSuiteResult = {
+    runId,
+    totalTests: results.length,
+    passed: results.filter(r => r.status === 'passed').length,
+    failed: results.filter(r => r.status === 'failed' || r.status === 'error').length,
+    skipped: results.filter(r => r.status === 'skipped').length,
+    duration,
+    results,
+  };
+
+  // Update run record
+  db.completeTestRun(runId, summary);
+
+  console.log('\n=== Goal Test Results ===');
+  console.log(`Passed: ${summary.passed}, Failed: ${summary.failed}, Total: ${summary.totalTests}`);
+  console.log(`Duration: ${(duration / 1000).toFixed(1)}s\n`);
+
+  return summary;
+}
 
 const program = new Command();
 const reporter = new ConsoleReporter();
@@ -29,6 +149,7 @@ program
   .description('Run test scenarios')
   .option('-c, --category <category>', 'Run tests in specific category (happy-path, edge-case, error-handling)')
   .option('-s, --scenario <id>', 'Run specific scenario by ID')
+  .option('--scenarios <ids>', 'Run multiple scenarios by comma-separated IDs (e.g., HAPPY-001,HAPPY-002)')
   .option('-f, --failed', 'Re-run only previously failed tests')
   .option('-w, --watch', 'Watch mode - show real-time output')
   .option('-n, --concurrency <number>', 'Number of parallel workers (1-10, default: 1)', '1')
@@ -46,16 +167,65 @@ program
       console.log(`  - Error Handling: ${summary.byCategory['error-handling']}`);
       console.log('');
 
+      // Parse scenarios option (comma-separated)
+      const scenarioIds: string[] | undefined = options.scenarios
+        ? options.scenarios.split(',').map((s: string) => s.trim())
+        : undefined;
+      if (scenarioIds) {
+        console.log(`Filtering to scenarios: ${scenarioIds.join(', ')}`);
+      }
+
       // Parse concurrency option
       const concurrency = parseInt(options.concurrency, 10) || 1;
 
-      const result = await agent.run({
-        category: options.category,
-        scenario: options.scenario,
-        failedOnly: options.failed,
-        watch: options.watch,
-        concurrency,
-      });
+      // Check if any scenario IDs are goal-oriented tests (start with "GOAL-")
+      const hasGoalTests = scenarioIds?.some(id => id.startsWith('GOAL-')) || false;
+      const goalScenarioIds = scenarioIds?.filter(id => id.startsWith('GOAL-')) || [];
+      const regularScenarioIds = scenarioIds?.filter(id => !id.startsWith('GOAL-'));
+
+      let result;
+
+      if (hasGoalTests && goalScenarioIds.length > 0) {
+        // Run goal-oriented tests using GoalTestRunner
+        console.log('\nDetected goal-oriented test IDs, using GoalTestRunner...\n');
+        const db = new Database();
+        db.initialize();
+        result = await runGoalTests(goalScenarioIds, concurrency, db);
+
+        // If there are also regular tests, run those too
+        if (regularScenarioIds && regularScenarioIds.length > 0) {
+          console.log('\nAlso running regular tests...\n');
+          const regularResult = await agent.run({
+            category: options.category,
+            scenario: options.scenario,
+            scenarioIds: regularScenarioIds,
+            failedOnly: options.failed,
+            watch: options.watch,
+            concurrency,
+          });
+
+          // Combine results
+          result = {
+            runId: result.runId,
+            totalTests: result.totalTests + regularResult.totalTests,
+            passed: result.passed + regularResult.passed,
+            failed: result.failed + regularResult.failed,
+            skipped: result.skipped + regularResult.skipped,
+            duration: result.duration + regularResult.duration,
+            results: [...result.results, ...regularResult.results],
+          };
+        }
+      } else {
+        // Run regular tests using TestAgent
+        result = await agent.run({
+          category: options.category,
+          scenario: options.scenario,
+          scenarioIds, // New: support multiple scenario IDs
+          failedOnly: options.failed,
+          watch: options.watch,
+          concurrency,
+        });
+      }
 
       // Save recommendations if there were failures
       if (result.failed > 0) {

@@ -11,6 +11,8 @@ import patientReducer from './slices/patientSlice';
 import appointmentReducer from './slices/appointmentSlice';
 import testMonitorReducer from './slices/testMonitorSlice';
 import testExecutionReducer from './slices/testExecutionSlice';
+import testCasesReducer from './slices/testCasesSlice';
+import goalTestCasesReducer from './slices/goalTestCasesSlice';
 
 /**
  * Configure and create the Redux store
@@ -24,6 +26,8 @@ export const store = configureStore({
     appointments: appointmentReducer,
     testMonitor: testMonitorReducer,
     testExecution: testExecutionReducer,
+    testCases: testCasesReducer,
+    goalTestCases: goalTestCasesReducer,
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({

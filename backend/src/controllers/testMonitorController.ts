@@ -8,6 +8,8 @@ import BetterSqlite3 from 'better-sqlite3';
 import path from 'path';
 import { spawn } from 'child_process';
 import * as promptService from '../services/promptService';
+import * as testCaseService from '../services/testCaseService';
+import * as goalTestService from '../services/goalTestService';
 
 // Path to test-agent database
 const TEST_AGENT_DB_PATH = path.resolve(__dirname, '../../../test-agent/data/test-results.db');
@@ -813,6 +815,45 @@ export async function getPromptVersionContent(req: Request, res: Response, next:
 }
 
 /**
+ * POST /api/test-monitor/prompts/:fileKey/save
+ * Save new content as a new version (manual edit)
+ */
+export async function savePromptVersion(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { fileKey } = req.params;
+    const { content, changeDescription } = req.body;
+
+    if (!content) {
+      res.status(400).json({ success: false, error: 'content is required' });
+      return;
+    }
+
+    if (!changeDescription) {
+      res.status(400).json({ success: false, error: 'changeDescription is required' });
+      return;
+    }
+
+    const result = promptService.saveNewVersion(fileKey, content, changeDescription);
+
+    res.json({
+      success: true,
+      data: {
+        newVersion: result.newVersion,
+        message: `New version saved successfully. Version: v${result.newVersion}`,
+        warnings: result.warnings,
+      },
+    });
+  } catch (error: any) {
+    // Return validation errors as 400 Bad Request
+    if (error.message?.includes('validation failed') || error.message?.includes('Unclosed') || error.message?.includes('syntax error')) {
+      res.status(400).json({ success: false, error: error.message });
+      return;
+    }
+    next(error);
+  }
+}
+
+/**
  * POST /api/test-monitor/prompts/:fileKey/sync
  * Sync working copy to disk (write to actual file)
  */
@@ -836,8 +877,51 @@ export async function syncPromptToDisk(req: Request, res: Response, next: NextFu
 // TEST EXECUTION ENDPOINTS
 // ============================================================================
 
+// Execution status tracking
+interface WorkerStatus {
+  workerId: number;
+  status: 'idle' | 'running' | 'completed' | 'error';
+  currentTestId: string | null;
+  currentTestName: string | null;
+}
+
+interface ExecutionProgress {
+  total: number;
+  completed: number;
+  passed: number;
+  failed: number;
+  skipped: number;
+}
+
+interface ExecutionState {
+  process: any;
+  status: 'running' | 'paused' | 'stopped' | 'completed';
+  progress: ExecutionProgress;
+  workers: Map<number, WorkerStatus>;
+  connections: Set<Response>; // SSE connections for this execution
+  concurrency: number;
+}
+
 // Track active test executions
-const activeExecutions: Map<string, { process: any; status: 'running' | 'paused' | 'stopped' }> = new Map();
+const activeExecutions: Map<string, ExecutionState> = new Map();
+
+/**
+ * Send SSE event to all connections for an execution
+ */
+function emitExecutionEvent(runId: string, eventType: string, data: any): void {
+  const execution = activeExecutions.get(runId);
+  if (!execution) return;
+
+  const eventData = `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`;
+
+  execution.connections.forEach((res) => {
+    try {
+      res.write(eventData);
+    } catch (err) {
+      // Connection closed, will be cleaned up
+    }
+  });
+}
 
 /**
  * GET /api/test-monitor/scenarios
@@ -969,6 +1053,132 @@ export async function getScenarios(_req: Request, res: Response, _next: NextFunc
 }
 
 /**
+ * Parse test-agent stdout for progress updates
+ */
+function parseTestAgentOutput(runId: string, line: string): void {
+  const execution = activeExecutions.get(runId);
+  if (!execution) return;
+
+  // Pattern: [Worker X] Starting: TEST-ID - Test Name
+  const startMatch = line.match(/\[Worker (\d+)\] Starting: (\S+) - (.+)/);
+  if (startMatch) {
+    const workerId = parseInt(startMatch[1], 10);
+    const testId = startMatch[2];
+    const testName = startMatch[3];
+
+    execution.workers.set(workerId, {
+      workerId,
+      status: 'running',
+      currentTestId: testId,
+      currentTestName: testName,
+    });
+
+    emitExecutionEvent(runId, 'worker-status', {
+      workerId,
+      status: 'running',
+      currentTestId: testId,
+      currentTestName: testName,
+    });
+    return;
+  }
+
+  // Pattern: [Worker X] ✓ Completed: TEST-ID (XXXms)
+  const passMatch = line.match(/\[Worker (\d+)\] [✓✔] Completed: (\S+)/);
+  if (passMatch) {
+    const workerId = parseInt(passMatch[1], 10);
+    execution.progress.completed++;
+    execution.progress.passed++;
+
+    execution.workers.set(workerId, {
+      workerId,
+      status: 'idle',
+      currentTestId: null,
+      currentTestName: null,
+    });
+
+    emitExecutionEvent(runId, 'progress-update', execution.progress);
+    emitExecutionEvent(runId, 'worker-status', {
+      workerId,
+      status: 'idle',
+      currentTestId: null,
+      currentTestName: null,
+    });
+    return;
+  }
+
+  // Pattern: [Worker X] ✗ Completed: TEST-ID or [Worker X] ✗ Error: TEST-ID
+  const failMatch = line.match(/\[Worker (\d+)\] [✗✘] (?:Completed|Error): (\S+)/);
+  if (failMatch) {
+    const workerId = parseInt(failMatch[1], 10);
+    execution.progress.completed++;
+    execution.progress.failed++;
+
+    execution.workers.set(workerId, {
+      workerId,
+      status: 'idle',
+      currentTestId: null,
+      currentTestName: null,
+    });
+
+    emitExecutionEvent(runId, 'progress-update', execution.progress);
+    emitExecutionEvent(runId, 'worker-status', {
+      workerId,
+      status: 'idle',
+      currentTestId: null,
+      currentTestName: null,
+    });
+    return;
+  }
+
+  // Pattern: [Worker X] Finished
+  const finishMatch = line.match(/\[Worker (\d+)\] Finished/);
+  if (finishMatch) {
+    const workerId = parseInt(finishMatch[1], 10);
+    execution.workers.set(workerId, {
+      workerId,
+      status: 'completed',
+      currentTestId: null,
+      currentTestName: null,
+    });
+
+    emitExecutionEvent(runId, 'worker-status', {
+      workerId,
+      status: 'completed',
+      currentTestId: null,
+      currentTestName: null,
+    });
+    return;
+  }
+
+  // Pattern: Found X test scenarios to run
+  const totalMatch = line.match(/Found (\d+) test scenarios? to run/);
+  if (totalMatch) {
+    execution.progress.total = parseInt(totalMatch[1], 10);
+    emitExecutionEvent(runId, 'progress-update', execution.progress);
+    return;
+  }
+
+  // Sequential test patterns (non-parallel mode)
+  // Pattern: ✓ TEST-ID: Test Name
+  const seqPassMatch = line.match(/^[✓✔]\s+(\S+):/);
+  if (seqPassMatch && execution.concurrency === 1) {
+    execution.progress.completed++;
+    execution.progress.passed++;
+    emitExecutionEvent(runId, 'progress-update', execution.progress);
+    return;
+  }
+
+  // Pattern: ✗ TEST-ID: Test Name
+  const seqFailMatch = line.match(/^[✗✘]\s+(\S+):/);
+  if (seqFailMatch && execution.concurrency === 1) {
+    execution.progress.completed++;
+    execution.progress.failed++;
+    emitExecutionEvent(runId, 'progress-update', execution.progress);
+    return;
+  }
+}
+
+/**
  * POST /api/test-monitor/runs/start
  * Start a new test execution
  */
@@ -986,8 +1196,12 @@ export async function startExecution(req: Request, res: Response, next: NextFunc
     // Build command arguments
     const args = ['run', 'run', '--'];
 
-    // Add category filter
-    if (categories?.length) {
+    // Add scenario filter if specific scenarios are requested
+    if (scenarioIds?.length) {
+      args.push('--scenarios', scenarioIds.join(','));
+      console.log(`[Execution] Running specific scenarios: ${scenarioIds.join(', ')}`);
+    } else if (categories?.length) {
+      // Only add category filter if no specific scenarios
       args.push('--category', categories[0]); // test-agent accepts one category at a time
     }
 
@@ -1007,16 +1221,43 @@ export async function startExecution(req: Request, res: Response, next: NextFunc
       detached: false,
     });
 
-    // Generate a temporary run ID (the real one will come from test-agent)
+    // Generate a run ID
     const tempRunId = `run-${new Date().toISOString().split('T')[0]}-${Math.random().toString(16).slice(2, 10)}`;
 
-    activeExecutions.set(tempRunId, {
+    // Initialize execution state
+    const executionState: ExecutionState = {
       process: child,
       status: 'running',
-    });
+      progress: { total: 0, completed: 0, passed: 0, failed: 0, skipped: 0 },
+      workers: new Map(),
+      connections: new Set(),
+      concurrency,
+    };
 
+    // Initialize workers
+    for (let i = 0; i < concurrency; i++) {
+      executionState.workers.set(i, {
+        workerId: i,
+        status: 'idle',
+        currentTestId: null,
+        currentTestName: null,
+      });
+    }
+
+    activeExecutions.set(tempRunId, executionState);
+
+    // Parse stdout for progress updates
     child.stdout.on('data', (data) => {
-      console.log(`[Execution] ${data.toString().trim()}`);
+      const output = data.toString();
+      console.log(`[Execution] ${output.trim()}`);
+
+      // Parse each line for progress info
+      const lines = output.split('\n');
+      for (const line of lines) {
+        if (line.trim()) {
+          parseTestAgentOutput(tempRunId, line.trim());
+        }
+      }
     });
 
     child.stderr.on('data', (data) => {
@@ -1025,11 +1266,43 @@ export async function startExecution(req: Request, res: Response, next: NextFunc
 
     child.on('close', (code) => {
       console.log(`[Execution] Process exited with code ${code}`);
-      activeExecutions.delete(tempRunId);
+
+      const execution = activeExecutions.get(tempRunId);
+      if (execution) {
+        execution.status = 'completed';
+
+        // Emit completion event
+        emitExecutionEvent(tempRunId, 'execution-completed', {
+          runId: tempRunId,
+          status: code === 0 ? 'completed' : 'failed',
+          progress: execution.progress,
+        });
+
+        // Close all SSE connections
+        execution.connections.forEach((conn) => {
+          try {
+            conn.write(`event: complete\ndata: ${JSON.stringify({ status: 'completed' })}\n\n`);
+            conn.end();
+          } catch (err) {
+            // Already closed
+          }
+        });
+
+        // Keep execution in memory for a bit so clients can reconnect and get final state
+        setTimeout(() => {
+          activeExecutions.delete(tempRunId);
+        }, 60000); // Keep for 1 minute after completion
+      }
     });
 
     child.on('error', (err) => {
       console.error(`[Execution] Process error:`, err);
+
+      const execution = activeExecutions.get(tempRunId);
+      if (execution) {
+        emitExecutionEvent(tempRunId, 'execution-error', { error: err.message });
+      }
+
       activeExecutions.delete(tempRunId);
     });
 
@@ -1042,6 +1315,83 @@ export async function startExecution(req: Request, res: Response, next: NextFunc
   } catch (error) {
     next(error);
   }
+}
+
+/**
+ * GET /api/test-monitor/execution/active
+ * Get currently active execution (if any)
+ */
+export async function getActiveExecution(_req: Request, res: Response): Promise<void> {
+  // Find any running execution
+  for (const [runId, execution] of activeExecutions.entries()) {
+    if (execution.status === 'running' || execution.status === 'paused') {
+      const workers = Array.from(execution.workers.values());
+      res.json({
+        success: true,
+        active: true,
+        runId,
+        status: execution.status,
+        progress: execution.progress,
+        workers,
+        concurrency: execution.concurrency,
+      });
+      return;
+    }
+  }
+
+  // No active execution
+  res.json({
+    success: true,
+    active: false,
+    runId: null,
+  });
+}
+
+/**
+ * GET /api/test-monitor/execution/:runId/stream
+ * SSE endpoint for real-time execution status updates
+ */
+export async function streamExecution(req: Request, res: Response): Promise<void> {
+  const { runId } = req.params;
+
+  // Set up SSE headers
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.flushHeaders();
+
+  const execution = activeExecutions.get(runId);
+
+  if (!execution) {
+    // No active execution, send error and close
+    res.write(`event: error\ndata: ${JSON.stringify({ error: 'No active execution found' })}\n\n`);
+    res.end();
+    return;
+  }
+
+  // Add this connection to the execution's connections
+  execution.connections.add(res);
+
+  // Send current state immediately
+  res.write(`event: execution-started\ndata: ${JSON.stringify({
+    runId,
+    status: execution.status,
+    concurrency: execution.concurrency,
+  })}\n\n`);
+
+  // Send current progress
+  res.write(`event: progress-update\ndata: ${JSON.stringify(execution.progress)}\n\n`);
+
+  // Send current worker statuses
+  const workers = Array.from(execution.workers.values());
+  res.write(`event: workers-update\ndata: ${JSON.stringify(workers)}\n\n`);
+
+  // Handle client disconnect
+  req.on('close', () => {
+    execution.connections.delete(res);
+    console.log(`[Execution SSE] Client disconnected from ${runId}`);
+  });
 }
 
 /**
@@ -1064,6 +1414,20 @@ export async function stopExecution(req: Request, res: Response, next: NextFunct
     }
 
     execution.status = 'stopped';
+
+    // Emit stop event to connected clients
+    emitExecutionEvent(runId, 'execution-stopped', { runId, status: 'stopped' });
+
+    // Close all SSE connections
+    execution.connections.forEach((conn) => {
+      try {
+        conn.write(`event: complete\ndata: ${JSON.stringify({ status: 'stopped' })}\n\n`);
+        conn.end();
+      } catch (err) {
+        // Already closed
+      }
+    });
+
     activeExecutions.delete(runId);
 
     res.json({ success: true, message: 'Execution stopped' });
@@ -1265,6 +1629,630 @@ export async function runDiagnosis(req: Request, res: Response, next: NextFuncti
         error: result.error || 'Diagnosis failed',
       });
     }
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ============================================================================
+// TEST CASE MANAGEMENT ENDPOINTS
+// ============================================================================
+
+/**
+ * GET /api/test-monitor/test-cases
+ * List all test cases with optional filtering
+ */
+export async function getTestCases(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const category = req.query.category as string | undefined;
+    const includeArchived = req.query.includeArchived === 'true';
+
+    const testCases = testCaseService.getTestCases({ category, includeArchived });
+    const stats = testCaseService.getTestCaseStats();
+    const tags = testCaseService.getAllTags();
+
+    res.json({
+      success: true,
+      data: {
+        testCases,
+        stats,
+        tags,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * GET /api/test-monitor/test-cases/:caseId
+ * Get a single test case by ID
+ */
+export async function getTestCase(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { caseId } = req.params;
+
+    const testCase = testCaseService.getTestCase(caseId);
+
+    if (!testCase) {
+      res.status(404).json({ success: false, error: 'Test case not found' });
+      return;
+    }
+
+    res.json({ success: true, data: testCase });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * POST /api/test-monitor/test-cases
+ * Create a new test case
+ */
+export async function createTestCase(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { caseId, name, description, category, tags, steps, expectations } = req.body;
+
+    // Validate required fields
+    if (!category || !['happy-path', 'edge-case', 'error-handling'].includes(category)) {
+      res.status(400).json({ success: false, error: 'Invalid category' });
+      return;
+    }
+
+    // Generate case ID if not provided
+    const finalCaseId = caseId || testCaseService.generateNextCaseId(category);
+
+    // Check if case ID already exists
+    if (testCaseService.testCaseExists(finalCaseId)) {
+      res.status(409).json({ success: false, error: `Test case ${finalCaseId} already exists` });
+      return;
+    }
+
+    // Validate the test case
+    const validationErrors = testCaseService.validateTestCase({
+      caseId: finalCaseId,
+      name,
+      description,
+      category,
+      tags: tags || [],
+      steps: steps || [],
+      expectations: expectations || [],
+      isArchived: false,
+    });
+
+    if (validationErrors.length > 0) {
+      res.status(400).json({
+        success: false,
+        error: 'Validation failed',
+        validationErrors,
+      });
+      return;
+    }
+
+    const testCase = testCaseService.createTestCase({
+      caseId: finalCaseId,
+      name: name || 'Untitled Test Case',
+      description: description || '',
+      category,
+      tags: tags || [],
+      steps: steps || [],
+      expectations: expectations || [],
+      isArchived: false,
+    });
+
+    res.status(201).json({ success: true, data: testCase });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * PUT /api/test-monitor/test-cases/:caseId
+ * Update an existing test case
+ */
+export async function updateTestCase(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { caseId } = req.params;
+    const { name, description, category, tags, steps, expectations, isArchived } = req.body;
+
+    // Check if test case exists
+    if (!testCaseService.testCaseExists(caseId)) {
+      res.status(404).json({ success: false, error: 'Test case not found' });
+      return;
+    }
+
+    // Validate the updates
+    const validationErrors = testCaseService.validateTestCase({
+      caseId,
+      name,
+      description,
+      category,
+      tags,
+      steps,
+      expectations,
+      isArchived,
+    });
+
+    if (validationErrors.length > 0) {
+      res.status(400).json({
+        success: false,
+        error: 'Validation failed',
+        validationErrors,
+      });
+      return;
+    }
+
+    const testCase = testCaseService.updateTestCase(caseId, {
+      name,
+      description,
+      category,
+      tags,
+      steps,
+      expectations,
+      isArchived,
+    });
+
+    if (!testCase) {
+      res.status(404).json({ success: false, error: 'Test case not found' });
+      return;
+    }
+
+    res.json({ success: true, data: testCase });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * DELETE /api/test-monitor/test-cases/:caseId
+ * Archive a test case (soft delete)
+ */
+export async function deleteTestCase(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { caseId } = req.params;
+    const permanent = req.query.permanent === 'true';
+
+    let success: boolean;
+    if (permanent) {
+      success = testCaseService.deleteTestCase(caseId);
+    } else {
+      success = testCaseService.archiveTestCase(caseId);
+    }
+
+    if (!success) {
+      res.status(404).json({ success: false, error: 'Test case not found' });
+      return;
+    }
+
+    res.json({
+      success: true,
+      message: permanent ? 'Test case permanently deleted' : 'Test case archived',
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * POST /api/test-monitor/test-cases/:caseId/clone
+ * Clone a test case with a new ID
+ */
+export async function cloneTestCase(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { caseId } = req.params;
+    const { newCaseId } = req.body;
+
+    // Get the source test case to determine category
+    const sourceCase = testCaseService.getTestCase(caseId);
+    if (!sourceCase) {
+      res.status(404).json({ success: false, error: 'Source test case not found' });
+      return;
+    }
+
+    // Generate new case ID if not provided
+    const finalNewCaseId = newCaseId || testCaseService.generateNextCaseId(sourceCase.category);
+
+    // Check if new case ID already exists
+    if (testCaseService.testCaseExists(finalNewCaseId)) {
+      res.status(409).json({ success: false, error: `Test case ${finalNewCaseId} already exists` });
+      return;
+    }
+
+    const clonedCase = testCaseService.cloneTestCase(caseId, finalNewCaseId);
+
+    if (!clonedCase) {
+      res.status(404).json({ success: false, error: 'Failed to clone test case' });
+      return;
+    }
+
+    res.status(201).json({ success: true, data: clonedCase });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * POST /api/test-monitor/test-cases/validate
+ * Validate a test case without saving
+ */
+export async function validateTestCase(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const testCase = req.body;
+
+    const validationErrors = testCaseService.validateTestCase(testCase);
+
+    res.json({
+      success: true,
+      valid: validationErrors.length === 0,
+      errors: validationErrors,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * POST /api/test-monitor/test-cases/sync
+ * Sync test cases from database to TypeScript files
+ */
+export async function syncTestCases(_req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const result = testCaseService.syncToTypeScript();
+
+    if (result.success) {
+      res.json({
+        success: true,
+        message: 'Test cases synced to TypeScript files',
+        filesWritten: result.filesWritten,
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        error: 'Failed to sync test cases',
+        errors: result.errors,
+        filesWritten: result.filesWritten,
+      });
+    }
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * GET /api/test-monitor/test-cases/presets
+ * Get semantic expectation and negative expectation presets
+ */
+export async function getTestCasePresets(_req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    res.json({
+      success: true,
+      data: {
+        semanticExpectations: testCaseService.SEMANTIC_EXPECTATION_PRESETS,
+        negativeExpectations: testCaseService.NEGATIVE_EXPECTATION_PRESETS,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ============================================================================
+// GOAL-ORIENTED TEST CASE ENDPOINTS
+// ============================================================================
+
+/**
+ * GET /api/test-monitor/goal-tests
+ * List all goal-based test cases with optional filtering
+ */
+export async function getGoalTestCases(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const category = req.query.category as string | undefined;
+    const includeArchived = req.query.includeArchived === 'true';
+
+    const testCases = goalTestService.getGoalTestCases({ category, includeArchived });
+    const stats = goalTestService.getGoalTestCaseStats();
+    const tags = goalTestService.getAllTags();
+
+    res.json({
+      success: true,
+      data: {
+        testCases,
+        stats,
+        tags,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * GET /api/test-monitor/goal-tests/:caseId
+ * Get a single goal-based test case by ID
+ */
+export async function getGoalTestCase(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { caseId } = req.params;
+
+    const testCase = goalTestService.getGoalTestCase(caseId);
+
+    if (!testCase) {
+      res.status(404).json({ success: false, error: 'Goal test case not found' });
+      return;
+    }
+
+    res.json({ success: true, data: testCase });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * POST /api/test-monitor/goal-tests
+ * Create a new goal-based test case
+ */
+export async function createGoalTestCase(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const {
+      caseId, name, description, category, tags,
+      persona, goals, constraints, responseConfig, initialMessage
+    } = req.body;
+
+    // Validate required fields
+    if (!category || !['happy-path', 'edge-case', 'error-handling'].includes(category)) {
+      res.status(400).json({ success: false, error: 'Invalid category' });
+      return;
+    }
+
+    // Generate case ID if not provided
+    const finalCaseId = caseId || goalTestService.generateNextCaseId(category);
+
+    // Check if case ID already exists
+    if (goalTestService.goalTestCaseExists(finalCaseId)) {
+      res.status(409).json({ success: false, error: `Goal test case ${finalCaseId} already exists` });
+      return;
+    }
+
+    // Validate the test case
+    const validationErrors = goalTestService.validateGoalTestCase({
+      caseId: finalCaseId,
+      name,
+      description,
+      category,
+      tags: tags || [],
+      persona: persona || goalTestService.DEFAULT_PERSONA,
+      goals: goals || [],
+      constraints: constraints || [],
+      responseConfig: responseConfig || goalTestService.DEFAULT_RESPONSE_CONFIG,
+      initialMessage: initialMessage || '',
+      isArchived: false,
+    });
+
+    if (validationErrors.length > 0) {
+      res.status(400).json({
+        success: false,
+        error: 'Validation failed',
+        validationErrors,
+      });
+      return;
+    }
+
+    const testCase = goalTestService.createGoalTestCase({
+      caseId: finalCaseId,
+      name: name || 'Untitled Goal Test Case',
+      description: description || '',
+      category,
+      tags: tags || [],
+      persona: persona || goalTestService.DEFAULT_PERSONA,
+      goals: goals || [],
+      constraints: constraints || [],
+      responseConfig: responseConfig || goalTestService.DEFAULT_RESPONSE_CONFIG,
+      initialMessage: initialMessage || 'Hi, I need to schedule an appointment',
+      isArchived: false,
+    });
+
+    res.status(201).json({ success: true, data: testCase });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * PUT /api/test-monitor/goal-tests/:caseId
+ * Update an existing goal-based test case
+ */
+export async function updateGoalTestCase(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { caseId } = req.params;
+    const {
+      name, description, category, tags,
+      persona, goals, constraints, responseConfig, initialMessage, isArchived
+    } = req.body;
+
+    // Check if test case exists
+    if (!goalTestService.goalTestCaseExists(caseId)) {
+      res.status(404).json({ success: false, error: 'Goal test case not found' });
+      return;
+    }
+
+    // Validate the updates
+    const validationErrors = goalTestService.validateGoalTestCase({
+      caseId,
+      name,
+      description,
+      category,
+      tags,
+      persona,
+      goals,
+      constraints,
+      responseConfig,
+      initialMessage,
+      isArchived,
+    });
+
+    if (validationErrors.length > 0) {
+      res.status(400).json({
+        success: false,
+        error: 'Validation failed',
+        validationErrors,
+      });
+      return;
+    }
+
+    const testCase = goalTestService.updateGoalTestCase(caseId, {
+      name,
+      description,
+      category,
+      tags,
+      persona,
+      goals,
+      constraints,
+      responseConfig,
+      initialMessage,
+      isArchived,
+    });
+
+    if (!testCase) {
+      res.status(404).json({ success: false, error: 'Goal test case not found' });
+      return;
+    }
+
+    res.json({ success: true, data: testCase });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * DELETE /api/test-monitor/goal-tests/:caseId
+ * Archive a goal-based test case (soft delete)
+ */
+export async function deleteGoalTestCase(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { caseId } = req.params;
+    const permanent = req.query.permanent === 'true';
+
+    let success: boolean;
+    if (permanent) {
+      success = goalTestService.deleteGoalTestCase(caseId);
+    } else {
+      success = goalTestService.archiveGoalTestCase(caseId);
+    }
+
+    if (!success) {
+      res.status(404).json({ success: false, error: 'Goal test case not found' });
+      return;
+    }
+
+    res.json({
+      success: true,
+      message: permanent ? 'Goal test case permanently deleted' : 'Goal test case archived',
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * POST /api/test-monitor/goal-tests/:caseId/clone
+ * Clone a goal-based test case with a new ID
+ */
+export async function cloneGoalTestCase(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { caseId } = req.params;
+    const { newCaseId } = req.body;
+
+    // Get the source test case to determine category
+    const sourceCase = goalTestService.getGoalTestCase(caseId);
+    if (!sourceCase) {
+      res.status(404).json({ success: false, error: 'Source goal test case not found' });
+      return;
+    }
+
+    // Generate new case ID if not provided
+    const finalNewCaseId = newCaseId || goalTestService.generateNextCaseId(sourceCase.category);
+
+    // Check if new case ID already exists
+    if (goalTestService.goalTestCaseExists(finalNewCaseId)) {
+      res.status(409).json({ success: false, error: `Goal test case ${finalNewCaseId} already exists` });
+      return;
+    }
+
+    const clonedCase = goalTestService.cloneGoalTestCase(caseId, finalNewCaseId);
+
+    if (!clonedCase) {
+      res.status(404).json({ success: false, error: 'Failed to clone goal test case' });
+      return;
+    }
+
+    res.status(201).json({ success: true, data: clonedCase });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * POST /api/test-monitor/goal-tests/validate
+ * Validate a goal-based test case without saving
+ */
+export async function validateGoalTestCase(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const testCase = req.body;
+
+    const validationErrors = goalTestService.validateGoalTestCase(testCase);
+
+    res.json({
+      success: true,
+      valid: validationErrors.length === 0,
+      errors: validationErrors,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * POST /api/test-monitor/goal-tests/sync
+ * Sync goal test cases from database to TypeScript files
+ */
+export async function syncGoalTestCases(_req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const result = goalTestService.syncToTypeScript();
+
+    if (result.success) {
+      res.json({
+        success: true,
+        message: 'Goal test cases synced to TypeScript files',
+        filesWritten: result.filesWritten,
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        error: 'Failed to sync goal test cases',
+        errors: result.errors,
+        filesWritten: result.filesWritten,
+      });
+    }
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * GET /api/test-monitor/goal-tests/personas
+ * Get available persona presets
+ */
+export async function getPersonaPresets(_req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    res.json({
+      success: true,
+      data: {
+        personas: goalTestService.PERSONA_PRESETS,
+        collectableFields: goalTestService.COLLECTABLE_FIELDS,
+        goalTypes: goalTestService.GOAL_TYPES,
+        constraintTypes: goalTestService.CONSTRAINT_TYPES,
+      },
+    });
   } catch (error) {
     next(error);
   }

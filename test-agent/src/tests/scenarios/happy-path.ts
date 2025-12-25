@@ -152,8 +152,8 @@ export const happyPathScenarios: TestCase[] = [
       {
         id: 'step-12-email-and-time',
         description: 'Provide email and time preference',
-        // NOTE: Use January 2026 dates - no slots exist before 1/1/2026
-        userMessage: 'My email is sarah@email.com. Any morning the first week of January 2026 works',
+        // NOTE: Use January 1-2, 2026 - slots are available on Jan 1st
+        userMessage: 'My email is sarah@email.com. Any time on January 1st or 2nd 2026 works',
         expectedPatterns: [/available|time|monday|tuesday|wednesday|thursday|friday|january/i],
         unexpectedPatterns: [patterns.error],
         semanticExpectations: [se.acknowledge(), se.offerOptions()],
@@ -308,8 +308,8 @@ export const happyPathScenarios: TestCase[] = [
       {
         id: 'step-11-select-time',
         description: 'Select appointment times for siblings',
-        // NOTE: Use January 2026 dates - no slots exist before 1/1/2026
-        userMessage: 'Any Tuesday morning in January 2026 works for both of them',
+        // NOTE: Use January 1-2, 2026 - slots are available on Jan 1st
+        userMessage: 'Any time on January 1st or 2nd 2026 works for both of them',
         // Bot should confirm or ask for final confirmation
         expectedPatterns: [/scheduled|booked|confirmed|appointment|great|wonderful|all set|got.*you|january|available/i],
         unexpectedPatterns: [patterns.error],
@@ -377,8 +377,8 @@ export const happyPathScenarios: TestCase[] = [
       {
         id: 'step-4-confirm-insurance',
         description: 'Confirm insurance and request time',
-        // NOTE: Use January 2026 dates - no slots exist before 1/1/2026
-        userMessage: 'Yes Keystone First is correct. Any morning in early January 2026 works for us',
+        // NOTE: Use January 1-2, 2026 - slots are available on Jan 1st
+        userMessage: 'Yes Keystone First is correct. Any time on January 1st or 2nd 2026 works for us',
         // Bot should check availability
         expectedPatterns: [/check|available|time|monday|tuesday|wednesday|moment|look|january/i],
         unexpectedPatterns: [patterns.error],

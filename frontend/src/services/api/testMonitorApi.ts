@@ -21,10 +21,100 @@ import type {
   TestScenario,
   StartExecutionRequest,
   StartExecutionResponse,
+  GoalTestCaseRecord,
+  TestCaseStats,
+  UserPersonaDTO,
+  ConversationGoalDTO,
+  TestConstraintDTO,
+  ResponseConfigDTO,
 } from '../../types/testMonitor.types';
 
 // Base API URL
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
+
+// ============================================================================
+// EXECUTION STATUS SSE
+// ============================================================================
+
+/**
+ * Execution SSE Event types
+ */
+export type ExecutionStreamEvent =
+  | { type: 'execution-started'; data: { runId: string; status: string; concurrency: number } }
+  | { type: 'progress-update'; data: { total: number; completed: number; passed: number; failed: number; skipped: number } }
+  | { type: 'workers-update'; data: Array<{ workerId: number; status: string; currentTestId: string | null; currentTestName: string | null }> }
+  | { type: 'worker-status'; data: { workerId: number; status: string; currentTestId: string | null; currentTestName: string | null } }
+  | { type: 'execution-completed'; data: { runId: string; status: string; progress: any } }
+  | { type: 'execution-stopped'; data: { runId: string; status: string } }
+  | { type: 'execution-error'; data: { error: string } }
+  | { type: 'complete'; data: { status: string } }
+  | { type: 'error'; data: { error: string } };
+
+/**
+ * Subscribe to real-time execution status updates via SSE
+ */
+export function subscribeToExecution(
+  runId: string,
+  onEvent: (event: ExecutionStreamEvent) => void,
+  onError?: (error: Event) => void
+): EventSource {
+  const url = `${API_BASE_URL}/test-monitor/execution/${runId}/stream`;
+  const eventSource = new EventSource(url);
+
+  // Handle specific event types
+  eventSource.addEventListener('execution-started', (e) => {
+    onEvent({ type: 'execution-started', data: JSON.parse(e.data) });
+  });
+
+  eventSource.addEventListener('progress-update', (e) => {
+    onEvent({ type: 'progress-update', data: JSON.parse(e.data) });
+  });
+
+  eventSource.addEventListener('workers-update', (e) => {
+    onEvent({ type: 'workers-update', data: JSON.parse(e.data) });
+  });
+
+  eventSource.addEventListener('worker-status', (e) => {
+    onEvent({ type: 'worker-status', data: JSON.parse(e.data) });
+  });
+
+  eventSource.addEventListener('execution-completed', (e) => {
+    onEvent({ type: 'execution-completed', data: JSON.parse(e.data) });
+    eventSource.close();
+  });
+
+  eventSource.addEventListener('execution-stopped', (e) => {
+    onEvent({ type: 'execution-stopped', data: JSON.parse(e.data) });
+    eventSource.close();
+  });
+
+  eventSource.addEventListener('execution-error', (e) => {
+    onEvent({ type: 'execution-error', data: JSON.parse(e.data) });
+  });
+
+  eventSource.addEventListener('complete', (e) => {
+    onEvent({ type: 'complete', data: JSON.parse(e.data) });
+    eventSource.close();
+  });
+
+  eventSource.addEventListener('error', (e) => {
+    if (e.type === 'error') {
+      try {
+        const eventWithData = e as MessageEvent;
+        if (eventWithData.data) {
+          onEvent({ type: 'error', data: JSON.parse(eventWithData.data) });
+        }
+      } catch {
+        // SSE connection error, not a custom error event
+      }
+    }
+    if (onError) {
+      onError(e);
+    }
+  });
+
+  return eventSource;
+}
 
 /**
  * SSE Event types
@@ -297,6 +387,35 @@ export async function syncPromptToDisk(
   return response;
 }
 
+/**
+ * Save new prompt version (manual edit)
+ */
+export async function savePromptVersion(
+  fileKey: string,
+  content: string,
+  changeDescription: string
+): Promise<{ newVersion: number; message: string; warnings?: string[] }> {
+  const response = await post<TestMonitorApiResponse<{
+    newVersion: number;
+    message: string;
+    warnings?: string[];
+  }> & { error?: string }>(
+    `/test-monitor/prompts/${fileKey}/save`,
+    { content, changeDescription }
+  );
+
+  // Check for error response (backend returns success: false with error)
+  if (!response.success && response.error) {
+    throw new Error(response.error);
+  }
+
+  if (!response.data) {
+    throw new Error('Invalid response from server');
+  }
+
+  return response.data;
+}
+
 // ============================================================================
 // TEST EXECUTION API
 // ============================================================================
@@ -309,6 +428,39 @@ export async function getScenarios(): Promise<TestScenario[]> {
     '/test-monitor/scenarios'
   );
   return response.scenarios;
+}
+
+/**
+ * Active execution response type
+ */
+export interface ActiveExecutionResponse {
+  active: boolean;
+  runId: string | null;
+  status?: 'running' | 'paused';
+  progress?: {
+    total: number;
+    completed: number;
+    passed: number;
+    failed: number;
+    skipped: number;
+  };
+  workers?: Array<{
+    workerId: number;
+    status: string;
+    currentTestId: string | null;
+    currentTestName: string | null;
+  }>;
+  concurrency?: number;
+}
+
+/**
+ * Check for active execution
+ */
+export async function getActiveExecution(): Promise<ActiveExecutionResponse> {
+  const response = await get<{ success: boolean } & ActiveExecutionResponse>(
+    '/test-monitor/execution/active'
+  );
+  return response;
 }
 
 /**
@@ -390,4 +542,175 @@ export async function runDiagnosis(
     { useLLM: options?.useLLM ?? true }
   );
   return response;
+}
+
+// ============================================================================
+// GOAL-ORIENTED TEST CASE API
+// ============================================================================
+
+export interface GoalTestCaseListResponse {
+  testCases: GoalTestCaseRecord[];
+  stats: TestCaseStats;
+  tags: string[];
+}
+
+export interface GoalTestPresetsResponse {
+  personas: Array<{
+    id: string;
+    name: string;
+    description: string;
+    inventory: any;
+    traits: any;
+  }>;
+  collectableFields: Array<{ value: string; label: string }>;
+  goalTypes: Array<{ value: string; label: string; description: string }>;
+  constraintTypes: Array<{ value: string; label: string; description: string }>;
+}
+
+export interface GoalTestValidationError {
+  field: string;
+  message: string;
+}
+
+/**
+ * Get all goal-based test cases
+ */
+export async function getGoalTestCases(options?: {
+  category?: string;
+  includeArchived?: boolean;
+}): Promise<GoalTestCaseListResponse> {
+  const params = new URLSearchParams();
+  if (options?.category) params.append('category', options.category);
+  if (options?.includeArchived) params.append('includeArchived', 'true');
+
+  const queryString = params.toString();
+  const url = `/test-monitor/goal-tests${queryString ? `?${queryString}` : ''}`;
+  const response = await get<TestMonitorApiResponse<GoalTestCaseListResponse>>(url);
+  return response.data;
+}
+
+/**
+ * Get a single goal-based test case
+ */
+export async function getGoalTestCase(caseId: string): Promise<GoalTestCaseRecord> {
+  const response = await get<TestMonitorApiResponse<GoalTestCaseRecord>>(
+    `/test-monitor/goal-tests/${caseId}`
+  );
+  return response.data;
+}
+
+/**
+ * Create a new goal-based test case
+ */
+export async function createGoalTestCase(testCase: {
+  caseId?: string;
+  name: string;
+  description?: string;
+  category: 'happy-path' | 'edge-case' | 'error-handling';
+  tags?: string[];
+  persona: UserPersonaDTO;
+  goals: ConversationGoalDTO[];
+  constraints?: TestConstraintDTO[];
+  responseConfig?: ResponseConfigDTO;
+  initialMessage: string;
+}): Promise<GoalTestCaseRecord> {
+  const response = await post<TestMonitorApiResponse<GoalTestCaseRecord>>(
+    '/test-monitor/goal-tests',
+    testCase
+  );
+  return response.data;
+}
+
+/**
+ * Update a goal-based test case
+ */
+export async function updateGoalTestCase(
+  caseId: string,
+  updates: Partial<{
+    name: string;
+    description: string;
+    category: 'happy-path' | 'edge-case' | 'error-handling';
+    tags: string[];
+    persona: UserPersonaDTO;
+    goals: ConversationGoalDTO[];
+    constraints: TestConstraintDTO[];
+    responseConfig: ResponseConfigDTO;
+    initialMessage: string;
+    isArchived: boolean;
+  }>
+): Promise<GoalTestCaseRecord> {
+  const response = await put<TestMonitorApiResponse<GoalTestCaseRecord>>(
+    `/test-monitor/goal-tests/${caseId}`,
+    updates
+  );
+  return response.data;
+}
+
+/**
+ * Delete (archive) a goal-based test case
+ */
+export async function deleteGoalTestCase(
+  caseId: string,
+  permanent?: boolean
+): Promise<{ success: boolean; message: string }> {
+  const url = `/test-monitor/goal-tests/${caseId}${permanent ? '?permanent=true' : ''}`;
+  // Using fetch directly since we don't have a delete helper in client
+  const response = await fetch(`${API_BASE_URL}${url}`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  return response.json();
+}
+
+/**
+ * Clone a goal-based test case
+ */
+export async function cloneGoalTestCase(
+  caseId: string,
+  newCaseId?: string
+): Promise<GoalTestCaseRecord> {
+  const response = await post<TestMonitorApiResponse<GoalTestCaseRecord>>(
+    `/test-monitor/goal-tests/${caseId}/clone`,
+    { newCaseId }
+  );
+  return response.data;
+}
+
+/**
+ * Validate a goal-based test case without saving
+ */
+export async function validateGoalTestCase(
+  testCase: Partial<GoalTestCaseRecord>
+): Promise<{ valid: boolean; errors: GoalTestValidationError[] }> {
+  const response = await post<{ success: boolean; valid: boolean; errors: GoalTestValidationError[] }>(
+    '/test-monitor/goal-tests/validate',
+    testCase
+  );
+  return { valid: response.valid, errors: response.errors };
+}
+
+/**
+ * Sync goal test cases to TypeScript files
+ */
+export async function syncGoalTestCases(): Promise<{
+  success: boolean;
+  message: string;
+  filesWritten: string[];
+}> {
+  const response = await post<{
+    success: boolean;
+    message: string;
+    filesWritten: string[];
+  }>('/test-monitor/goal-tests/sync', {});
+  return response;
+}
+
+/**
+ * Get persona presets and configuration options
+ */
+export async function getGoalTestPresets(): Promise<GoalTestPresetsResponse> {
+  const response = await get<TestMonitorApiResponse<GoalTestPresetsResponse>>(
+    '/test-monitor/goal-tests/personas'
+  );
+  return response.data;
 }

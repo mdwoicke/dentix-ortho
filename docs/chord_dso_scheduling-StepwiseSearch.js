@@ -28,7 +28,10 @@ const CLOUD9 = {
     password: '#!InteleP33rTest!#',
     namespace: 'http://schemas.practica.ws/cloud9/partners/',
     vendorUserName: 'IntelepeerTest',
-    defaultApptTypeGUID: '8fc9d063-ae46-4975-a5ae-734c6efe341a'
+    defaultApptTypeGUID: '8fc9d063-ae46-4975-a5ae-734c6efe341a',
+    // Default schedule view/column from sandbox data - used when LLM fails to extract from slots
+    defaultScheduleViewGUID: '2544683a-8e79-4b32-a4d4-bf851996bac3',
+    defaultScheduleColumnGUID: 'e062b81f-1fff-40fc-b4a4-1cf9ecc2f32b'
 };
 
 // ============================================================================
@@ -40,6 +43,60 @@ const STEPWISE_CONFIG = {
     expansionDays: 10,        // Days to add to endDate on each retry
     maxRangeDays: 196         // Cloud9 API limit: ~28 weeks from start
 };
+
+// ============================================================================
+// RETRY CONFIGURATION (Network timeout handling)
+// ============================================================================
+
+const RETRY_CONFIG = {
+    maxRetries: 3,
+    initialDelayMs: 1000,
+    maxDelayMs: 10000,
+    backoffMultiplier: 2,
+    retryableErrors: ['ETIMEDOUT', 'ECONNRESET', 'ENOTFOUND', 'ESOCKETTIMEDOUT', 'timeout', 'network']
+};
+
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function isRetryableError(error) {
+    const errorMsg = (error.message || '').toLowerCase();
+    const errorCode = error.code || '';
+    return RETRY_CONFIG.retryableErrors.some(e =>
+        errorMsg.includes(e.toLowerCase()) || errorCode.includes(e)
+    );
+}
+
+async function callCloud9WithRetry(procedure, apiParams, attempt = 1) {
+    const xmlRequest = buildXmlRequest(procedure, apiParams);
+    console.log(`[chord_scheduling] Calling Cloud9: ${procedure} (attempt ${attempt}/${RETRY_CONFIG.maxRetries})`);
+
+    try {
+        const response = await fetch(CLOUD9.endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/xml' },
+            body: xmlRequest,
+            timeout: 45000  // Increased timeout to 45 seconds
+        });
+        const xmlText = await response.text();
+        if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        return parseXmlResponse(xmlText);
+    } catch (error) {
+        // Check if we should retry
+        if (attempt < RETRY_CONFIG.maxRetries && isRetryableError(error)) {
+            const delay = Math.min(
+                RETRY_CONFIG.initialDelayMs * Math.pow(RETRY_CONFIG.backoffMultiplier, attempt - 1),
+                RETRY_CONFIG.maxDelayMs
+            );
+            console.log(`[chord_scheduling] Retryable error: ${error.message}. Retrying in ${delay}ms...`);
+            await sleep(delay);
+            return callCloud9WithRetry(procedure, apiParams, attempt + 1);
+        }
+        // Not retryable or max retries reached
+        throw error;
+    }
+}
 
 // ============================================================================
 // XML UTILITIES
@@ -295,21 +352,8 @@ async function searchSlotsWithExpansion(startDate, endDate, scheduleViewGUIDs, t
         if (scheduleViewGUIDs) apiParams.schdvwGUIDs = scheduleViewGUIDs;
 
         try {
-            const xmlRequest = buildXmlRequest('GetOnlineReservations', apiParams);
-
-            const response = await fetch(CLOUD9.endpoint, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/xml' },
-                body: xmlRequest,
-                timeout: 30000
-            });
-
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-            }
-
-            const xmlText = await response.text();
-            const parsed = parseXmlResponse(xmlText);
+            // Use retry-enabled API call for network resilience
+            const parsed = await callCloud9WithRetry('GetOnlineReservations', apiParams);
 
             searchHistory.push({
                 attempt,
@@ -478,36 +522,40 @@ async function executeRequest() {
             case 'book_child': {
                 if (!params.patientGUID) throw new Error('patientGUID required');
                 if (!params.startTime) throw new Error('startTime required (MM/DD/YYYY HH:MM AM)');
-                if (!params.scheduleViewGUID) throw new Error('scheduleViewGUID required');
-                if (!params.scheduleColumnGUID) throw new Error('scheduleColumnGUID required');
-                // Use default appointmentTypeGUID if not provided or empty
-                const appointmentTypeGUID = params.appointmentTypeGUID || CLOUD9.defaultApptTypeGUID;
-                console.log(`[${toolName}] Using appointmentTypeGUID: ${appointmentTypeGUID}`);
+
+                // Use defaults for scheduling GUIDs if not provided or empty
+                // This handles cases where LLM fails to extract from slots response
+                const scheduleViewGUID = params.scheduleViewGUID || CLOUD9.defaultScheduleViewGUID;
+                const scheduleColumnGUID = params.scheduleColumnGUID || CLOUD9.defaultScheduleColumnGUID;
+
+                // IMPORTANT: Validate appointmentTypeGUID
+                // Common LLM error: using scheduleViewGUID as appointmentTypeGUID (they look similar)
+                // If appointmentTypeGUID matches scheduleViewGUID, use the default instead
+                let appointmentTypeGUID = params.appointmentTypeGUID;
+                if (!appointmentTypeGUID ||
+                    appointmentTypeGUID === scheduleViewGUID ||
+                    appointmentTypeGUID === params.scheduleViewGUID) {
+                    console.log(`[${toolName}] WARNING: appointmentTypeGUID invalid or same as scheduleViewGUID, using default`);
+                    appointmentTypeGUID = CLOUD9.defaultApptTypeGUID;
+                }
+
+                console.log(`[${toolName}] book_child with defaults:`);
+                console.log(`  scheduleViewGUID: ${scheduleViewGUID} ${params.scheduleViewGUID ? '' : '(DEFAULT)'}`);
+                console.log(`  scheduleColumnGUID: ${scheduleColumnGUID} ${params.scheduleColumnGUID ? '' : '(DEFAULT)'}`);
+                console.log(`  appointmentTypeGUID: ${appointmentTypeGUID} ${params.appointmentTypeGUID ? '' : '(DEFAULT)'}`);
 
                 const apiParams = {
                     PatientGUID: params.patientGUID,
                     StartTime: params.startTime,
-                    ScheduleViewGUID: params.scheduleViewGUID,
-                    ScheduleColumnGUID: params.scheduleColumnGUID,
+                    ScheduleViewGUID: scheduleViewGUID,
+                    ScheduleColumnGUID: scheduleColumnGUID,
                     AppointmentTypeGUID: appointmentTypeGUID,
-                    Minutes: String(params.minutes || 30),
+                    Minutes: String(params.minutes || 45),
                     VendorUserName: CLOUD9.vendorUserName
                 };
 
-                const xmlRequest = buildXmlRequest('SetAppointment', apiParams);
-                const response = await fetch(CLOUD9.endpoint, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/xml' },
-                    body: xmlRequest,
-                    timeout: 30000
-                });
-
-                const xmlText = await response.text();
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                }
-
-                const parsed = parseXmlResponse(xmlText);
+                // Use retry-enabled API call for network resilience
+                const parsed = await callCloud9WithRetry('SetAppointment', apiParams);
                 const apptResult = parsed.records[0]?.Result || '';
                 const apptGUID = extractGuidFromResult(apptResult, /Appointment GUID Added:\s*([A-Fa-f0-9-]+)/i);
 
@@ -521,23 +569,10 @@ async function executeRequest() {
             case 'cancel': {
                 if (!params.appointmentGUID) throw new Error('appointmentGUID required');
 
-                const xmlRequest = buildXmlRequest('SetAppointmentStatusCanceled', {
+                // Use retry-enabled API call for network resilience
+                const parsed = await callCloud9WithRetry('SetAppointmentStatusCanceled', {
                     apptGUID: params.appointmentGUID
                 });
-
-                const response = await fetch(CLOUD9.endpoint, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/xml' },
-                    body: xmlRequest,
-                    timeout: 30000
-                });
-
-                const xmlText = await response.text();
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                }
-
-                const parsed = parseXmlResponse(xmlText);
                 const cancelResult = parsed.records[0]?.Result || 'Cancellation processed';
 
                 return JSON.stringify({

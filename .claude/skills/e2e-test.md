@@ -11,6 +11,7 @@
 
 | Task | Command |
 |------|---------|
+| **Validate prompt first** | `npm run validate:prompt` |
 | Run happy path tests | `cd test-agent && npm run run:happy` |
 | Run all tests | `cd test-agent && npm run run` |
 | Run specific test | `cd test-agent && npx ts-node src/index.ts run --scenario HAPPY-001` |
@@ -299,10 +300,53 @@ numberOfPatients: 2  // Default for grouped_slots if not provided
 
 ---
 
+## Prompt Validation (REQUIRED BEFORE TESTING)
+
+### Validation Script
+Always validate the system prompt before uploading to Flowise or running tests:
+
+```bash
+npm run validate:prompt
+```
+
+### What It Checks
+| Check | Description | Severity |
+|-------|-------------|----------|
+| Unbalanced braces `{}` | Flowise parses `{` as template start | CRITICAL |
+| `{$vars...}` patterns | Telephony syntax incompatible with Flowise | CRITICAL |
+| Unclosed XML tags | `<tag>` without `</tag>` | WARNING |
+| JSON-like structures | Raw JSON should be in code blocks or lists | WARNING |
+| Control characters | Non-printable chars cause encoding issues | CRITICAL |
+| Long lines | Lines >1000 chars may truncate | WARNING |
+
+### Pre-commit Hook
+A git pre-commit hook automatically validates the prompt when committing changes to `docs/Chord_Cloud9_SystemPrompt.md`. If validation fails, the commit is blocked.
+
+### Safe Prompt Patterns
+When documenting JSON/payload structures in the prompt, use bullet lists instead of raw JSON:
+
+**BAD (causes template errors):**
+```
+{
+  "action": "book_child",
+  "patientGUID": "[value]"
+}
+```
+
+**GOOD (safe for Flowise):**
+```
+PAYLOAD structure (use JSON format):
+- action: "book_child"
+- patientGUID: from Child1_patientGUID
+```
+
+---
+
 ## Common Issues & Solutions
 
 | Issue | Symptom | Root Cause | Solution |
 |-------|---------|------------|----------|
+| **Single '}' in template** | All tests fail immediately with buildChatflow error | Unbalanced or literal braces in prompt | Run `npm run validate:prompt`, convert JSON to bullet lists |
 | Wrong year in dates | "No slots available", transfer to live agent | LLM interprets "January" as current year | Use explicit "January 2026" in test messages |
 | numberOfPatients missing | grouped_slots fails with error | Flowise doesn't inject param | Added default fallback `params.numberOfPatients = 2` |
 | providerGUID required | Patient create returns error | Tool missing default | Added `defaultProviderGUID` constant |

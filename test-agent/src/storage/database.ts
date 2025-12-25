@@ -98,6 +98,88 @@ export interface PromptVersion {
   capturedAt: string;
 }
 
+// ============================================================================
+// GOAL-ORIENTED TEST INTERFACES
+// ============================================================================
+
+export interface GoalTestResultRecord {
+  id?: number;
+  runId: string;
+  testId: string;
+  passed: number;
+  turnCount: number;
+  durationMs: number;
+  startedAt: string;
+  completedAt: string;
+  goalResultsJson?: string;
+  constraintViolationsJson?: string;
+  summaryText?: string;
+  // Dynamic data resolution fields
+  resolvedPersonaJson?: string;
+  generationSeed?: number;
+}
+
+export interface GoalProgressSnapshot {
+  id?: number;
+  runId: string;
+  testId: string;
+  turnNumber: number;
+  collectedFieldsJson: string;
+  pendingFieldsJson: string;
+  issuesJson: string;
+}
+
+// ============================================================================
+// TEST CASE MANAGEMENT INTERFACES
+// ============================================================================
+
+export interface TestCaseStepDTO {
+  id: string;
+  description?: string;
+  userMessage: string;
+  expectedPatterns: string[];
+  unexpectedPatterns: string[];
+  semanticExpectations: SemanticExpectationDTO[];
+  negativeExpectations: NegativeExpectationDTO[];
+  timeout?: number;
+  delay?: number;
+  optional?: boolean;
+}
+
+export interface SemanticExpectationDTO {
+  type: string;
+  description: string;
+  customCriteria?: string;
+  required: boolean;
+}
+
+export interface NegativeExpectationDTO {
+  type: string;
+  description: string;
+  customCriteria?: string;
+  severity: 'critical' | 'high' | 'medium' | 'low';
+}
+
+export interface ExpectationDTO {
+  type: 'conversation-complete' | 'final-state' | 'no-errors' | 'custom';
+  description: string;
+}
+
+export interface TestCaseRecord {
+  id?: number;
+  caseId: string;
+  name: string;
+  description: string;
+  category: 'happy-path' | 'edge-case' | 'error-handling';
+  tags: string[];
+  steps: TestCaseStepDTO[];
+  expectations: ExpectationDTO[];
+  isArchived: boolean;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export class Database {
   private db: BetterSqlite3.Database | null = null;
   private dbPath: string;
@@ -292,6 +374,7 @@ export class Database {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         file_key TEXT UNIQUE NOT NULL,
         file_path TEXT NOT NULL,
+        display_name TEXT,
         content TEXT NOT NULL,
         version INTEGER DEFAULT 1,
         last_fix_id TEXT,
@@ -312,10 +395,80 @@ export class Database {
       -- Indexes for prompt tables
       CREATE INDEX IF NOT EXISTS idx_prompt_version_history_file_key ON prompt_version_history(file_key);
       CREATE INDEX IF NOT EXISTS idx_prompt_version_history_version ON prompt_version_history(version);
+
+      -- ========================================================================
+      -- TEST CASE MANAGEMENT TABLE
+      -- ========================================================================
+
+      -- Test cases stored as JSON for UI editing
+      CREATE TABLE IF NOT EXISTS test_cases (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        case_id TEXT UNIQUE NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        category TEXT CHECK(category IN ('happy-path', 'edge-case', 'error-handling')) NOT NULL,
+        tags_json TEXT DEFAULT '[]',
+        steps_json TEXT DEFAULT '[]',
+        expectations_json TEXT DEFAULT '[]',
+        is_archived INTEGER DEFAULT 0,
+        version INTEGER DEFAULT 1,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+      );
+
+      -- Indexes for test cases
+      CREATE INDEX IF NOT EXISTS idx_test_cases_category ON test_cases(category);
+      CREATE INDEX IF NOT EXISTS idx_test_cases_archived ON test_cases(is_archived);
+      CREATE INDEX IF NOT EXISTS idx_test_cases_case_id ON test_cases(case_id);
+
+      -- ========================================================================
+      -- GOAL-ORIENTED TEST TABLES
+      -- ========================================================================
+
+      -- Goal Test Results (tracks goal-based test outcomes)
+      CREATE TABLE IF NOT EXISTS goal_test_results (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT NOT NULL,
+        test_id TEXT NOT NULL,
+        passed INTEGER DEFAULT 0,
+        turn_count INTEGER DEFAULT 0,
+        duration_ms INTEGER DEFAULT 0,
+        started_at TEXT,
+        completed_at TEXT,
+        goal_results_json TEXT,
+        constraint_violations_json TEXT,
+        summary_text TEXT,
+        UNIQUE(run_id, test_id)
+      );
+
+      -- Goal Progress Snapshots (for debugging and analysis)
+      CREATE TABLE IF NOT EXISTS goal_progress_snapshots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT NOT NULL,
+        test_id TEXT NOT NULL,
+        turn_number INTEGER NOT NULL,
+        collected_fields_json TEXT,
+        pending_fields_json TEXT,
+        issues_json TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      );
+
+      -- Indexes for goal test tables
+      CREATE INDEX IF NOT EXISTS idx_goal_test_results_run_id ON goal_test_results(run_id);
+      CREATE INDEX IF NOT EXISTS idx_goal_test_results_test_id ON goal_test_results(test_id);
+      CREATE INDEX IF NOT EXISTS idx_goal_progress_snapshots_run_id ON goal_progress_snapshots(run_id);
+      CREATE INDEX IF NOT EXISTS idx_goal_progress_snapshots_test_id ON goal_progress_snapshots(test_id);
     `);
 
     // Migration: Add agent_question column if it doesn't exist
     this.addColumnIfNotExists('findings', 'agent_question', 'TEXT');
+
+    // Migration: Add display_name column to prompt_working_copies if it doesn't exist
+    this.addColumnIfNotExists('prompt_working_copies', 'display_name', 'TEXT');
+
+    // Migration: Add resolved persona fields to goal_test_results
+    this.addColumnIfNotExists('goal_test_results', 'resolved_persona_json', 'TEXT');
+    this.addColumnIfNotExists('goal_test_results', 'generation_seed', 'INTEGER');
   }
 
   /**
@@ -1104,6 +1257,470 @@ export class Database {
       DELETE FROM test_results;
       DELETE FROM test_runs;
     `);
+  }
+
+  // ============================================================================
+  // TEST CASE MANAGEMENT METHODS
+  // ============================================================================
+
+  /**
+   * Get all test cases (optionally filtered)
+   */
+  getTestCases(options?: { category?: string; includeArchived?: boolean }): TestCaseRecord[] {
+    const db = this.getDb();
+
+    let query = `
+      SELECT id, case_id, name, description, category, tags_json, steps_json,
+             expectations_json, is_archived, version, created_at, updated_at
+      FROM test_cases
+    `;
+    const conditions: string[] = [];
+    const params: any[] = [];
+
+    if (!options?.includeArchived) {
+      conditions.push('is_archived = 0');
+    }
+
+    if (options?.category) {
+      conditions.push('category = ?');
+      params.push(options.category);
+    }
+
+    if (conditions.length > 0) {
+      query += ' WHERE ' + conditions.join(' AND ');
+    }
+
+    query += ' ORDER BY category, case_id';
+
+    const rows = db.prepare(query).all(...params) as any[];
+
+    return rows.map(row => ({
+      id: row.id,
+      caseId: row.case_id,
+      name: row.name,
+      description: row.description || '',
+      category: row.category,
+      tags: JSON.parse(row.tags_json || '[]'),
+      steps: JSON.parse(row.steps_json || '[]'),
+      expectations: JSON.parse(row.expectations_json || '[]'),
+      isArchived: row.is_archived === 1,
+      version: row.version,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
+  }
+
+  /**
+   * Get a single test case by ID
+   */
+  getTestCase(caseId: string): TestCaseRecord | null {
+    const db = this.getDb();
+
+    const row = db.prepare(`
+      SELECT id, case_id, name, description, category, tags_json, steps_json,
+             expectations_json, is_archived, version, created_at, updated_at
+      FROM test_cases
+      WHERE case_id = ?
+    `).get(caseId) as any;
+
+    if (!row) return null;
+
+    return {
+      id: row.id,
+      caseId: row.case_id,
+      name: row.name,
+      description: row.description || '',
+      category: row.category,
+      tags: JSON.parse(row.tags_json || '[]'),
+      steps: JSON.parse(row.steps_json || '[]'),
+      expectations: JSON.parse(row.expectations_json || '[]'),
+      isArchived: row.is_archived === 1,
+      version: row.version,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  /**
+   * Create a new test case
+   */
+  createTestCase(testCase: Omit<TestCaseRecord, 'id' | 'version' | 'createdAt' | 'updatedAt'>): TestCaseRecord {
+    const db = this.getDb();
+    const now = new Date().toISOString();
+
+    const info = db.prepare(`
+      INSERT INTO test_cases (case_id, name, description, category, tags_json, steps_json, expectations_json, is_archived, version, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+    `).run(
+      testCase.caseId,
+      testCase.name,
+      testCase.description,
+      testCase.category,
+      JSON.stringify(testCase.tags),
+      JSON.stringify(testCase.steps),
+      JSON.stringify(testCase.expectations),
+      testCase.isArchived ? 1 : 0,
+      now,
+      now
+    );
+
+    return {
+      id: info.lastInsertRowid as number,
+      ...testCase,
+      version: 1,
+      createdAt: now,
+      updatedAt: now,
+    };
+  }
+
+  /**
+   * Update an existing test case
+   */
+  updateTestCase(caseId: string, updates: Partial<Omit<TestCaseRecord, 'id' | 'caseId' | 'createdAt'>>): TestCaseRecord | null {
+    const db = this.getDb();
+
+    // First get the existing record
+    const existing = this.getTestCase(caseId);
+    if (!existing) return null;
+
+    const now = new Date().toISOString();
+    const newVersion = existing.version + 1;
+
+    // Build update fields
+    const updated = {
+      name: updates.name ?? existing.name,
+      description: updates.description ?? existing.description,
+      category: updates.category ?? existing.category,
+      tags: updates.tags ?? existing.tags,
+      steps: updates.steps ?? existing.steps,
+      expectations: updates.expectations ?? existing.expectations,
+      isArchived: updates.isArchived ?? existing.isArchived,
+    };
+
+    db.prepare(`
+      UPDATE test_cases
+      SET name = ?, description = ?, category = ?, tags_json = ?, steps_json = ?,
+          expectations_json = ?, is_archived = ?, version = ?, updated_at = ?
+      WHERE case_id = ?
+    `).run(
+      updated.name,
+      updated.description,
+      updated.category,
+      JSON.stringify(updated.tags),
+      JSON.stringify(updated.steps),
+      JSON.stringify(updated.expectations),
+      updated.isArchived ? 1 : 0,
+      newVersion,
+      now,
+      caseId
+    );
+
+    return {
+      id: existing.id,
+      caseId,
+      ...updated,
+      version: newVersion,
+      createdAt: existing.createdAt,
+      updatedAt: now,
+    };
+  }
+
+  /**
+   * Archive a test case (soft delete)
+   */
+  archiveTestCase(caseId: string): boolean {
+    const db = this.getDb();
+
+    const result = db.prepare(`
+      UPDATE test_cases SET is_archived = 1, updated_at = ? WHERE case_id = ?
+    `).run(new Date().toISOString(), caseId);
+
+    return result.changes > 0;
+  }
+
+  /**
+   * Permanently delete a test case
+   */
+  deleteTestCase(caseId: string): boolean {
+    const db = this.getDb();
+
+    const result = db.prepare(`DELETE FROM test_cases WHERE case_id = ?`).run(caseId);
+    return result.changes > 0;
+  }
+
+  /**
+   * Clone a test case with a new ID
+   */
+  cloneTestCase(caseId: string, newCaseId: string): TestCaseRecord | null {
+    const existing = this.getTestCase(caseId);
+    if (!existing) return null;
+
+    return this.createTestCase({
+      caseId: newCaseId,
+      name: `${existing.name} (Copy)`,
+      description: existing.description,
+      category: existing.category,
+      tags: [...existing.tags],
+      steps: JSON.parse(JSON.stringify(existing.steps)),
+      expectations: JSON.parse(JSON.stringify(existing.expectations)),
+      isArchived: false,
+    });
+  }
+
+  /**
+   * Get test case statistics
+   */
+  getTestCaseStats(): { total: number; byCategory: Record<string, number>; archived: number } {
+    const db = this.getDb();
+
+    const total = (db.prepare('SELECT COUNT(*) as count FROM test_cases WHERE is_archived = 0').get() as any)?.count || 0;
+    const archived = (db.prepare('SELECT COUNT(*) as count FROM test_cases WHERE is_archived = 1').get() as any)?.count || 0;
+
+    const byCategoryRows = db.prepare(`
+      SELECT category, COUNT(*) as count FROM test_cases WHERE is_archived = 0 GROUP BY category
+    `).all() as any[];
+
+    const byCategory: Record<string, number> = {};
+    for (const row of byCategoryRows) {
+      byCategory[row.category] = row.count;
+    }
+
+    return { total, byCategory, archived };
+  }
+
+  /**
+   * Get all unique tags from test cases
+   */
+  getAllTags(): string[] {
+    const db = this.getDb();
+
+    const rows = db.prepare(`SELECT tags_json FROM test_cases WHERE is_archived = 0`).all() as any[];
+
+    const tagSet = new Set<string>();
+    for (const row of rows) {
+      const tags = JSON.parse(row.tags_json || '[]');
+      for (const tag of tags) {
+        tagSet.add(tag);
+      }
+    }
+
+    return Array.from(tagSet).sort();
+  }
+
+  /**
+   * Check if a test case ID exists
+   */
+  testCaseExists(caseId: string): boolean {
+    const db = this.getDb();
+    const row = db.prepare('SELECT 1 FROM test_cases WHERE case_id = ?').get(caseId);
+    return !!row;
+  }
+
+  /**
+   * Generate the next available case ID for a category
+   */
+  generateNextCaseId(category: 'happy-path' | 'edge-case' | 'error-handling'): string {
+    const prefix = category === 'happy-path' ? 'HAPPY' :
+                   category === 'edge-case' ? 'EDGE' : 'ERR';
+
+    const db = this.getDb();
+    const rows = db.prepare(`
+      SELECT case_id FROM test_cases WHERE case_id LIKE ?
+    `).all(`${prefix}-%`) as any[];
+
+    let maxNum = 0;
+    for (const row of rows) {
+      const match = row.case_id.match(new RegExp(`^${prefix}-(\\d+)$`));
+      if (match) {
+        const num = parseInt(match[1], 10);
+        if (num > maxNum) maxNum = num;
+      }
+    }
+
+    return `${prefix}-${String(maxNum + 1).padStart(3, '0')}`;
+  }
+
+  // ============================================================================
+  // GOAL-ORIENTED TEST METHODS
+  // ============================================================================
+
+  /**
+   * Save a goal test result
+   */
+  saveGoalTestResult(result: GoalTestResultRecord): number {
+    const db = this.getDb();
+
+    const info = db.prepare(`
+      INSERT OR REPLACE INTO goal_test_results
+      (run_id, test_id, passed, turn_count, duration_ms, started_at, completed_at,
+       goal_results_json, constraint_violations_json, summary_text,
+       resolved_persona_json, generation_seed)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      result.runId,
+      result.testId,
+      result.passed,
+      result.turnCount,
+      result.durationMs,
+      result.startedAt,
+      result.completedAt,
+      result.goalResultsJson,
+      result.constraintViolationsJson,
+      result.summaryText,
+      result.resolvedPersonaJson,
+      result.generationSeed
+    );
+
+    return info.lastInsertRowid as number;
+  }
+
+  /**
+   * Get goal test results for a run
+   */
+  getGoalTestResults(runId: string): GoalTestResultRecord[] {
+    const db = this.getDb();
+
+    const rows = db.prepare(`
+      SELECT id, run_id, test_id, passed, turn_count, duration_ms, started_at, completed_at,
+             goal_results_json, constraint_violations_json, summary_text,
+             resolved_persona_json, generation_seed
+      FROM goal_test_results
+      WHERE run_id = ?
+    `).all(runId) as any[];
+
+    return rows.map(row => ({
+      id: row.id,
+      runId: row.run_id,
+      testId: row.test_id,
+      passed: row.passed,
+      turnCount: row.turn_count,
+      durationMs: row.duration_ms,
+      startedAt: row.started_at,
+      completedAt: row.completed_at,
+      goalResultsJson: row.goal_results_json,
+      constraintViolationsJson: row.constraint_violations_json,
+      summaryText: row.summary_text,
+      resolvedPersonaJson: row.resolved_persona_json,
+      generationSeed: row.generation_seed,
+    }));
+  }
+
+  /**
+   * Get a single goal test result
+   */
+  getGoalTestResult(runId: string, testId: string): GoalTestResultRecord | null {
+    const db = this.getDb();
+
+    const row = db.prepare(`
+      SELECT id, run_id, test_id, passed, turn_count, duration_ms, started_at, completed_at,
+             goal_results_json, constraint_violations_json, summary_text,
+             resolved_persona_json, generation_seed
+      FROM goal_test_results
+      WHERE run_id = ? AND test_id = ?
+    `).get(runId, testId) as any;
+
+    if (!row) return null;
+
+    return {
+      id: row.id,
+      runId: row.run_id,
+      testId: row.test_id,
+      passed: row.passed,
+      turnCount: row.turn_count,
+      durationMs: row.duration_ms,
+      startedAt: row.started_at,
+      completedAt: row.completed_at,
+      goalResultsJson: row.goal_results_json,
+      constraintViolationsJson: row.constraint_violations_json,
+      summaryText: row.summary_text,
+      resolvedPersonaJson: row.resolved_persona_json,
+      generationSeed: row.generation_seed,
+    };
+  }
+
+  /**
+   * Save a goal progress snapshot
+   */
+  saveGoalProgressSnapshot(snapshot: GoalProgressSnapshot): void {
+    const db = this.getDb();
+
+    db.prepare(`
+      INSERT INTO goal_progress_snapshots
+      (run_id, test_id, turn_number, collected_fields_json, pending_fields_json, issues_json)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      snapshot.runId,
+      snapshot.testId,
+      snapshot.turnNumber,
+      snapshot.collectedFieldsJson,
+      snapshot.pendingFieldsJson,
+      snapshot.issuesJson
+    );
+  }
+
+  /**
+   * Get progress snapshots for a test
+   */
+  getGoalProgressSnapshots(runId: string, testId: string): GoalProgressSnapshot[] {
+    const db = this.getDb();
+
+    const rows = db.prepare(`
+      SELECT id, run_id, test_id, turn_number, collected_fields_json, pending_fields_json, issues_json
+      FROM goal_progress_snapshots
+      WHERE run_id = ? AND test_id = ?
+      ORDER BY turn_number ASC
+    `).all(runId, testId) as any[];
+
+    return rows.map(row => ({
+      id: row.id,
+      runId: row.run_id,
+      testId: row.test_id,
+      turnNumber: row.turn_number,
+      collectedFieldsJson: row.collected_fields_json,
+      pendingFieldsJson: row.pending_fields_json,
+      issuesJson: row.issues_json,
+    }));
+  }
+
+  /**
+   * Get goal test statistics
+   */
+  getGoalTestStats(runId?: string): { total: number; passed: number; failed: number; avgTurns: number } {
+    const db = this.getDb();
+
+    let query = `
+      SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN passed = 1 THEN 1 ELSE 0 END) as passed,
+        SUM(CASE WHEN passed = 0 THEN 1 ELSE 0 END) as failed,
+        AVG(turn_count) as avg_turns
+      FROM goal_test_results
+    `;
+    const params: any[] = [];
+
+    if (runId) {
+      query += ' WHERE run_id = ?';
+      params.push(runId);
+    }
+
+    const row = db.prepare(query).get(...params) as any;
+
+    return {
+      total: row?.total || 0,
+      passed: row?.passed || 0,
+      failed: row?.failed || 0,
+      avgTurns: row?.avg_turns || 0,
+    };
+  }
+
+  /**
+   * Delete goal test data for a run
+   */
+  deleteGoalTestData(runId: string): void {
+    const db = this.getDb();
+
+    db.prepare('DELETE FROM goal_progress_snapshots WHERE run_id = ?').run(runId);
+    db.prepare('DELETE FROM goal_test_results WHERE run_id = ?').run(runId);
   }
 
   /**

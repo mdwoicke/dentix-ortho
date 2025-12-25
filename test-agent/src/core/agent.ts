@@ -19,6 +19,7 @@ import { allScenarios } from '../tests/scenarios';
 export interface AgentOptions {
   category?: 'happy-path' | 'edge-case' | 'error-handling';
   scenario?: string;
+  scenarioIds?: string[]; // Run multiple specific scenarios by ID
   failedOnly?: boolean;
   watch?: boolean;
   concurrency?: number; // Number of parallel workers (1-10, default 1)
@@ -403,7 +404,12 @@ export class TestAgent extends EventEmitter {
   private getScenarios(options: AgentOptions): TestCase[] {
     let scenarios = [...allScenarios];
 
-    if (options.scenario) {
+    // Filter by multiple scenario IDs (takes priority)
+    if (options.scenarioIds && options.scenarioIds.length > 0) {
+      scenarios = scenarios.filter(s => options.scenarioIds!.includes(s.id));
+      console.log(`Filtered to ${scenarios.length} scenarios by IDs: ${options.scenarioIds.join(', ')}`);
+    } else if (options.scenario) {
+      // Filter by single scenario ID
       scenarios = scenarios.filter(s => s.id === options.scenario);
     }
 

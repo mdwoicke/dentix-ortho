@@ -19,11 +19,13 @@
     "fixes:tool": "ts-node src/index.ts fixes --type tool",
     "fix-report": "ts-node src/index.ts fix-report",
     "fix-status": "ts-node src/index.ts fix-status",
+    "analyze": "ts-node src/index.ts analyze",
     "build": "tsc",
     "clean": "rimraf dist"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",
+    "@faker-js/faker": "^10.1.0",
     "axios": "^1.6.7",
     "better-sqlite3": "^9.4.0",
     "chalk": "^4.1.2",

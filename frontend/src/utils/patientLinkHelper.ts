@@ -13,6 +13,37 @@ export interface ExtractedPatient {
 }
 
 /**
+ * Safely parse a payload that might be a string or object
+ * Handles double-encoded JSON strings
+ */
+function parsePayload(payload: any): any {
+  if (!payload) return null;
+
+  // If it's already an object, return it
+  if (typeof payload === 'object') return payload;
+
+  // If it's a string, try to parse it (possibly multiple times for double-encoding)
+  if (typeof payload === 'string') {
+    try {
+      let parsed = JSON.parse(payload);
+      // Check if the result is still a string (double-encoded)
+      while (typeof parsed === 'string') {
+        try {
+          parsed = JSON.parse(parsed);
+        } catch {
+          break;
+        }
+      }
+      return parsed;
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+/**
  * Extract patient info from a single payload object (recursive)
  */
 function extractPatientFromObject(obj: any): ExtractedPatient | null {
@@ -31,12 +62,14 @@ function extractPatientFromObject(obj: any): ExtractedPatient | null {
   ];
   const firstNameFields = [
     'firstName', 'FirstName', 'first_name', 'persFirstName',
+    'patientFirstName', 'PatientFirstName', 'patient_first_name',
     'Child1_FirstName', 'Child2_FirstName', 'Child3_FirstName',
     'child1_firstname', 'child2_firstname', 'child3_firstname',
     'caller_first_name', 'Caller_First_Name',
   ];
   const lastNameFields = [
     'lastName', 'LastName', 'last_name', 'persLastName',
+    'patientLastName', 'PatientLastName', 'patient_last_name',
     'Child1_LastName', 'Child2_LastName', 'Child3_LastName',
     'child1_lastname', 'child2_lastname', 'child3_lastname',
     'caller_last_name', 'Caller_Last_Name',
@@ -126,17 +159,80 @@ function searchForPatients(obj: any, patients: Map<string, ExtractedPatient>): v
 }
 
 /**
+ * Extract name fields from an object (non-recursive, top-level only)
+ */
+function extractNamesFromObject(obj: any): { firstName?: string; lastName?: string; fullName?: string } {
+  if (!obj || typeof obj !== 'object') return {};
+
+  const firstNameFields = [
+    'firstName', 'FirstName', 'first_name', 'persFirstName',
+    'patientFirstName', 'PatientFirstName', 'patient_first_name',
+    'Child1_FirstName', 'Child2_FirstName', 'Child3_FirstName',
+  ];
+  const lastNameFields = [
+    'lastName', 'LastName', 'last_name', 'persLastName',
+    'patientLastName', 'PatientLastName', 'patient_last_name',
+    'Child1_LastName', 'Child2_LastName', 'Child3_LastName',
+  ];
+  const nameFields = ['fullName', 'FullName', 'patientName', 'PatientName', 'name', 'Name'];
+
+  let firstName: string | undefined;
+  let lastName: string | undefined;
+  let fullName: string | undefined;
+
+  for (const field of firstNameFields) {
+    if (obj[field] && typeof obj[field] === 'string') {
+      firstName = obj[field];
+      break;
+    }
+  }
+  for (const field of lastNameFields) {
+    if (obj[field] && typeof obj[field] === 'string') {
+      lastName = obj[field];
+      break;
+    }
+  }
+  for (const field of nameFields) {
+    if (obj[field] && typeof obj[field] === 'string') {
+      fullName = obj[field];
+      break;
+    }
+  }
+
+  return { firstName, lastName, fullName };
+}
+
+/**
  * Extract all patients from an API call's request and response payloads
+ * Special handling: if response has GUID but no name, check request for names
  */
 export function extractPatientsFromApiCall(apiCall: ApiCall): ExtractedPatient[] {
   const patients = new Map<string, ExtractedPatient>();
 
-  if (apiCall.requestPayload) {
-    searchForPatients(apiCall.requestPayload, patients);
+  // Parse payloads (handles string/object/double-encoded)
+  const requestData = parsePayload(apiCall.requestPayload);
+  const responseData = parsePayload(apiCall.responsePayload);
+
+  if (requestData) {
+    searchForPatients(requestData, patients);
   }
 
-  if (apiCall.responsePayload) {
-    searchForPatients(apiCall.responsePayload, patients);
+  if (responseData) {
+    searchForPatients(responseData, patients);
+  }
+
+  // If we found patients with "Unknown Patient" name, try to get names from request
+  for (const [guid, patient] of patients.entries()) {
+    if (patient.fullName === 'Unknown Patient' && requestData) {
+      const names = extractNamesFromObject(requestData);
+      if (names.fullName) {
+        patient.fullName = names.fullName;
+      } else if (names.firstName || names.lastName) {
+        patient.fullName = [names.firstName, names.lastName].filter(Boolean).join(' ');
+        patient.firstName = names.firstName;
+        patient.lastName = names.lastName;
+      }
+    }
   }
 
   return Array.from(patients.values());

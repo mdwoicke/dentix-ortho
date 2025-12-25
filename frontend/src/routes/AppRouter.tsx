@@ -18,6 +18,8 @@ import {
   TestRunDetail,
   TestRunHistory,
   AgentTuning,
+  TestCasesPage,
+  GoalTestCasesPage,
 } from '../pages/TestMonitor';
 import { NotFound } from '../pages/NotFound';
 import { ROUTES } from '../utils/constants';
@@ -45,6 +47,8 @@ export function AppRouter() {
           {/* Test Monitor - Nested Routes */}
           <Route path="test-monitor" element={<TestMonitorLayout />}>
             <Route index element={<TestMonitorDashboard />} />
+            <Route path="cases" element={<TestCasesPage />} />
+            <Route path="goal-cases" element={<GoalTestCasesPage />} />
             <Route path="history" element={<TestRunHistory />} />
             <Route path="tuning" element={<AgentTuning />} />
             <Route path="run/:runId" element={<TestRunDetail />} />
