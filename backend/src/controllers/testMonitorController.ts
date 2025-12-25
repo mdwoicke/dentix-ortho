@@ -6,6 +6,7 @@
 import { Request, Response, NextFunction } from 'express';
 import BetterSqlite3 from 'better-sqlite3';
 import path from 'path';
+import { spawn } from 'child_process';
 import * as promptService from '../services/promptService';
 
 // Path to test-agent database
@@ -711,7 +712,7 @@ export async function streamTestRun(req: Request, res: Response, _next: NextFunc
  * GET /api/test-monitor/prompts
  * List all prompt files with their current version info
  */
-export async function getPromptFiles(req: Request, res: Response, next: NextFunction): Promise<void> {
+export async function getPromptFiles(_req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const files = promptService.getPromptFiles();
     res.json({ success: true, data: files });
@@ -826,6 +827,444 @@ export async function syncPromptToDisk(req: Request, res: Response, next: NextFu
     }
 
     res.json({ success: true, message: 'Prompt synced to disk successfully' });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ============================================================================
+// TEST EXECUTION ENDPOINTS
+// ============================================================================
+
+// Track active test executions
+const activeExecutions: Map<string, { process: any; status: 'running' | 'paused' | 'stopped' }> = new Map();
+
+/**
+ * GET /api/test-monitor/scenarios
+ * List available test scenarios from test-agent
+ * Note: Scenarios are defined in TypeScript at test-agent/src/tests/scenarios/
+ */
+export async function getScenarios(_req: Request, res: Response, _next: NextFunction): Promise<void> {
+  // Scenario metadata extracted from test-agent/src/tests/scenarios/*.ts
+  // This is hardcoded to avoid importing TypeScript modules from test-agent at runtime
+  const scenarios = [
+    // Happy Path scenarios (3)
+    {
+      id: 'HAPPY-001',
+      name: 'New Patient Ortho Consult - Single Child',
+      description: 'Complete new patient orthodontic consult booking for one child',
+      category: 'happy-path',
+      tags: ['booking', 'new-patient', 'single-child', 'priority-high'],
+      stepCount: 15,
+    },
+    {
+      id: 'HAPPY-002',
+      name: 'New Patient Ortho Consult - Two Siblings',
+      description: 'Book new patient orthodontic consult for two children (siblings)',
+      category: 'happy-path',
+      tags: ['booking', 'new-patient', 'siblings', 'multiple-children'],
+      stepCount: 12,
+    },
+    {
+      id: 'HAPPY-003',
+      name: 'Quick Info Provider - All Details Upfront',
+      description: 'Parent provides extensive information upfront',
+      category: 'happy-path',
+      tags: ['booking', 'quick-path', 'efficient'],
+      stepCount: 6,
+    },
+    // Edge Case scenarios (5)
+    {
+      id: 'EDGE-001',
+      name: 'Existing Patient - Transfer to Specialist',
+      description: 'Existing patient should be transferred to live agent (not new patient consult)',
+      category: 'edge-case',
+      tags: ['existing-patient', 'transfer'],
+      stepCount: 6,
+    },
+    {
+      id: 'EDGE-002',
+      name: 'Multiple Children - Three Siblings',
+      description: 'Handle booking for three siblings in same call',
+      category: 'edge-case',
+      tags: ['siblings', 'multiple-children'],
+      stepCount: 7,
+    },
+    {
+      id: 'EDGE-003',
+      name: 'User Changes Mind Mid-Flow',
+      description: 'User wants to change number of children mid-conversation',
+      category: 'edge-case',
+      tags: ['flow-change', 'user-correction'],
+      stepCount: 5,
+    },
+    {
+      id: 'EDGE-004',
+      name: 'Previous Orthodontic Treatment',
+      description: 'Child has had previous orthodontic treatment elsewhere',
+      category: 'edge-case',
+      tags: ['previous-treatment', 'ortho-history'],
+      stepCount: 7,
+    },
+    {
+      id: 'EDGE-005',
+      name: 'Not Orthodontic - General Dentistry',
+      description: 'Caller asks about general dentistry instead of orthodontics',
+      category: 'edge-case',
+      tags: ['wrong-intent', 'general-dentistry'],
+      stepCount: 2,
+    },
+    // Error Handling scenarios (6)
+    {
+      id: 'ERR-001',
+      name: 'Gibberish Input Recovery',
+      description: 'Handle completely nonsensical user input and recover',
+      category: 'error-handling',
+      tags: ['input-validation', 'gibberish'],
+      stepCount: 2,
+    },
+    {
+      id: 'ERR-002',
+      name: 'Empty or Whitespace Input',
+      description: 'Handle empty or whitespace-only messages',
+      category: 'error-handling',
+      tags: ['input-validation', 'empty'],
+      stepCount: 2,
+    },
+    {
+      id: 'ERR-003',
+      name: 'Very Long Input',
+      description: 'Handle extremely long user messages',
+      category: 'error-handling',
+      tags: ['input-validation', 'length'],
+      stepCount: 1,
+    },
+    {
+      id: 'ERR-004',
+      name: 'Cancel Mid-Conversation',
+      description: 'User wants to cancel/abandon booking process',
+      category: 'error-handling',
+      tags: ['cancellation', 'flow-control'],
+      stepCount: 4,
+    },
+    {
+      id: 'ERR-005',
+      name: 'Special Characters in Name',
+      description: 'Handle special characters in parent/child names',
+      category: 'error-handling',
+      tags: ['input-validation', 'special-chars'],
+      stepCount: 3,
+    },
+    {
+      id: 'ERR-006',
+      name: 'Unclear Number of Children',
+      description: 'Handle vague or unclear response about number of children',
+      category: 'error-handling',
+      tags: ['clarification', 'ambiguous-input'],
+      stepCount: 5,
+    },
+  ];
+
+  res.json({ success: true, scenarios });
+}
+
+/**
+ * POST /api/test-monitor/runs/start
+ * Start a new test execution
+ */
+export async function startExecution(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { categories, scenarios: scenarioIds, config } = req.body;
+
+    if (!categories?.length && !scenarioIds?.length) {
+      res.status(400).json({ success: false, error: 'At least one category or scenario must be specified' });
+      return;
+    }
+
+    const testAgentDir = path.resolve(__dirname, '../../../test-agent');
+
+    // Build command arguments
+    const args = ['run', 'run', '--'];
+
+    // Add category filter
+    if (categories?.length) {
+      args.push('--category', categories[0]); // test-agent accepts one category at a time
+    }
+
+    // Add concurrency if specified
+    const concurrency = Math.min(Math.max(config?.concurrency || 1, 1), 10);
+    if (concurrency > 1) {
+      args.push('--concurrency', String(concurrency));
+      console.log(`[Execution] Parallel execution with ${concurrency} workers`);
+    }
+
+    console.log(`[Execution] Starting: npm ${args.join(' ')} in ${testAgentDir}`);
+
+    const child = spawn('npm', args, {
+      cwd: testAgentDir,
+      shell: true,
+      env: { ...process.env },
+      detached: false,
+    });
+
+    // Generate a temporary run ID (the real one will come from test-agent)
+    const tempRunId = `run-${new Date().toISOString().split('T')[0]}-${Math.random().toString(16).slice(2, 10)}`;
+
+    activeExecutions.set(tempRunId, {
+      process: child,
+      status: 'running',
+    });
+
+    child.stdout.on('data', (data) => {
+      console.log(`[Execution] ${data.toString().trim()}`);
+    });
+
+    child.stderr.on('data', (data) => {
+      console.error(`[Execution Error] ${data.toString().trim()}`);
+    });
+
+    child.on('close', (code) => {
+      console.log(`[Execution] Process exited with code ${code}`);
+      activeExecutions.delete(tempRunId);
+    });
+
+    child.on('error', (err) => {
+      console.error(`[Execution] Process error:`, err);
+      activeExecutions.delete(tempRunId);
+    });
+
+    res.json({
+      success: true,
+      runId: tempRunId,
+      status: 'started',
+      message: 'Test execution started',
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * POST /api/test-monitor/runs/:runId/stop
+ * Stop a running test execution
+ */
+export async function stopExecution(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { runId } = req.params;
+
+    const execution = activeExecutions.get(runId);
+    if (!execution) {
+      res.status(404).json({ success: false, error: 'No active execution found for this run' });
+      return;
+    }
+
+    // Kill the process
+    if (execution.process && !execution.process.killed) {
+      execution.process.kill('SIGTERM');
+    }
+
+    execution.status = 'stopped';
+    activeExecutions.delete(runId);
+
+    res.json({ success: true, message: 'Execution stopped' });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * POST /api/test-monitor/runs/:runId/pause
+ * Pause a running test execution (sends SIGSTOP)
+ */
+export async function pauseExecution(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { runId } = req.params;
+
+    const execution = activeExecutions.get(runId);
+    if (!execution) {
+      res.status(404).json({ success: false, error: 'No active execution found for this run' });
+      return;
+    }
+
+    if (execution.status !== 'running') {
+      res.status(400).json({ success: false, error: 'Execution is not running' });
+      return;
+    }
+
+    // Note: SIGSTOP may not work on Windows - this is a best-effort implementation
+    if (execution.process && !execution.process.killed) {
+      try {
+        execution.process.kill('SIGSTOP');
+        execution.status = 'paused';
+      } catch (e) {
+        console.warn('[Execution] SIGSTOP not supported on this platform');
+      }
+    }
+
+    res.json({ success: true, message: 'Execution paused' });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * POST /api/test-monitor/runs/:runId/resume
+ * Resume a paused test execution (sends SIGCONT)
+ */
+export async function resumeExecution(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { runId } = req.params;
+
+    const execution = activeExecutions.get(runId);
+    if (!execution) {
+      res.status(404).json({ success: false, error: 'No active execution found for this run' });
+      return;
+    }
+
+    if (execution.status !== 'paused') {
+      res.status(400).json({ success: false, error: 'Execution is not paused' });
+      return;
+    }
+
+    // Note: SIGCONT may not work on Windows - this is a best-effort implementation
+    if (execution.process && !execution.process.killed) {
+      try {
+        execution.process.kill('SIGCONT');
+        execution.status = 'running';
+      } catch (e) {
+        console.warn('[Execution] SIGCONT not supported on this platform');
+      }
+    }
+
+    res.json({ success: true, message: 'Execution resumed' });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ============================================================================
+// DIAGNOSIS / AGENT TUNING ENDPOINTS
+// ============================================================================
+
+/**
+ * POST /api/test-monitor/runs/:runId/diagnose
+ * Run failure analysis on a test run and generate fixes
+ */
+export async function runDiagnosis(req: Request, res: Response, next: NextFunction): Promise<void> {
+  const { runId } = req.params;
+  const { useLLM = true } = req.body;
+
+  try {
+    // Verify run exists
+    const db = getTestAgentDb();
+    const runRow = db.prepare(`
+      SELECT run_id, status, failed FROM test_runs WHERE run_id = ?
+    `).get(runId) as any;
+    db.close();
+
+    if (!runRow) {
+      res.status(404).json({ success: false, error: 'Test run not found' });
+      return;
+    }
+
+    if (runRow.failed === 0) {
+      res.json({
+        success: true,
+        message: 'No failures to analyze',
+        fixesGenerated: 0,
+      });
+      return;
+    }
+
+    // Run the test-agent analyze command
+    const testAgentDir = path.resolve(__dirname, '../../../test-agent');
+    const args = ['run', 'analyze', runId];
+    if (!useLLM) {
+      args.push('--', '--no-llm');
+    }
+
+    console.log(`[Diagnosis] Running: npm ${args.join(' ')} in ${testAgentDir}`);
+
+    const result = await new Promise<{
+      success: boolean;
+      fixesGenerated?: number;
+      analyzedCount?: number;
+      totalFailures?: number;
+      summary?: any;
+      error?: string;
+      output?: string;
+    }>((resolve) => {
+      const child = spawn('npm', args, {
+        cwd: testAgentDir,
+        shell: true,
+        env: { ...process.env },
+      });
+
+      let stdout = '';
+      let stderr = '';
+
+      child.stdout.on('data', (data) => {
+        stdout += data.toString();
+        console.log(`[Diagnosis] ${data.toString().trim()}`);
+      });
+
+      child.stderr.on('data', (data) => {
+        stderr += data.toString();
+        console.error(`[Diagnosis Error] ${data.toString().trim()}`);
+      });
+
+      child.on('close', (code) => {
+        // Parse the JSON result from the output
+        const jsonMatch = stdout.match(/__RESULT_JSON__\s*\n([\s\S]*?)$/);
+        if (jsonMatch) {
+          try {
+            const parsed = JSON.parse(jsonMatch[1].trim());
+            resolve(parsed);
+            return;
+          } catch (e) {
+            console.error('[Diagnosis] Failed to parse JSON result:', e);
+          }
+        }
+
+        // Fallback if no JSON found
+        if (code === 0) {
+          resolve({
+            success: true,
+            output: stdout,
+            fixesGenerated: 0,
+          });
+        } else {
+          resolve({
+            success: false,
+            error: stderr || `Process exited with code ${code}`,
+            output: stdout,
+          });
+        }
+      });
+
+      child.on('error', (err) => {
+        resolve({
+          success: false,
+          error: err.message,
+        });
+      });
+    });
+
+    if (result.success) {
+      res.json({
+        success: true,
+        message: `Analysis complete. Generated ${result.fixesGenerated || 0} fix(es).`,
+        fixesGenerated: result.fixesGenerated || 0,
+        analyzedCount: result.analyzedCount,
+        totalFailures: result.totalFailures,
+        summary: result.summary,
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        error: result.error || 'Diagnosis failed',
+      });
+    }
   } catch (error) {
     next(error);
   }

@@ -1,8 +1,10 @@
 /**
  * Main Test Agent Orchestrator
  * Coordinates test execution, analysis, and reporting
+ * Supports parallel execution with configurable concurrency
  */
 
+import { EventEmitter } from 'events';
 import { FlowiseClient } from './flowise-client';
 import { Cloud9Client } from './cloud9-client';
 import { TestRunner } from '../tests/test-runner';
@@ -19,6 +21,23 @@ export interface AgentOptions {
   scenario?: string;
   failedOnly?: boolean;
   watch?: boolean;
+  concurrency?: number; // Number of parallel workers (1-10, default 1)
+}
+
+export interface WorkerStatus {
+  workerId: number;
+  status: 'idle' | 'running' | 'completed' | 'error';
+  currentTestId: string | null;
+  currentTestName: string | null;
+  startedAt: string | null;
+}
+
+export interface ExecutionProgress {
+  total: number;
+  completed: number;
+  passed: number;
+  failed: number;
+  skipped: number;
 }
 
 export interface TestSuiteResult {
@@ -31,7 +50,7 @@ export interface TestSuiteResult {
   results: TestResult[];
 }
 
-export class TestAgent {
+export class TestAgent extends EventEmitter {
   private flowiseClient: FlowiseClient;
   private cloud9Client: Cloud9Client;
   private testRunner: TestRunner;
@@ -41,7 +60,18 @@ export class TestAgent {
   private consoleReporter: ConsoleReporter;
   private markdownReporter: MarkdownReporter;
 
+  // Worker status tracking
+  private workerStatuses: Map<number, WorkerStatus> = new Map();
+  private progress: ExecutionProgress = {
+    total: 0,
+    completed: 0,
+    passed: 0,
+    failed: 0,
+    skipped: 0,
+  };
+
   constructor() {
+    super();
     this.flowiseClient = new FlowiseClient();
     this.cloud9Client = new Cloud9Client();
     this.analyzer = new ResponseAnalyzer();
@@ -59,9 +89,22 @@ export class TestAgent {
 
   /**
    * Run the full test suite or filtered tests
+   * Supports parallel execution with configurable concurrency
    */
   async run(options: AgentOptions = {}): Promise<TestSuiteResult> {
+    const concurrency = Math.min(Math.max(options.concurrency || 1, 1), 10);
+
     console.log('\n=== E2E Test Agent Starting ===\n');
+
+    // Warn about rate limits for high concurrency
+    if (concurrency > 3) {
+      console.log(`⚠️  WARNING: Running with ${concurrency} workers may trigger API rate limits.`);
+      console.log('   Consider using concurrency <= 3 for stable execution.\n');
+    }
+
+    if (concurrency > 1) {
+      console.log(`🔄 Parallel execution enabled with ${concurrency} workers\n`);
+    }
 
     // Fetch sandbox data
     console.log('Fetching sandbox data...');
@@ -74,8 +117,65 @@ export class TestAgent {
     // Create test run record
     const runId = this.database.createTestRun();
 
+    // Initialize progress tracking
+    this.progress = {
+      total: scenarios.length,
+      completed: 0,
+      passed: 0,
+      failed: 0,
+      skipped: 0,
+    };
+
+    // Emit execution started event
+    this.emit('execution-started', { runId, config: { concurrency } });
+
     // Run tests
     const startTime = Date.now();
+    let results: TestResult[];
+
+    if (concurrency === 1) {
+      // Sequential execution (original behavior)
+      results = await this.runSequential(scenarios, runId);
+    } else {
+      // Parallel execution with worker pool
+      results = await this.runParallel(scenarios, runId, concurrency);
+    }
+
+    const duration = Date.now() - startTime;
+
+    // Calculate summary
+    const summary: TestSuiteResult = {
+      runId,
+      totalTests: results.length,
+      passed: results.filter(r => r.status === 'passed').length,
+      failed: results.filter(r => r.status === 'failed').length,
+      skipped: results.filter(r => r.status === 'skipped').length,
+      duration,
+      results,
+    };
+
+    // Update run record
+    this.database.completeTestRun(runId, summary);
+
+    // Emit execution completed event
+    this.emit('execution-completed', { runId, summary });
+
+    // Print summary
+    this.consoleReporter.printSummary(summary);
+
+    // Analyze and generate recommendations
+    const recommendations = await this.generateRecommendations(results);
+    if (recommendations.length > 0) {
+      this.consoleReporter.printRecommendations(recommendations);
+    }
+
+    return summary;
+  }
+
+  /**
+   * Run tests sequentially (original behavior)
+   */
+  private async runSequential(scenarios: TestCase[], runId: string): Promise<TestResult[]> {
     const results: TestResult[] = [];
 
     for (const scenario of scenarios) {
@@ -85,6 +185,9 @@ export class TestAgent {
         const result = await this.testRunner.runTest(scenario, runId);
         results.push(result);
         this.consoleReporter.printTestResult(result);
+
+        // Update progress
+        this.updateProgress(result.status);
 
         // Save transcript
         this.database.saveTranscript(result.id!, result.transcript);
@@ -105,35 +208,154 @@ export class TestAgent {
         results.push(errorResult);
         this.database.saveTestResult(errorResult);
         this.consoleReporter.printTestResult(errorResult);
+        this.updateProgress('failed');
       }
     }
 
-    const duration = Date.now() - startTime;
+    return results;
+  }
 
-    // Calculate summary
-    const summary: TestSuiteResult = {
-      runId,
-      totalTests: results.length,
-      passed: results.filter(r => r.status === 'passed').length,
-      failed: results.filter(r => r.status === 'failed').length,
-      skipped: results.filter(r => r.status === 'skipped').length,
-      duration,
-      results,
-    };
+  /**
+   * Run tests in parallel using a worker pool
+   */
+  private async runParallel(scenarios: TestCase[], runId: string, concurrency: number): Promise<TestResult[]> {
+    const results: TestResult[] = [];
+    const queue = [...scenarios];
 
-    // Update run record
-    this.database.completeTestRun(runId, summary);
-
-    // Print summary
-    this.consoleReporter.printSummary(summary);
-
-    // Analyze and generate recommendations
-    const recommendations = await this.generateRecommendations(results);
-    if (recommendations.length > 0) {
-      this.consoleReporter.printRecommendations(recommendations);
+    // Initialize workers
+    for (let i = 0; i < concurrency; i++) {
+      this.workerStatuses.set(i, {
+        workerId: i,
+        status: 'idle',
+        currentTestId: null,
+        currentTestName: null,
+        startedAt: null,
+      });
     }
 
-    return summary;
+    // Emit initial worker statuses
+    this.emitWorkerStatuses();
+
+    // Create worker promises
+    const workerPromises: Promise<TestResult[]>[] = [];
+
+    for (let workerId = 0; workerId < concurrency; workerId++) {
+      workerPromises.push(this.runWorker(workerId, queue, runId));
+    }
+
+    // Wait for all workers to complete
+    const workerResults = await Promise.all(workerPromises);
+
+    // Flatten results
+    for (const workerResult of workerResults) {
+      results.push(...workerResult);
+    }
+
+    return results;
+  }
+
+  /**
+   * Worker function that processes tests from the shared queue
+   */
+  private async runWorker(workerId: number, queue: TestCase[], runId: string): Promise<TestResult[]> {
+    const results: TestResult[] = [];
+
+    while (queue.length > 0) {
+      // Get next scenario from queue (thread-safe pop)
+      const scenario = queue.shift();
+      if (!scenario) break;
+
+      // Update worker status
+      this.updateWorkerStatus(workerId, 'running', scenario.id, scenario.name);
+
+      console.log(`[Worker ${workerId}] Starting: ${scenario.id} - ${scenario.name}`);
+
+      try {
+        const result = await this.testRunner.runTest(scenario, runId);
+        results.push(result);
+
+        // Update progress
+        this.updateProgress(result.status);
+
+        // Save transcript
+        this.database.saveTranscript(result.id!, result.transcript);
+
+        const statusIcon = result.status === 'passed' ? '✓' : '✗';
+        console.log(`[Worker ${workerId}] ${statusIcon} Completed: ${scenario.id} (${result.durationMs}ms)`);
+      } catch (error: any) {
+        const errorResult: TestResult = {
+          runId,
+          testId: scenario.id,
+          testName: scenario.name,
+          category: scenario.category,
+          status: 'error',
+          startedAt: new Date().toISOString(),
+          completedAt: new Date().toISOString(),
+          durationMs: 0,
+          errorMessage: error.message,
+          transcript: [],
+          findings: [],
+        };
+        results.push(errorResult);
+        this.database.saveTestResult(errorResult);
+        this.updateProgress('failed');
+
+        console.log(`[Worker ${workerId}] ✗ Error: ${scenario.id} - ${error.message}`);
+      }
+
+      // Mark worker as idle
+      this.updateWorkerStatus(workerId, 'idle', null, null);
+    }
+
+    // Mark worker as completed
+    this.updateWorkerStatus(workerId, 'completed', null, null);
+    console.log(`[Worker ${workerId}] Finished - no more tests in queue`);
+
+    return results;
+  }
+
+  /**
+   * Update worker status and emit event
+   */
+  private updateWorkerStatus(
+    workerId: number,
+    status: WorkerStatus['status'],
+    testId: string | null,
+    testName: string | null
+  ): void {
+    const workerStatus: WorkerStatus = {
+      workerId,
+      status,
+      currentTestId: testId,
+      currentTestName: testName,
+      startedAt: status === 'running' ? new Date().toISOString() : null,
+    };
+    this.workerStatuses.set(workerId, workerStatus);
+    this.emit('worker-status', workerStatus);
+    this.emitWorkerStatuses();
+  }
+
+  /**
+   * Emit all worker statuses
+   */
+  private emitWorkerStatuses(): void {
+    const statuses = Array.from(this.workerStatuses.values());
+    this.emit('workers-update', statuses);
+  }
+
+  /**
+   * Update and emit progress
+   */
+  private updateProgress(status: string): void {
+    this.progress.completed++;
+    if (status === 'passed') {
+      this.progress.passed++;
+    } else if (status === 'failed' || status === 'error') {
+      this.progress.failed++;
+    } else if (status === 'skipped') {
+      this.progress.skipped++;
+    }
+    this.emit('progress-update', { ...this.progress });
   }
 
   /**

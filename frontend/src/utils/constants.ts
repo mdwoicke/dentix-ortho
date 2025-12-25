@@ -17,6 +17,10 @@ export const ROUTES = {
   CALENDAR: '/calendar',
   SETTINGS: '/settings',
   TEST_MONITOR: '/test-monitor',
+  TEST_MONITOR_DASHBOARD: '/test-monitor',
+  TEST_MONITOR_HISTORY: '/test-monitor/history',
+  TEST_MONITOR_TUNING: '/test-monitor/tuning',
+  TEST_MONITOR_RUN_DETAIL: '/test-monitor/run/:runId',
 } as const;
 
 /**

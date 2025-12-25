@@ -147,3 +147,62 @@ export interface TestMonitorApiResponse<T> {
   data: T;
   error?: string;
 }
+
+// Test Execution Types
+export interface TestScenario {
+  id: string;
+  name: string;
+  description: string;
+  category: 'happy-path' | 'edge-case' | 'error-handling';
+  tags: string[];
+  stepCount: number;
+}
+
+export interface ExecutionConfig {
+  concurrency: number;
+  retryFailed: boolean;
+  timeoutMs: number;
+  enableSemanticEval: boolean;
+}
+
+export interface WorkerStatus {
+  workerId: number;
+  status: 'idle' | 'running' | 'error';
+  currentTestId: string | null;
+  currentTestName: string | null;
+  startedAt: string | null;
+}
+
+export interface ExecutionProgress {
+  total: number;
+  completed: number;
+  passed: number;
+  failed: number;
+  skipped: number;
+}
+
+export interface StartExecutionRequest {
+  categories: string[];
+  scenarios: string[];
+  config: ExecutionConfig;
+}
+
+export interface StartExecutionResponse {
+  runId: string;
+  status: 'started';
+}
+
+// Analytics Types
+export interface TrendDataPoint {
+  date: string;
+  value: number;
+  runId: string;
+}
+
+export interface RunComparisonResult {
+  run1: TestRunWithResults;
+  run2: TestRunWithResults;
+  regressions: string[];
+  improvements: string[];
+  unchanged: string[];
+}

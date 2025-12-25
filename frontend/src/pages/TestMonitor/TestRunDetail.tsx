@@ -1,9 +1,10 @@
 /**
- * TestMonitor Page
- * Dashboard for viewing Flowise test results, conversations, and API calls
+ * Test Run Detail Page
+ * View individual test run results, conversations, and API calls
  */
 
-import React, { useEffect, useRef, useCallback } from 'react';
+import React, { useEffect, useRef, useCallback, useState } from 'react';
+import { useParams } from 'react-router-dom';
 import { useAppDispatch, useAppSelector } from '../../hooks';
 import { PageHeader } from '../../components/layout';
 import { Button } from '../../components/ui';
@@ -61,8 +62,9 @@ import { subscribeToTestRun, type TestRunStreamEvent } from '../../services/api/
 import * as testMonitorApi from '../../services/api/testMonitorApi';
 import type { TestResult } from '../../types/testMonitor.types';
 
-export function TestMonitor() {
+export function TestRunDetail() {
   const dispatch = useAppDispatch();
+  const { runId } = useParams<{ runId: string }>();
 
   const runs = useAppSelector(selectTestRuns);
   const selectedRun = useAppSelector(selectSelectedRun);
@@ -82,6 +84,9 @@ export function TestMonitor() {
   const promptContent = useAppSelector(selectPromptContent);
   const promptHistory = useAppSelector(selectPromptHistory);
   const promptLoading = useAppSelector(selectPromptLoading);
+
+  // Diagnosis state
+  const [diagnosisRunning, setDiagnosisRunning] = useState(false);
 
   // Keep track of the EventSource connection
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -120,6 +125,13 @@ export function TestMonitor() {
     dispatch(fetchTestRuns({}));
     dispatch(fetchPromptFiles());
   }, [dispatch]);
+
+  // Auto-select run from URL parameter
+  useEffect(() => {
+    if (runId && !selectedRun) {
+      handleSelectRun(runId);
+    }
+  }, [runId, selectedRun]);
 
   // Subscribe to real-time updates when viewing a running test run
   useEffect(() => {
@@ -234,11 +246,31 @@ export function TestMonitor() {
     }
   };
 
+  // Handle running diagnosis on current run
+  const handleRunDiagnosis = async () => {
+    if (!selectedRun) return;
+
+    setDiagnosisRunning(true);
+    try {
+      const result = await testMonitorApi.runDiagnosis(selectedRun.runId);
+      console.log('[Diagnosis] Result:', result);
+
+      // Refresh fixes after diagnosis completes
+      if (result.success) {
+        dispatch(fetchFixes(selectedRun.runId));
+      }
+    } catch (error) {
+      console.error('[Diagnosis] Error:', error);
+    } finally {
+      setDiagnosisRunning(false);
+    }
+  };
+
   return (
     <div className="h-full flex flex-col">
       <PageHeader
-        title="Test Monitor"
-        subtitle="View Flowise test results, conversations, and API calls"
+        title="Test Run Detail"
+        subtitle={selectedRun ? `Run ${selectedRun.runId.slice(0, 8)}... - ${selectedRun.passed}/${selectedRun.totalTests} passed` : 'Select a run to view details'}
         action={
           <div className="flex items-center gap-3">
             {isStreaming && (
@@ -354,6 +386,9 @@ export function TestMonitor() {
               onUpdateStatus={handleUpdateFixStatus}
               onApplyFix={handleApplyFix}
               onCopyFullPrompt={handleCopyFullPrompt}
+              onRunDiagnosis={handleRunDiagnosis}
+              diagnosisRunning={diagnosisRunning}
+              hasFailedTests={(selectedRun?.failed || 0) > 0}
             />
           </ExpandablePanel>
 

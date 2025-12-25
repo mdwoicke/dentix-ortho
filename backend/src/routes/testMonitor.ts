@@ -10,6 +10,29 @@ import * as testMonitorController from '../controllers/testMonitorController';
 
 const router = Router();
 
+// ============================================================================
+// TEST EXECUTION ROUTES
+// ============================================================================
+
+// GET /api/test-monitor/scenarios - List available test scenarios
+router.get('/scenarios', testMonitorController.getScenarios);
+
+// POST /api/test-monitor/runs/start - Start test execution
+router.post('/runs/start', testMonitorController.startExecution);
+
+// POST /api/test-monitor/runs/:runId/stop - Stop execution
+router.post('/runs/:runId/stop', testMonitorController.stopExecution);
+
+// POST /api/test-monitor/runs/:runId/pause - Pause execution
+router.post('/runs/:runId/pause', testMonitorController.pauseExecution);
+
+// POST /api/test-monitor/runs/:runId/resume - Resume execution
+router.post('/runs/:runId/resume', testMonitorController.resumeExecution);
+
+// ============================================================================
+// TEST RUNS ROUTES
+// ============================================================================
+
 // GET /api/test-monitor/runs - List all test runs
 router.get('/runs', testMonitorController.getTestRuns);
 
@@ -19,6 +42,9 @@ router.get('/runs/:runId/stream', testMonitorController.streamTestRun);
 
 // GET /api/test-monitor/runs/:runId/fixes - Get fixes for a specific run
 router.get('/runs/:runId/fixes', testMonitorController.getFixesForRun);
+
+// POST /api/test-monitor/runs/:runId/diagnose - Run failure analysis and generate fixes
+router.post('/runs/:runId/diagnose', testMonitorController.runDiagnosis);
 
 // GET /api/test-monitor/runs/:runId - Get single test run with results
 router.get('/runs/:runId', testMonitorController.getTestRun);

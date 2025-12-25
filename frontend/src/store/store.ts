@@ -10,6 +10,7 @@ import referenceReducer from './slices/referenceSlice';
 import patientReducer from './slices/patientSlice';
 import appointmentReducer from './slices/appointmentSlice';
 import testMonitorReducer from './slices/testMonitorSlice';
+import testExecutionReducer from './slices/testExecutionSlice';
 
 /**
  * Configure and create the Redux store
@@ -22,6 +23,7 @@ export const store = configureStore({
     patients: patientReducer,
     appointments: appointmentReducer,
     testMonitor: testMonitorReducer,
+    testExecution: testExecutionReducer,
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({

@@ -18,6 +18,9 @@ import type {
   PromptVersionHistory,
   ApplyFixResult,
   TestMonitorApiResponse,
+  TestScenario,
+  StartExecutionRequest,
+  StartExecutionResponse,
 } from '../../types/testMonitor.types';
 
 // Base API URL
@@ -290,6 +293,101 @@ export async function syncPromptToDisk(
   const response = await post<{ success: boolean; message: string }>(
     `/test-monitor/prompts/${fileKey}/sync`,
     {}
+  );
+  return response;
+}
+
+// ============================================================================
+// TEST EXECUTION API
+// ============================================================================
+
+/**
+ * Get available test scenarios
+ */
+export async function getScenarios(): Promise<TestScenario[]> {
+  const response = await get<{ success: boolean; scenarios: TestScenario[] }>(
+    '/test-monitor/scenarios'
+  );
+  return response.scenarios;
+}
+
+/**
+ * Start test execution
+ */
+export async function startExecution(
+  request: StartExecutionRequest
+): Promise<StartExecutionResponse> {
+  const response = await post<{
+    success: boolean;
+    runId: string;
+    status: string;
+    message: string;
+  }>('/test-monitor/runs/start', request);
+  return { runId: response.runId, status: response.status as 'started' };
+}
+
+/**
+ * Stop test execution
+ */
+export async function stopExecution(runId: string): Promise<{ success: boolean; message: string }> {
+  const response = await post<{ success: boolean; message: string }>(
+    `/test-monitor/runs/${runId}/stop`,
+    {}
+  );
+  return response;
+}
+
+/**
+ * Pause test execution
+ */
+export async function pauseExecution(runId: string): Promise<{ success: boolean; message: string }> {
+  const response = await post<{ success: boolean; message: string }>(
+    `/test-monitor/runs/${runId}/pause`,
+    {}
+  );
+  return response;
+}
+
+/**
+ * Resume test execution
+ */
+export async function resumeExecution(runId: string): Promise<{ success: boolean; message: string }> {
+  const response = await post<{ success: boolean; message: string }>(
+    `/test-monitor/runs/${runId}/resume`,
+    {}
+  );
+  return response;
+}
+
+// ============================================================================
+// DIAGNOSIS / AGENT TUNING API
+// ============================================================================
+
+export interface DiagnosisResult {
+  success: boolean;
+  message: string;
+  fixesGenerated: number;
+  analyzedCount?: number;
+  totalFailures?: number;
+  summary?: {
+    promptFixes: number;
+    toolFixes: number;
+    highConfidenceFixes: number;
+    rootCauseBreakdown: Record<string, number>;
+  };
+  error?: string;
+}
+
+/**
+ * Run failure analysis on a test run and generate fixes
+ */
+export async function runDiagnosis(
+  runId: string,
+  options?: { useLLM?: boolean }
+): Promise<DiagnosisResult> {
+  const response = await post<DiagnosisResult>(
+    `/test-monitor/runs/${runId}/diagnose`,
+    { useLLM: options?.useLLM ?? true }
   );
   return response;
 }

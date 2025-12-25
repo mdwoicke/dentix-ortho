@@ -31,6 +31,7 @@ program
   .option('-s, --scenario <id>', 'Run specific scenario by ID')
   .option('-f, --failed', 'Re-run only previously failed tests')
   .option('-w, --watch', 'Watch mode - show real-time output')
+  .option('-n, --concurrency <number>', 'Number of parallel workers (1-10, default: 1)', '1')
   .action(async (options) => {
     try {
       const agent = new TestAgent();
@@ -45,11 +46,15 @@ program
       console.log(`  - Error Handling: ${summary.byCategory['error-handling']}`);
       console.log('');
 
+      // Parse concurrency option
+      const concurrency = parseInt(options.concurrency, 10) || 1;
+
       const result = await agent.run({
         category: options.category,
         scenario: options.scenario,
         failedOnly: options.failed,
         watch: options.watch,
+        concurrency,
       });
 
       // Save recommendations if there were failures
@@ -346,6 +351,7 @@ program
   .description('Run tests and generate agent fix recommendations using LLM analysis')
   .option('-c, --category <category>', 'Run tests in specific category')
   .option('-s, --scenario <id>', 'Run specific scenario by ID')
+  .option('-n, --concurrency <number>', 'Number of parallel workers (1-10, default: 1)', '1')
   .option('--no-llm', 'Use rule-based analysis only (no Claude API)')
   .action(async (options) => {
     try {
@@ -361,9 +367,13 @@ program
       // Run tests
       console.log('\n Phase 1: Running Tests...\n');
 
+      // Parse concurrency option
+      const concurrency = parseInt(options.concurrency, 10) || 1;
+
       const result = await agent.run({
         category: options.category,
         scenario: options.scenario,
+        concurrency,
       });
 
       if (result.failed === 0) {
@@ -623,6 +633,83 @@ program
 
     } catch (error: any) {
       reporter.printError(error.message);
+      process.exit(1);
+    }
+  });
+
+// Analyze command - Analyze failures from an existing run (without running tests)
+program
+  .command('analyze <runId>')
+  .description('Analyze failures from an existing test run and generate fixes')
+  .option('--no-llm', 'Use rule-based analysis only (no Claude API)')
+  .action(async (runId, options) => {
+    try {
+      const db = new Database();
+      db.initialize();
+
+      // Verify run exists
+      const runs = db.getRecentRuns(100);
+      const run = runs.find(r => r.runId === runId);
+      if (!run) {
+        console.error(`\n Error: Run not found: ${runId}\n`);
+        process.exit(1);
+      }
+
+      console.log('\n ANALYZING TEST RUN\n');
+      console.log('═'.repeat(60));
+      console.log(`Run ID: ${runId}`);
+      console.log(`Status: ${run.status}`);
+      console.log(`Tests: ${run.passed}/${run.totalTests} passed, ${run.failed} failed`);
+
+      if (run.failed === 0) {
+        console.log('\n All tests passed! No failures to analyze.\n');
+        // Output JSON for backend parsing
+        console.log('\n__RESULT_JSON__');
+        console.log(JSON.stringify({ success: true, fixesGenerated: 0, message: 'No failures to analyze' }));
+        process.exit(0);
+      }
+
+      console.log('\n Analyzing Failures...\n');
+
+      const analyzer = new AgentFailureAnalyzer(db);
+      const report = await analyzer.analyzeRun(runId, {
+        useLLM: options.llm !== false,
+        saveToDatabase: true,
+      });
+
+      // Print summary
+      console.log('\n');
+      console.log('═'.repeat(60));
+      console.log(' ANALYSIS COMPLETE');
+      console.log('═'.repeat(60));
+
+      console.log(`\n Failures Analyzed: ${report.analyzedCount}/${report.totalFailures}`);
+      console.log(` Fixes Generated: ${report.generatedFixes.length}`);
+      console.log(`   - Prompt fixes: ${report.summary.promptFixes}`);
+      console.log(`   - Tool fixes: ${report.summary.toolFixes}`);
+      console.log(`   - High confidence (80%+): ${report.summary.highConfidenceFixes}`);
+
+      if (Object.keys(report.summary.rootCauseBreakdown).length > 0) {
+        console.log('\n Root Cause Breakdown:');
+        for (const [cause, count] of Object.entries(report.summary.rootCauseBreakdown)) {
+          console.log(`   - ${cause}: ${count}`);
+        }
+      }
+
+      // Output JSON for backend parsing
+      console.log('\n__RESULT_JSON__');
+      console.log(JSON.stringify({
+        success: true,
+        fixesGenerated: report.generatedFixes.length,
+        analyzedCount: report.analyzedCount,
+        totalFailures: report.totalFailures,
+        summary: report.summary,
+      }));
+
+    } catch (error: any) {
+      console.error(`\n Error: ${error.message}\n`);
+      console.log('\n__RESULT_JSON__');
+      console.log(JSON.stringify({ success: false, error: error.message }));
       process.exit(1);
     }
   });

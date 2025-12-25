@@ -12,7 +12,13 @@ import { PatientDetail } from '../pages/Patients/PatientDetail';
 import { AppointmentList } from '../pages/Appointments/AppointmentList';
 import { AppointmentCalendar } from '../pages/Appointments/AppointmentCalendar';
 import { Settings } from '../pages/Settings/Settings';
-import { TestMonitor } from '../pages/TestMonitor/TestMonitor';
+import {
+  TestMonitorLayout,
+  TestMonitorDashboard,
+  TestRunDetail,
+  TestRunHistory,
+  AgentTuning,
+} from '../pages/TestMonitor';
 import { NotFound } from '../pages/NotFound';
 import { ROUTES } from '../utils/constants';
 
@@ -36,8 +42,13 @@ export function AppRouter() {
           {/* Settings */}
           <Route path={ROUTES.SETTINGS} element={<Settings />} />
 
-          {/* Test Monitor */}
-          <Route path={ROUTES.TEST_MONITOR} element={<TestMonitor />} />
+          {/* Test Monitor - Nested Routes */}
+          <Route path="test-monitor" element={<TestMonitorLayout />}>
+            <Route index element={<TestMonitorDashboard />} />
+            <Route path="history" element={<TestRunHistory />} />
+            <Route path="tuning" element={<AgentTuning />} />
+            <Route path="run/:runId" element={<TestRunDetail />} />
+          </Route>
 
           {/* Catch-all redirect to home for unknown routes within layout */}
           <Route path="*" element={<Navigate to={ROUTES.HOME} replace />} />
