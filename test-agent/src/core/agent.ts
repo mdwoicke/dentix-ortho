@@ -256,9 +256,21 @@ export class TestAgent extends EventEmitter {
 
   /**
    * Worker function that processes tests from the shared queue
+   * Each worker gets its own FlowiseClient and TestRunner to prevent session bleeding
    */
   private async runWorker(workerId: number, queue: TestCase[], runId: string): Promise<TestResult[]> {
     const results: TestResult[] = [];
+
+    // Create per-worker FlowiseClient and TestRunner to ensure session isolation
+    const workerFlowiseClient = new FlowiseClient();
+    const workerTestRunner = new TestRunner(
+      workerFlowiseClient,
+      this.cloud9Client,  // Cloud9Client can be shared (stateless HTTP client)
+      this.analyzer,
+      this.database
+    );
+
+    console.log(`[Worker ${workerId}] Initialized with session: ${workerFlowiseClient.getSessionId()}`);
 
     while (queue.length > 0) {
       // Get next scenario from queue (thread-safe pop)
@@ -271,7 +283,7 @@ export class TestAgent extends EventEmitter {
       console.log(`[Worker ${workerId}] Starting: ${scenario.id} - ${scenario.name}`);
 
       try {
-        const result = await this.testRunner.runTest(scenario, runId);
+        const result = await workerTestRunner.runTest(scenario, runId);
         results.push(result);
 
         // Update progress

@@ -234,6 +234,32 @@ export class TestRunner {
   }
 
   /**
+   * Extract just the conversational text from a response, excluding JSON payload
+   */
+  private extractAnswerText(response: string): string {
+    // Try to match ANSWER: ... PAYLOAD: format
+    const answerMatch = response.match(/^ANSWER:\s*([\s\S]*?)(?:\n\s*PAYLOAD:|$)/i);
+    if (answerMatch) {
+      return answerMatch[1].trim();
+    }
+
+    // Handle responses without ANSWER: prefix but with PAYLOAD:
+    const payloadIndex = response.indexOf('\nPAYLOAD:');
+    if (payloadIndex !== -1) {
+      return response.substring(0, payloadIndex).trim();
+    }
+
+    // Also check for PAYLOAD: without newline (edge case)
+    const payloadIndexAlt = response.indexOf('PAYLOAD:');
+    if (payloadIndexAlt !== -1 && payloadIndexAlt > 20) {
+      return response.substring(0, payloadIndexAlt).trim();
+    }
+
+    // No payload found, return full response
+    return response;
+  }
+
+  /**
    * Validate a response using hybrid approach (semantic + regex)
    */
   private async validateResponse(
@@ -242,9 +268,8 @@ export class TestRunner {
     context: TestContext,
     userMessage: string
   ): Promise<ValidationResult> {
-    // Extract answer text (exclude JSON payload from ANSWER: ... PAYLOAD: format)
-    const answerMatch = response.match(/^ANSWER:\s*([\s\S]*?)(?:\nPAYLOAD:|$)/i);
-    const textToCheck = answerMatch ? answerMatch[1].trim() : response;
+    // Extract answer text (exclude JSON payload)
+    const textToCheck = this.extractAnswerText(response);
 
     // FAST PATH: Critical error detection (only check answer text, not JSON payload)
     const criticalPatterns = [
@@ -308,9 +333,8 @@ export class TestRunner {
     step: ConversationStep,
     context: TestContext
   ): ValidationResult {
-    // Extract answer text only (exclude JSON payload from ANSWER: ... PAYLOAD: format)
-    const answerMatch = response.match(/^ANSWER:\s*([\s\S]*?)(?:\nPAYLOAD:|$)/i);
-    const textToCheck = answerMatch ? answerMatch[1].trim() : response;
+    // Extract answer text only (exclude JSON payload)
+    const textToCheck = this.extractAnswerText(response);
 
     for (const pattern of step.unexpectedPatterns) {
       const resolvedPattern =
