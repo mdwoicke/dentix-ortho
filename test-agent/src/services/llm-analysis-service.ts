@@ -36,6 +36,23 @@ export interface RootCause {
   explanation: string;
 }
 
+/**
+ * Classification of whether the issue is with the bot, test agent, or both
+ * Based on the "Golden Rule" from iva-prompt-tuning skill
+ */
+export interface FixClassification {
+  /** Where the issue originates - determines which system to fix */
+  issueLocation: 'bot' | 'test-agent' | 'both';
+  /** Confidence score from 0-1 */
+  confidence: number;
+  /** Explanation for the classification */
+  reasoning: string;
+  /** Would a real user say what the test agent said? */
+  userBehaviorRealistic: boolean;
+  /** Did the bot respond appropriately to the input? */
+  botResponseAppropriate: boolean;
+}
+
 export interface PromptFix {
   type: 'prompt';
   fixType: 'add-rule' | 'add-example' | 'clarify-instruction' |
@@ -74,6 +91,8 @@ export interface AnalysisResult {
   rootCause: RootCause;
   fixes: (PromptFix | ToolFix)[];
   summary: string;
+  /** Classification of bot vs test-agent issue */
+  classification?: FixClassification;
 }
 
 // ============================================================================
@@ -268,7 +287,29 @@ ${findingsSummary || 'No findings recorded'}
 
 ## YOUR TASK
 
-1. **Identify the ROOT CAUSE** of this failure. Categorize it as one of:
+### Step 0: DECISION FRAMEWORK CLASSIFICATION (Critical First Step!)
+
+Before analyzing the root cause, you MUST classify this failure using the "Golden Rule":
+
+**Answer these two questions:**
+1. **Would a REAL USER say what the test agent said?**
+   - Look at the user messages in the transcript
+   - Would an actual parent calling to schedule an appointment respond this way?
+   - Consider if the user response is natural, realistic, and what you'd expect from a real caller
+
+2. **Did the BOT respond appropriately to the user's input?**
+   - Given what the user said, is the bot's response reasonable?
+   - Did the bot understand the user's intent?
+   - Did the bot guide the conversation properly?
+
+**Classification Rules:**
+- **Bot Issue** (fix the Flowise prompt): Real user WOULD say this, but bot responded WRONG
+- **Test Agent Issue** (fix the test agent): Test agent behavior is UNREALISTIC
+- **Both** (fix bot FIRST): Both have problems, but bot fix takes priority
+
+### Step 1: IDENTIFY ROOT CAUSE
+
+Categorize as one of:
    - \`prompt-gap\`: Missing instruction in the system prompt
    - \`prompt-conflict\`: Conflicting instructions in the system prompt
    - \`tool-bug\`: Bug in the tool code (missing default, wrong parsing, etc.)
@@ -276,16 +317,23 @@ ${findingsSummary || 'No findings recorded'}
    - \`llm-hallucination\`: LLM generated unexpected response despite correct instructions
    - \`test-issue\`: The test expectation is wrong, not the agent
 
-2. **Generate SPECIFIC FIXES** with:
+### Step 2: GENERATE SPECIFIC FIXES with:
    - Target file (system prompt or tool file)
    - Exact location (section name, function name, or line to insert after)
    - Complete replacement/addition code
    - Confidence score (0.0 to 1.0)
    - Priority (critical, high, medium, low)
 
-3. Respond in this exact JSON format:
+### Step 3: Respond in this exact JSON format:
 \`\`\`json
 {
+  "classification": {
+    "issueLocation": "bot|test-agent|both",
+    "confidence": 0.9,
+    "reasoning": "Brief explanation of why this classification",
+    "userBehaviorRealistic": true,
+    "botResponseAppropriate": false
+  },
   "rootCause": {
     "type": "prompt-gap|prompt-conflict|tool-bug|tool-missing-default|llm-hallucination|test-issue",
     "evidence": ["evidence 1", "evidence 2"],
@@ -312,6 +360,8 @@ ${findingsSummary || 'No findings recorded'}
 }
 \`\`\`
 
+**IMPORTANT:** The classification field is REQUIRED. Always assess user behavior realism and bot response appropriateness before generating fixes.
+
 Be specific and actionable. Generate complete code that can be directly applied.`;
   }
 
@@ -328,6 +378,15 @@ Be specific and actionable. Generate complete code that can be directly applied.
     try {
       const jsonStr = jsonMatch[1] || jsonMatch[0];
       const parsed = JSON.parse(jsonStr);
+
+      // Parse classification (new Decision Framework field)
+      const classification: FixClassification | undefined = parsed.classification ? {
+        issueLocation: parsed.classification.issueLocation || 'bot',
+        confidence: parsed.classification.confidence || 0.5,
+        reasoning: parsed.classification.reasoning || 'No reasoning provided',
+        userBehaviorRealistic: parsed.classification.userBehaviorRealistic ?? true,
+        botResponseAppropriate: parsed.classification.botResponseAppropriate ?? false,
+      } : undefined;
 
       // Validate and normalize the parsed result
       const rootCause: RootCause = {
@@ -369,6 +428,7 @@ Be specific and actionable. Generate complete code that can be directly applied.
         rootCause,
         fixes,
         summary: parsed.summary || 'Analysis complete',
+        classification,
       };
     } catch (error) {
       return this.createFallbackResult(context, responseText);
@@ -460,6 +520,17 @@ Be specific and actionable. Generate complete code that can be directly applied.
       }
     }
 
+    // Default classification for rule-based analysis: assume bot issue
+    // since we can't assess user behavior realism without LLM
+    // Note: rootCauseType can only be 'prompt-gap' or 'tool-bug', never 'test-issue'
+    const classification: FixClassification = {
+      issueLocation: 'bot', // Rule-based analysis always assumes bot issue
+      confidence: 0.6,
+      reasoning: 'Rule-based classification - LLM analysis recommended for accurate assessment',
+      userBehaviorRealistic: true, // Assume user behavior is OK in rule-based
+      botResponseAppropriate: false, // Assume bot has issue since test failed
+    };
+
     return {
       rootCause: {
         type: rootCauseType,
@@ -473,6 +544,7 @@ Be specific and actionable. Generate complete code that can be directly applied.
       summary: fixes.length > 0
         ? `Found ${fixes.length} potential fix(es) based on pattern analysis`
         : 'No automatic fixes generated - LLM analysis recommended',
+      classification,
     };
   }
 }

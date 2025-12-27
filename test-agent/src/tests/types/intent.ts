@@ -105,20 +105,34 @@ export interface IntentDetectionResult {
  */
 export const INTENT_KEYWORDS: Record<AgentIntent, RegExp[]> = {
   'greeting': [/\b(hi|hello|welcome|good morning|good afternoon)\b/i, /\bmy name is allie\b/i],
-  'saying_goodbye': [/\b(goodbye|bye|thank you for calling|have a great day)\b/i],
+  'saying_goodbye': [
+    /\b(goodbye|bye bye)\b/i,                    // Explicit goodbye
+    /\bhave a (great|wonderful|nice) day\b/i,    // Farewell wishes
+    /\bthank you for calling.*have a\b/i,        // "Thank you for calling! Have a great day"
+    /\btake care\b/i,                            // "Take care!"
+    /\bwe('ll| will) (see you|talk to you)\b/i,  // "We'll see you on Monday!"
+  ],
 
   'asking_parent_name': [/\b(your name|first and last name|full name)\b/i, /\bmay i have your.*name\b/i],
   'asking_spell_name': [/\b(spell|spelling|s-p-e-l-l)\b/i],
   'asking_phone': [
-    /\b(phone|number|reach you|contact)\b/i,
-    /\bbest number\b/i,           // "is that the best number to reach you?"
-    /\bnumber is ending\b/i,      // "your number is ending in..."
-    /\bcaller id\b/i,             // references to caller ID
+    /\bphone\s*number\b/i,                    // "What is your phone number?"
+    /\bbest number\b/i,                       // "is that the best number to reach you?"
+    /\bnumber is ending\b/i,                  // "your number is ending in..."
+    /\bcaller id\b/i,                         // references to caller ID
+    /\bis that (the|a|your).*number\b/i,      // "is that the number to reach you?"
+    /\bwhat.*(phone|number|contact)\b/i,      // "What is your phone/contact number?"
+    /\bcan i (have|get) your.*(phone|number)\b/i, // "Can I have your phone number?"
   ],
   'asking_email': [/\b(email|e-mail)\b/i],
 
   'asking_child_count': [/\b(how many|number of).*child/i, /\bchildren.*coming in\b/i],
-  'asking_child_name': [/\b(child'?s? name|name of.*child)\b/i],
+  'asking_child_name': [
+    /\bchild'?s?\s+(?:\w+\s+){0,4}name\b/i,   // "child's first and last name" - limit to 4 words between
+    /\bname\s+of\s+(?:your\s+)?child\b/i,     // "name of your child"
+    /\bwhat is (your )?child'?s?\b/i,         // "What is your child's..."
+    /\bpatient'?s?\s+(?:\w+\s+){0,3}name\b/i, // "patient's name", "patient's first name"
+  ],
   'asking_child_dob': [/\b(birth|birthday|born|date of birth|dob)\b/i],
   'asking_child_age': [/\b(how old|age)\b/i],
 
@@ -126,10 +140,31 @@ export const INTENT_KEYWORDS: Record<AgentIntent, RegExp[]> = {
   'asking_previous_visit': [/\b(visited|been to|previous|before)\b/i],
   'asking_previous_ortho': [/\b(orthodont|braces|retainer|treatment before)\b/i],
 
-  'asking_insurance': [/\b(insurance|coverage|carrier|provider)\b/i],
-  'asking_special_needs': [/\b(special|condition|allerg|need to know|aware of)\b/i],
-  'asking_time_preference': [/\b(time|when|schedule|appointment|availability|prefer)\b/i],
-  'asking_location_preference': [/\b(location|office|alleghany|philadelphia)\b/i],
+  'asking_insurance': [
+    /\bwhat (kind of |type of )?(insurance|coverage)\b/i,  // "What kind of insurance?"
+    /\bwho is your (insurance|carrier|provider)\b/i,       // "Who is your insurance provider?"
+    /\bdo you have (insurance|coverage)\b/i,               // "Do you have insurance?"
+    /\b(insurance|carrier|provider).*(do you have|what is)\b/i, // "What insurance do you have?"
+  ],
+  'asking_special_needs': [
+    /\bspecial needs\b/i,                            // "Do they have special needs?"
+    /\bconditions? we should (know|be aware)\b/i,   // "conditions we should be aware of"
+    /\ballerg(y|ies|ic)\b/i,                         // allergies
+    /\bshould we be aware of\b/i,                    // "anything we should be aware of"
+    /\bneed to know about\b/i,                       // "anything we need to know about"
+  ],
+  'asking_time_preference': [
+    /\b(prefer|preference).*(time|morning|afternoon|day)\b/i,  // "Do you prefer morning or afternoon?"
+    /\b(when|what time).*(work|available|convenient)\b/i,      // "When works for you?"
+    /\bmorning or afternoon\b/i,                                // Direct question
+    /\bwhat (time|day).*(prefer|work)\b/i,                     // "What time works best?"
+  ],
+  'asking_location_preference': [
+    /\bwhich (location|office)\b/i,                    // "Which location would you prefer?"
+    /\b(prefer|preference).*(location|office)\b/i,     // "Do you have a location preference?"
+    /\balleghany or philadelphia\b/i,                  // Direct question
+    /\bphiladelphia or alleghany\b/i,                  // Direct question (reverse order)
+  ],
 
   'confirming_information': [/\b(confirm|correct|verify|got it|thank you)\b/i],
   'confirming_spelling': [/\b(spelled|s-\w+-\w+)\b/i],
@@ -157,6 +192,10 @@ export const INTENT_KEYWORDS: Record<AgentIntent, RegExp[]> = {
     /\bI have booked\b/i,
     /\byour appointment is confirmed\b/i,
     /\bappointment.*set\b/i,
+    // Patterns for when bot uses "is being scheduled" language (should be fixed in Flowise prompt)
+    /\bappointment is being scheduled\b/i,
+    /\blet me get that booked\b/i,
+    /\bI'll confirm as soon as.*booked\b/i,
   ],
 
   'initiating_transfer': [/\b(transfer|connect|live agent|specialist|hold)\b/i],
@@ -181,31 +220,32 @@ const INTENT_PRIORITY_ORDER: AgentIntent[] = [
   'offering_time_slots',
 
   // Specific questions - check BEFORE confirmations to avoid misclassification
-  // (e.g., "is that the best number to reach you?" should be asking_phone, not confirming_information)
+  // IMPORTANT: More specific intents must come BEFORE less specific ones
+  // special_needs before insurance (bot often confirms insurance then asks about special needs)
+  'asking_special_needs',    // "special needs/conditions" - check FIRST (often combined with insurance confirmation)
+  'asking_insurance',        // "what kind of insurance" - more specific patterns now
+  'asking_time_preference',  // "prefer morning/afternoon" - specific
+  'asking_location_preference', // "which location/office" - specific
+
+  // Child questions - must come before phone but after insurance/preferences
+  'asking_child_count',  // "how many children" - specific pattern
+  'asking_child_dob',    // "date of birth" - might match confirmations
+  'asking_child_age',
+  'asking_child_name',
   'asking_spell_name',
   'asking_phone',  // Phone confirmation from caller ID should map here
   'asking_email',
-  'asking_child_dob',
-  'asking_child_age',
-  'asking_child_name',
-  'asking_child_count',
   'asking_parent_name',
 
-  // Specific confirmations - check AFTER specific questions
-  'asking_proceed_confirmation',
-  'confirming_spelling',
-  'confirming_information',
-
-  // Patient status
+  // Patient status - check BEFORE confirmations to avoid "Thank you" prefix matching
   'asking_new_patient',
   'asking_previous_ortho',
   'asking_previous_visit',
 
-  // Preferences (less specific patterns - checked last)
-  'asking_insurance',
-  'asking_special_needs',
-  'asking_location_preference',
-  'asking_time_preference',
+  // Specific confirmations - check AFTER patient status questions
+  'asking_proceed_confirmation',
+  'confirming_spelling',
+  'confirming_information',
 
   // Error handling
   'handling_error',
