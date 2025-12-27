@@ -21,6 +21,58 @@ const classificationBorderColors: Record<string, string> = {
   'unknown': 'border-l-4 border-l-gray-400',
 };
 
+// Fix category types for grouping by target file
+type FixCategory = 'prompt' | 'tool' | 'test-agent';
+
+/**
+ * Categorize a fix by its target file path
+ * - prompt: Flowise system prompts (docs/Chord_Cloud9_SystemPrompt*.md)
+ * - tool: Flowise tools (docs/chord_dso_*.js)
+ * - test-agent: Test agent code (test-agent/src/*)
+ */
+function getFixCategory(targetFile: string): FixCategory {
+  const normalized = targetFile.toLowerCase();
+  if (normalized.includes('systemprompt') || normalized.endsWith('.md')) return 'prompt';
+  if (normalized.includes('chord_dso') || (normalized.includes('docs/') && normalized.endsWith('.js'))) return 'tool';
+  if (normalized.includes('test-agent/')) return 'test-agent';
+  return 'prompt'; // Default to prompt for bot-related fixes
+}
+
+// Category styling configuration
+const categoryConfig: Record<FixCategory, {
+  icon: string;
+  label: string;
+  bgColor: string;
+  textColor: string;
+  borderColor: string;
+  headerBg: string;
+}> = {
+  'prompt': {
+    icon: '🟣',
+    label: 'Flowise Prompt Fixes',
+    bgColor: 'bg-purple-50 dark:bg-purple-900/20',
+    textColor: 'text-purple-700 dark:text-purple-300',
+    borderColor: 'border-purple-200 dark:border-purple-800',
+    headerBg: 'bg-purple-100 dark:bg-purple-900/40',
+  },
+  'tool': {
+    icon: '🔵',
+    label: 'Flowise Tool Fixes',
+    bgColor: 'bg-blue-50 dark:bg-blue-900/20',
+    textColor: 'text-blue-700 dark:text-blue-300',
+    borderColor: 'border-blue-200 dark:border-blue-800',
+    headerBg: 'bg-blue-100 dark:bg-blue-900/40',
+  },
+  'test-agent': {
+    icon: '🟠',
+    label: 'Test Agent Fixes',
+    bgColor: 'bg-orange-50 dark:bg-orange-900/20',
+    textColor: 'text-orange-700 dark:text-orange-300',
+    borderColor: 'border-orange-200 dark:border-orange-800',
+    headerBg: 'bg-orange-100 dark:bg-orange-900/40',
+  },
+};
+
 interface FixesPanelProps {
   fixes: GeneratedFix[];
   loading?: boolean;
@@ -397,6 +449,134 @@ function FixDetailModal({ fix, onClose, conflicts, fixIndex }: FixDetailModalPro
             )}
           </div>
 
+          {/* Decision Framework - Phase 4 Enhancement */}
+          {fix.classification && (
+            <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+              <div className="px-4 py-3 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
+                <h4 className="text-sm font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+                  <svg className="w-4 h-4 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  Decision Framework
+                  <span className="text-xs font-normal text-gray-500 dark:text-gray-400">(Golden Rule Analysis)</span>
+                </h4>
+              </div>
+              <div className="p-4 space-y-3">
+                {/* Question 1: User behavior */}
+                <div className="flex items-center justify-between py-2 border-b border-gray-100 dark:border-gray-700">
+                  <span className="text-sm text-gray-700 dark:text-gray-300">
+                    Would a real user say this?
+                  </span>
+                  <span className={cn(
+                    'flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium',
+                    fix.classification.userBehaviorRealistic
+                      ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
+                      : 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400'
+                  )}>
+                    {fix.classification.userBehaviorRealistic ? (
+                      <>
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                        </svg>
+                        Yes (realistic)
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                        No (unrealistic)
+                      </>
+                    )}
+                  </span>
+                </div>
+
+                {/* Question 2: Bot response */}
+                <div className="flex items-center justify-between py-2 border-b border-gray-100 dark:border-gray-700">
+                  <span className="text-sm text-gray-700 dark:text-gray-300">
+                    Did the bot respond appropriately?
+                  </span>
+                  <span className={cn(
+                    'flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium',
+                    fix.classification.botResponseAppropriate
+                      ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
+                      : 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400'
+                  )}>
+                    {fix.classification.botResponseAppropriate ? (
+                      <>
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                        </svg>
+                        Yes (appropriate)
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                        No (needs fix)
+                      </>
+                    )}
+                  </span>
+                </div>
+
+                {/* Conclusion */}
+                <div className="pt-2">
+                  <div className={cn(
+                    'flex items-start gap-3 p-3 rounded-lg',
+                    fix.classification.issueLocation === 'bot'
+                      ? 'bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800'
+                      : fix.classification.issueLocation === 'test-agent'
+                        ? 'bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800'
+                        : 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800'
+                  )}>
+                    <div className={cn(
+                      'p-1.5 rounded-full shrink-0',
+                      fix.classification.issueLocation === 'bot'
+                        ? 'bg-purple-200 dark:bg-purple-800'
+                        : fix.classification.issueLocation === 'test-agent'
+                          ? 'bg-orange-200 dark:bg-orange-800'
+                          : 'bg-red-200 dark:bg-red-800'
+                    )}>
+                      <svg className={cn(
+                        'w-4 h-4',
+                        fix.classification.issueLocation === 'bot'
+                          ? 'text-purple-700 dark:text-purple-300'
+                          : fix.classification.issueLocation === 'test-agent'
+                            ? 'text-orange-700 dark:text-orange-300'
+                            : 'text-red-700 dark:text-red-300'
+                      )} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-sm font-semibold text-gray-900 dark:text-white">
+                          Conclusion:
+                        </span>
+                        <span className={cn(
+                          'text-xs font-medium px-2 py-0.5 rounded-full',
+                          fix.classification.issueLocation === 'bot'
+                            ? 'bg-purple-200 dark:bg-purple-900/50 text-purple-800 dark:text-purple-200'
+                            : fix.classification.issueLocation === 'test-agent'
+                              ? 'bg-orange-200 dark:bg-orange-900/50 text-orange-800 dark:text-orange-200'
+                              : 'bg-red-200 dark:bg-red-900/50 text-red-800 dark:text-red-200'
+                        )}>
+                          Fix {fix.classification.issueLocation === 'bot' ? 'Bot/Flowise' : fix.classification.issueLocation === 'test-agent' ? 'Test Agent' : 'Both'}
+                        </span>
+                      </div>
+                      {fix.classification.reasoning && (
+                        <p className="text-sm text-gray-600 dark:text-gray-400">
+                          {fix.classification.reasoning}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Root Cause */}
           {fix.rootCause && (
             <div>
@@ -512,6 +692,12 @@ export function FixesPanel({
   const [conflictModalOpen, setConflictModalOpen] = useState<ConflictGroup | null>(null);
   const [popoutFix, setPopoutFix] = useState<GeneratedFix | null>(null);
   const [classificationFilter, setClassificationFilter] = useState<ClassificationFilter>('all');
+  // Section expand/collapse state - bot sections expanded by default, test-agent collapsed
+  const [sectionExpanded, setSectionExpanded] = useState<Record<FixCategory, boolean>>({
+    'prompt': true,
+    'tool': true,
+    'test-agent': false,
+  });
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Sort fixes by classification (bot first, then both, then test-agent)
@@ -547,6 +733,27 @@ export function FixesPanel({
       return acc;
     }, {} as Record<string, number>);
   }, [fixes]);
+
+  // Group fixes by target file category (prompt, tool, test-agent)
+  const groupedFixes = useMemo(() => {
+    const groups: Record<FixCategory, GeneratedFix[]> = {
+      'prompt': [],
+      'tool': [],
+      'test-agent': [],
+    };
+
+    for (const fix of filteredFixes) {
+      const category = getFixCategory(fix.targetFile || '');
+      groups[category].push(fix);
+    }
+
+    return groups;
+  }, [filteredFixes]);
+
+  // Toggle section expansion
+  const toggleSection = (category: FixCategory) => {
+    setSectionExpanded(prev => ({ ...prev, [category]: !prev[category] }));
+  };
 
   // Check for Golden Rule violation: selecting test-agent fixes when bot fixes exist
   const pendingBotFixes = useMemo(() => {
@@ -919,36 +1126,95 @@ export function FixesPanel({
         )}
       </div>
 
-      {filteredFixes.map((fix, index) => {
-        const isExpanded = expanded[fix.fixId];
-        const isCopied = copiedId === fix.fixId;
-        const classificationClass = fix.classification?.issueLocation || 'unknown';
-        const isDropdownOpen = dropdownOpen === fix.fixId;
-        const isApplyModalOpen = applyModalOpen === fix.fixId;
-        const isSelected = selectedFixIds.has(fix.fixId);
-        const isPending = fix.status === 'pending';
-        const conflictGroup = getConflictWarning(fix.fixId, conflicts);
-        const hasConflict = conflictGroup !== null;
+      {/* Grouped Collapsible Sections by Target Type */}
+      {(['prompt', 'tool', 'test-agent'] as FixCategory[]).map((category) => {
+        const categoryFixes = groupedFixes[category];
+        if (categoryFixes.length === 0) return null;
 
-        // Status-based card styling
-        const cardStyles = {
-          pending: 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700',
-          applied: 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800',
-          rejected: 'bg-gray-100 dark:bg-gray-900/50 border-gray-300 dark:border-gray-700 opacity-60',
-          verified: 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800',
-        };
+        const config = categoryConfig[category];
+        const isOpen = sectionExpanded[category];
+        // Calculate starting index for this section (for fix numbering)
+        const startIndex = category === 'prompt' ? 0 :
+          category === 'tool' ? groupedFixes['prompt'].length :
+          groupedFixes['prompt'].length + groupedFixes['tool'].length;
 
         return (
           <div
-            key={fix.fixId}
+            key={category}
             className={cn(
-              'rounded-xl border overflow-hidden transition-all shadow-sm hover:shadow-md',
-              cardStyles[fix.status as keyof typeof cardStyles] || cardStyles.pending,
-              classificationBorderColors[classificationClass], // Left border color based on classification
-              isSelected && 'ring-2 ring-blue-500',
-              hasConflict && !isSelected && 'ring-2 ring-amber-400'
+              'rounded-xl border overflow-hidden',
+              config.borderColor
             )}
           >
+            {/* Section Header */}
+            <button
+              onClick={() => toggleSection(category)}
+              className={cn(
+                'w-full flex items-center justify-between p-3 transition-colors',
+                config.headerBg,
+                'hover:opacity-90'
+              )}
+            >
+              <div className="flex items-center gap-2">
+                <span className="text-lg">{config.icon}</span>
+                <span className={cn('font-semibold', config.textColor)}>
+                  {config.label}
+                </span>
+                <span className={cn(
+                  'px-2 py-0.5 text-xs font-medium rounded-full',
+                  config.bgColor, config.textColor
+                )}>
+                  {categoryFixes.length}
+                </span>
+              </div>
+              <svg
+                className={cn(
+                  'w-5 h-5 transition-transform',
+                  config.textColor,
+                  isOpen ? 'rotate-180' : ''
+                )}
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+
+            {/* Section Content */}
+            {isOpen && (
+              <div className={cn('p-3 space-y-3', config.bgColor)}>
+                {categoryFixes.map((fix, idx) => {
+                  const globalIndex = startIndex + idx;
+                  const isExpanded = expanded[fix.fixId];
+                  const isCopied = copiedId === fix.fixId;
+                  const classificationClass = fix.classification?.issueLocation || 'unknown';
+                  const isDropdownOpen = dropdownOpen === fix.fixId;
+                  const isApplyModalOpen = applyModalOpen === fix.fixId;
+                  const isSelected = selectedFixIds.has(fix.fixId);
+                  const isPending = fix.status === 'pending';
+                  const conflictGroup = getConflictWarning(fix.fixId, conflicts);
+                  const hasConflict = conflictGroup !== null;
+
+                  // Status-based card styling
+                  const cardStyles = {
+                    pending: 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700',
+                    applied: 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800',
+                    rejected: 'bg-gray-100 dark:bg-gray-900/50 border-gray-300 dark:border-gray-700 opacity-60',
+                    verified: 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800',
+                  };
+
+                  return (
+                    <div
+                      key={fix.fixId}
+                      className={cn(
+                        'rounded-xl border overflow-hidden transition-all shadow-sm hover:shadow-md',
+                        cardStyles[fix.status as keyof typeof cardStyles] || cardStyles.pending,
+                        classificationBorderColors[classificationClass], // Left border color based on classification
+                        isSelected && 'ring-2 ring-blue-500',
+                        hasConflict && !isSelected && 'ring-2 ring-amber-400'
+                      )}
+                    >
             {/* Card Header */}
             <div
               onClick={() => toggleExpand(fix.fixId)}
@@ -973,7 +1239,7 @@ export function FixesPanel({
                 {/* Title Row */}
                 <div className="flex items-center gap-2 mb-1">
                   <span className="text-sm font-semibold text-gray-900 dark:text-white">
-                    #{index + 1}
+                    #{globalIndex + 1}
                   </span>
                   <span className={cn(
                     'text-xs font-medium px-2 py-0.5 rounded-full',
@@ -1374,6 +1640,11 @@ export function FixesPanel({
                     )}
                   </div>
                 )}
+              </div>
+            )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
