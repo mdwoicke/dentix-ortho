@@ -11,7 +11,7 @@ import { cn } from '../../../utils/cn';
 import { FixClassificationBadge } from './FixClassificationBadge';
 
 // Classification filter type
-type ClassificationFilter = 'all' | 'bot' | 'both' | 'test-agent';
+export type ClassificationFilter = 'all' | 'bot' | 'both' | 'test-agent';
 
 // Classification colors for left border
 const classificationBorderColors: Record<string, string> = {
@@ -91,6 +91,9 @@ interface FixesPanelProps {
   applyingBatch?: boolean;
   // Conflict resolution callback
   onResolveConflict?: (resolution: 'first' | 'second' | 'merge' | 'skip', fixIds: string[]) => void;
+  // Phase 5: External classification filter control
+  classificationFilter?: ClassificationFilter;
+  onClassificationFilterChange?: (filter: ClassificationFilter) => void;
 }
 
 const priorityColors: Record<string, string> = {
@@ -681,6 +684,9 @@ export function FixesPanel({
   applyingBatch,
   // Conflict resolution
   onResolveConflict,
+  // Phase 5: External classification filter control
+  classificationFilter: externalFilter,
+  onClassificationFilterChange,
 }: FixesPanelProps) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -691,7 +697,11 @@ export function FixesPanel({
   const [applying, setApplying] = useState(false);
   const [conflictModalOpen, setConflictModalOpen] = useState<ConflictGroup | null>(null);
   const [popoutFix, setPopoutFix] = useState<GeneratedFix | null>(null);
-  const [classificationFilter, setClassificationFilter] = useState<ClassificationFilter>('all');
+  const [internalFilter, setInternalFilter] = useState<ClassificationFilter>('all');
+
+  // Use external filter if provided, otherwise use internal state
+  const classificationFilter = externalFilter ?? internalFilter;
+  const setClassificationFilter = onClassificationFilterChange ?? setInternalFilter;
   // Section expand/collapse state - bot sections expanded by default, test-agent collapsed
   const [sectionExpanded, setSectionExpanded] = useState<Record<FixCategory, boolean>>({
     'prompt': true,

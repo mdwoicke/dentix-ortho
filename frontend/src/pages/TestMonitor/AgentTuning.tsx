@@ -3,23 +3,40 @@
  * Manage AI-generated fixes and prompt versions
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useAppDispatch, useAppSelector } from '../../hooks';
 import { PageHeader } from '../../components/layout';
-import { Button, Card } from '../../components/ui';
+import { Card } from '../../components/ui';
+import { FixesPanel, ClassificationFilter } from '../../components/features/testMonitor/FixesPanel';
+import { DiagnosisPanel } from '../../components/features/testMonitor/DiagnosisPanel';
+import { VerificationPanel } from '../../components/features/testMonitor/VerificationPanel';
+import { SyncStatusIndicator } from '../../components/features/testMonitor/SyncStatusIndicator';
+import { FixAnalytics } from '../../components/features/testMonitor/FixAnalytics';
 import {
   fetchFixes,
   fetchPromptFiles,
   fetchPromptHistory,
+  fetchTestRuns,
   applyFixToPrompt,
+  applyBatchFixes,
   updateFixStatus,
+  verifyFixes,
+  fetchDeployedVersions,
+  markPromptDeployed,
   selectFixes,
   selectPromptFiles,
   selectPromptHistory,
   selectPromptLoading,
   selectFixesLoading,
+  selectTestRuns,
+  selectAppliedFixes,
+  selectVerificationRunning,
+  selectVerificationResult,
+  selectDeployedVersions,
+  selectDeploymentLoading,
 } from '../../store/slices/testMonitorSlice';
-import type { GeneratedFix, PromptFile } from '../../types/testMonitor.types';
+import * as testMonitorApi from '../../services/api/testMonitorApi';
+import type { GeneratedFix, VerificationSummary } from '../../types/testMonitor.types';
 
 export function AgentTuning() {
   const dispatch = useAppDispatch();
@@ -29,33 +46,77 @@ export function AgentTuning() {
   const promptHistory = useAppSelector(selectPromptHistory);
   const promptLoading = useAppSelector(selectPromptLoading);
   const fixesLoading = useAppSelector(selectFixesLoading);
+  const testRuns = useAppSelector(selectTestRuns);
+  const appliedFixesFromStore = useAppSelector(selectAppliedFixes);
+  const verificationRunning = useAppSelector(selectVerificationRunning);
+  const verificationResult = useAppSelector(selectVerificationResult);
+  const deployedVersions = useAppSelector(selectDeployedVersions);
+  const deploymentLoading = useAppSelector(selectDeploymentLoading);
 
   const [selectedFix, setSelectedFix] = useState<GeneratedFix | null>(null);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  // Batch selection state
+  const [selectedFixIds, setSelectedFixIds] = useState<Set<string>>(new Set());
+  const [applyingBatch, setApplyingBatch] = useState(false);
+  // Rollback state (Phase 8)
+  const [rollbackTarget, setRollbackTarget] = useState<{ version: number; description?: string } | null>(null);
+  const [rollingBack, setRollingBack] = useState(false);
+  // Run selector state
+  const [selectedRunId, setSelectedRunId] = useState<string>('');
+  // Phase 5: Classification filter state (shared between FixesPanel and FixAnalytics)
+  const [classificationFilter, setClassificationFilter] = useState<ClassificationFilter>('all');
+
+  // Get latest run info for diagnosis
+  const latestRun = testRuns.length > 0 ? testRuns[0] : null;
+  const latestRunId = latestRun?.runId ?? '';
+
+  // Find first run with failures for default selection
+  const runWithFailures = testRuns.find(r => r.failed > 0);
+  const activeRunId = selectedRunId || runWithFailures?.runId || latestRunId;
+  const activeRun = testRuns.find(r => r.runId === activeRunId);
+  const failedTestCount = activeRun?.failed ?? 0;
 
   // Fetch data on mount
   useEffect(() => {
     dispatch(fetchPromptFiles());
-    // Fetch fixes from latest run
-    dispatch(fetchFixes('latest'));
+    dispatch(fetchTestRuns({}));
+    dispatch(fetchDeployedVersions());
   }, [dispatch]);
+
+  // Fetch fixes when activeRunId changes
+  useEffect(() => {
+    if (activeRunId) {
+      dispatch(fetchFixes(activeRunId));
+    }
+  }, [dispatch, activeRunId]);
+
+  // Handle diagnosis complete - refresh fixes
+  const handleDiagnosisComplete = useCallback(() => {
+    if (activeRunId) {
+      dispatch(fetchFixes(activeRunId));
+    }
+  }, [dispatch, activeRunId]);
+
+  // Handle run selection change
+  const handleRunChange = useCallback((runId: string) => {
+    setSelectedRunId(runId);
+    setSelectedFix(null);
+    setSelectedFixIds(new Set());
+  }, []);
 
   // Filter pending fixes
   const pendingFixes = fixes.filter((f) => f.status === 'pending');
   const appliedFixes = fixes.filter((f) => f.status === 'applied');
 
-  // Handle apply fix
-  const handleApplyFix = async (fix: GeneratedFix) => {
-    const targetFile = promptFiles.find((f) => f.filePath.includes(fix.targetFile));
-    if (targetFile) {
-      await dispatch(applyFixToPrompt({ fixId: fix.fixId, fileKey: targetFile.fileKey })).unwrap();
-      dispatch(fetchPromptFiles());
-    }
+  // Handle apply fix (single)
+  const handleApplyFix = async (fixId: string, fileKey: string) => {
+    await dispatch(applyFixToPrompt({ fixId, fileKey })).unwrap();
+    dispatch(fetchPromptFiles());
   };
 
   // Handle reject fix
-  const handleRejectFix = (fix: GeneratedFix) => {
-    dispatch(updateFixStatus({ fixId: fix.fixId, status: 'rejected' }));
+  const handleUpdateStatus = (fixId: string, status: 'applied' | 'rejected') => {
+    dispatch(updateFixStatus({ fixId, status }));
   };
 
   // Handle select prompt file
@@ -63,6 +124,102 @@ export function AgentTuning() {
     setSelectedFile(fileKey);
     dispatch(fetchPromptHistory(fileKey));
   };
+
+  // Batch selection handlers
+  const handleSelectionChange = useCallback((fixId: string, selected: boolean) => {
+    setSelectedFixIds(prev => {
+      const next = new Set(prev);
+      if (selected) {
+        next.add(fixId);
+      } else {
+        next.delete(fixId);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleSelectAll = useCallback((selected: boolean) => {
+    if (selected) {
+      // Select all pending fixes
+      const pendingIds = pendingFixes.map(f => f.fixId);
+      setSelectedFixIds(new Set(pendingIds));
+    } else {
+      // Deselect all
+      setSelectedFixIds(new Set());
+    }
+  }, [pendingFixes]);
+
+  const handleApplySelectedFixes = useCallback(async () => {
+    if (selectedFixIds.size === 0) return;
+
+    setApplyingBatch(true);
+    try {
+      const fixIds = Array.from(selectedFixIds);
+      await dispatch(applyBatchFixes(fixIds)).unwrap();
+      // Clear selection after successful application
+      setSelectedFixIds(new Set());
+      // Refresh prompt files to get updated versions
+      dispatch(fetchPromptFiles());
+    } catch (error) {
+      console.error('Failed to apply batch fixes:', error);
+    } finally {
+      setApplyingBatch(false);
+    }
+  }, [dispatch, selectedFixIds]);
+
+  // Verification handlers
+  const handleVerifyFixes = useCallback(async (fixIds: string[]): Promise<VerificationSummary | null> => {
+    try {
+      const result = await dispatch(verifyFixes(fixIds)).unwrap();
+      return result;
+    } catch (error) {
+      console.error('Failed to verify fixes:', error);
+      return null;
+    }
+  }, [dispatch]);
+
+  const handleFixVerified = useCallback((fixId: string) => {
+    dispatch(updateFixStatus({ fixId, status: 'verified' }));
+  }, [dispatch]);
+
+  // Deployment tracking handlers (Phase 5: Flowise Sync)
+  const handleMarkDeployed = useCallback(async (fileKey: string, version: number) => {
+    await dispatch(markPromptDeployed({ fileKey, version })).unwrap();
+  }, [dispatch]);
+
+  const handleCopyPrompt = useCallback(async (fileKey: string): Promise<string | null> => {
+    try {
+      const content = await testMonitorApi.getPromptForFlowise(fileKey);
+      return content;
+    } catch (error) {
+      console.error('Failed to get prompt content:', error);
+      return null;
+    }
+  }, []);
+
+  // Rollback handler (Phase 8)
+  const handleRollback = useCallback(async () => {
+    if (!selectedFile || !rollbackTarget) return;
+
+    setRollingBack(true);
+    try {
+      const result = await testMonitorApi.rollbackPromptVersion(selectedFile, rollbackTarget.version);
+      // Refresh data after rollback
+      dispatch(fetchPromptFiles());
+      dispatch(fetchPromptHistory(selectedFile));
+      setRollbackTarget(null);
+      console.log(`Rolled back to version ${rollbackTarget.version}, created new version ${result.newVersion}`);
+    } catch (error) {
+      console.error('Failed to rollback:', error);
+    } finally {
+      setRollingBack(false);
+    }
+  }, [dispatch, selectedFile, rollbackTarget]);
+
+  // Get current version number for selected file
+  const currentVersion = selectedFile
+    ? promptFiles.find(f => f.fileKey === selectedFile)?.version ?? 0
+    : 0;
 
   // Get priority color
   const getPriorityColor = (priority: string) => {
@@ -81,10 +238,69 @@ export function AgentTuning() {
         subtitle="Review AI-generated fixes and manage prompt versions"
       />
 
-      <div className="grid grid-cols-12 gap-6 mt-6 flex-1 min-h-0">
-        {/* Left Column - Fixes */}
-        <div className="col-span-5 flex flex-col gap-6">
-          {/* Pending Fixes */}
+      {/* Run Selector - Above the panels */}
+      <div className="mt-6 flex items-center gap-4">
+        <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+          Select Run:
+        </label>
+        <select
+          value={activeRunId}
+          onChange={(e) => handleRunChange(e.target.value)}
+          className="flex-1 max-w-md px-3 py-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+        >
+          {testRuns.map((run) => (
+            <option key={run.runId} value={run.runId}>
+              {run.runId.substring(0, 20)}... | {run.passed}/{run.totalTests} passed
+              {run.failed > 0 ? ` | ${run.failed} failed` : ' | All passed'}
+            </option>
+          ))}
+        </select>
+        {runWithFailures && activeRunId !== runWithFailures.runId && (
+          <button
+            onClick={() => handleRunChange(runWithFailures.runId)}
+            className="px-3 py-2 text-sm bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400 rounded-lg hover:bg-orange-200 dark:hover:bg-orange-900/50"
+          >
+            Jump to run with failures
+          </button>
+        )}
+      </div>
+
+      {/* Header Panels Row - Diagnosis & Sync Status aligned with bottom row */}
+      <div className="mt-4 grid grid-cols-12 gap-6 items-stretch">
+        {/* Diagnosis Panel - matches Pending Fixes width below */}
+        <div className="col-span-7">
+          <DiagnosisPanel
+            runId={activeRunId}
+            failedTestCount={failedTestCount}
+            onDiagnosisComplete={handleDiagnosisComplete}
+          />
+        </div>
+
+        {/* Sync Status Indicator - matches Fix Analytics width below */}
+        <div className="col-span-5 flex">
+          <SyncStatusIndicator
+            promptFiles={promptFiles}
+            deployedVersions={deployedVersions}
+            onMarkDeployed={handleMarkDeployed}
+            onCopyPrompt={handleCopyPrompt}
+            loading={deploymentLoading}
+          />
+        </div>
+      </div>
+
+      {/* Verification Panel - Collapsible */}
+      <VerificationPanel
+        appliedFixes={appliedFixesFromStore}
+        onVerify={handleVerifyFixes}
+        verifying={verificationRunning}
+        lastVerification={verificationResult}
+        onFixVerified={handleFixVerified}
+      />
+
+      <div className="grid grid-cols-12 gap-6 mt-2 flex-1 min-h-0">
+        {/* Left Column - Fixes (wider) */}
+        <div className="col-span-7 flex flex-col gap-6">
+          {/* Pending Fixes - Using FixesPanel with batch selection */}
           <Card>
             <div className="p-4">
               <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
@@ -96,86 +312,22 @@ export function AgentTuning() {
                 )}
               </h3>
 
-              {fixesLoading ? (
-                <div className="flex items-center justify-center py-8">
-                  <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-500"></div>
-                </div>
-              ) : pendingFixes.length === 0 ? (
-                <div className="text-center py-8 text-gray-500 dark:text-gray-400">
-                  <svg className="mx-auto h-10 w-10 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  <p className="mt-2">No pending fixes</p>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {pendingFixes.map((fix) => (
-                    <div
-                      key={fix.fixId}
-                      className={`p-3 border rounded-lg cursor-pointer transition-all ${
-                        selectedFix?.fixId === fix.fixId
-                          ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
-                          : 'border-gray-200 dark:border-gray-700 hover:border-gray-300'
-                      }`}
-                      onClick={() => setSelectedFix(fix)}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className={`px-2 py-0.5 text-xs rounded uppercase ${getPriorityColor(fix.priority)}`}>
-                              {fix.priority}
-                            </span>
-                            <span className="text-xs text-gray-500 dark:text-gray-400 uppercase">
-                              {fix.type}
-                            </span>
-                          </div>
-                          <p className="mt-1 text-sm font-medium text-gray-900 dark:text-white truncate">
-                            {fix.changeDescription}
-                          </p>
-                          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                            Target: {fix.targetFile}
-                          </p>
-                        </div>
-                        <div className="flex flex-col items-end gap-1">
-                          <div className="flex items-center gap-1">
-                            <div className={`w-16 h-2 rounded-full overflow-hidden ${
-                              fix.confidence >= 80 ? 'bg-green-200 dark:bg-green-900/30' :
-                              fix.confidence >= 60 ? 'bg-yellow-200 dark:bg-yellow-900/30' :
-                              'bg-red-200 dark:bg-red-900/30'
-                            }`}>
-                              <div
-                                className={`h-full ${
-                                  fix.confidence >= 80 ? 'bg-green-500' :
-                                  fix.confidence >= 60 ? 'bg-yellow-500' :
-                                  'bg-red-500'
-                                }`}
-                                style={{ width: `${fix.confidence}%` }}
-                              />
-                            </div>
-                            <span className="text-xs text-gray-500 dark:text-gray-400">{fix.confidence}%</span>
-                          </div>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2 mt-3">
-                        <Button
-                          size="sm"
-                          variant="primary"
-                          onClick={(e) => { e.stopPropagation(); handleApplyFix(fix); }}
-                        >
-                          Apply
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={(e) => { e.stopPropagation(); handleRejectFix(fix); }}
-                        >
-                          Reject
-                        </Button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+              <FixesPanel
+                fixes={pendingFixes}
+                loading={fixesLoading}
+                promptFiles={promptFiles}
+                onUpdateStatus={handleUpdateStatus}
+                onApplyFix={handleApplyFix}
+                // Batch selection props
+                selectedFixIds={selectedFixIds}
+                onSelectionChange={handleSelectionChange}
+                onSelectAll={handleSelectAll}
+                onApplySelectedFixes={handleApplySelectedFixes}
+                applyingBatch={applyingBatch}
+                // Phase 5: Classification filter props
+                classificationFilter={classificationFilter}
+                onClassificationFilterChange={setClassificationFilter}
+              />
             </div>
           </Card>
 
@@ -215,8 +367,16 @@ export function AgentTuning() {
           </Card>
         </div>
 
-        {/* Right Column - Fix Details & Prompt Versions */}
-        <div className="col-span-7 flex flex-col gap-6">
+        {/* Right Column - Fix Details, Analytics & Prompt Versions (narrower) */}
+        <div className="col-span-5 flex flex-col gap-6">
+          {/* Fix Analytics (Phase 6) */}
+          <FixAnalytics
+            fixes={fixes}
+            verificationHistory={verificationResult ? [verificationResult] : undefined}
+            loading={fixesLoading}
+            onFilterByClassification={setClassificationFilter}
+          />
+
           {/* Fix Details */}
           <Card>
             <div className="p-4">
@@ -321,31 +481,56 @@ export function AgentTuning() {
                   </div>
                 ) : selectedFile && promptHistory.length > 0 ? (
                   <div className="space-y-2">
-                    {promptHistory.map((version) => (
-                      <div
-                        key={version.id}
-                        className="p-3 border border-gray-200 dark:border-gray-700 rounded-lg"
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="font-medium text-gray-900 dark:text-white">
-                            Version {version.version}
-                          </span>
-                          <span className="text-xs text-gray-500 dark:text-gray-400">
-                            {new Date(version.createdAt).toLocaleString()}
-                          </span>
+                    {promptHistory.map((version) => {
+                      const isCurrent = version.version === currentVersion;
+                      return (
+                        <div
+                          key={version.id}
+                          className={`p-3 border rounded-lg ${
+                            isCurrent
+                              ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
+                              : 'border-gray-200 dark:border-gray-700'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium text-gray-900 dark:text-white">
+                                Version {version.version}
+                              </span>
+                              {isCurrent && (
+                                <span className="px-2 py-0.5 text-xs bg-primary-100 text-primary-700 dark:bg-primary-900/30 dark:text-primary-400 rounded">
+                                  Current
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-gray-500 dark:text-gray-400">
+                                {new Date(version.createdAt).toLocaleString()}
+                              </span>
+                              {!isCurrent && (
+                                <button
+                                  onClick={() => setRollbackTarget({ version: version.version, description: version.changeDescription })}
+                                  className="px-2 py-1 text-xs bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 rounded hover:bg-amber-200 dark:hover:bg-amber-900/50 transition-colors"
+                                  title="Rollback to this version"
+                                >
+                                  Rollback
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                          {version.changeDescription && (
+                            <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                              {version.changeDescription}
+                            </p>
+                          )}
+                          {version.fixId && (
+                            <span className="inline-block mt-2 px-2 py-0.5 text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 rounded">
+                              Fix: {version.fixId.slice(0, 8)}...
+                            </span>
+                          )}
                         </div>
-                        {version.changeDescription && (
-                          <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                            {version.changeDescription}
-                          </p>
-                        )}
-                        {version.fixId && (
-                          <span className="inline-block mt-2 px-2 py-0.5 text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 rounded">
-                            Fix: {version.fixId.slice(0, 8)}...
-                          </span>
-                        )}
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 ) : (
                   <div className="text-center py-8 text-gray-500 dark:text-gray-400">
@@ -357,6 +542,53 @@ export function AgentTuning() {
           </Card>
         </div>
       </div>
+
+      {/* Rollback Confirmation Modal (Phase 8) */}
+      {rollbackTarget && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full mx-4 p-6">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+              Confirm Rollback
+            </h3>
+            <p className="text-gray-600 dark:text-gray-400 mb-4">
+              Are you sure you want to rollback to <span className="font-semibold">Version {rollbackTarget.version}</span>?
+            </p>
+            {rollbackTarget.description && (
+              <div className="bg-gray-100 dark:bg-gray-700 rounded p-3 mb-4">
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  <span className="font-medium">Description:</span> {rollbackTarget.description}
+                </p>
+              </div>
+            )}
+            <p className="text-sm text-amber-600 dark:text-amber-400 mb-6">
+              This will create a new version with the content from Version {rollbackTarget.version}. The current version will be preserved in history.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setRollbackTarget(null)}
+                disabled={rollingBack}
+                className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleRollback}
+                disabled={rollingBack}
+                className="px-4 py-2 text-sm text-white bg-amber-600 rounded hover:bg-amber-700 transition-colors disabled:opacity-50 flex items-center gap-2"
+              >
+                {rollingBack ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
+                    Rolling back...
+                  </>
+                ) : (
+                  'Rollback'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
