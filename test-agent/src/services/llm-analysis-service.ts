@@ -424,15 +424,71 @@ Be specific and actionable. Generate complete code that can be directly applied.
         }
       });
 
+      // Derive classification from actual fix target files (overrides LLM classification)
+      const derivedClassification = this.deriveClassificationFromFixes(fixes, classification);
+
       return {
         rootCause,
         fixes,
         summary: parsed.summary || 'Analysis complete',
-        classification,
+        classification: derivedClassification,
       };
     } catch (error) {
       return this.createFallbackResult(context, responseText);
     }
+  }
+
+  /**
+   * Derive classification from actual fix target files
+   * This ensures classification matches what the fixes actually modify
+   */
+  private deriveClassificationFromFixes(
+    fixes: (PromptFix | ToolFix)[],
+    llmClassification?: FixClassification
+  ): FixClassification | undefined {
+    if (fixes.length === 0) {
+      return llmClassification; // No fixes, use LLM classification if available
+    }
+
+    // Categorize fixes by target type
+    let hasBotFixes = false;
+    let hasTestAgentFixes = false;
+
+    for (const fix of fixes) {
+      const targetFile = fix.targetFile.toLowerCase();
+      if (
+        targetFile.includes('systemprompt') ||
+        targetFile.endsWith('.md') ||
+        targetFile.includes('chord_dso') ||
+        (targetFile.includes('docs/') && targetFile.endsWith('.js'))
+      ) {
+        hasBotFixes = true;
+      } else if (targetFile.includes('test-agent/') || targetFile.includes('test-cases/')) {
+        hasTestAgentFixes = true;
+      } else {
+        // Default unknown targets to bot fixes
+        hasBotFixes = true;
+      }
+    }
+
+    // Determine issue location based on actual fix targets
+    let issueLocation: 'bot' | 'test-agent' | 'both';
+    if (hasBotFixes && hasTestAgentFixes) {
+      issueLocation = 'both';
+    } else if (hasTestAgentFixes) {
+      issueLocation = 'test-agent';
+    } else {
+      issueLocation = 'bot';
+    }
+
+    // Return classification with derived issueLocation
+    return {
+      issueLocation,
+      confidence: llmClassification?.confidence || 0.8,
+      reasoning: llmClassification?.reasoning || `Derived from fix target files`,
+      userBehaviorRealistic: llmClassification?.userBehaviorRealistic ?? (issueLocation !== 'test-agent'),
+      botResponseAppropriate: llmClassification?.botResponseAppropriate ?? (issueLocation === 'test-agent'),
+    };
   }
 
   private createFallbackResult(context: FailureContext, responseText: string): AnalysisResult {

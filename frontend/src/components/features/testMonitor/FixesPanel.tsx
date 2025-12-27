@@ -10,8 +10,11 @@ import type { GeneratedFix, PromptFile } from '../../../types/testMonitor.types'
 import { cn } from '../../../utils/cn';
 import { FixClassificationBadge } from './FixClassificationBadge';
 
-// Classification filter type
+// Classification filter type (by issue location: who needs to fix it)
 export type ClassificationFilter = 'all' | 'bot' | 'both' | 'test-agent';
+
+// Target category filter type (by target file: what type of file is being fixed)
+export type TargetCategoryFilter = 'all' | 'prompt' | 'tool' | 'test-agent';
 
 // Classification colors for left border
 const classificationBorderColors: Record<string, string> = {
@@ -94,6 +97,9 @@ interface FixesPanelProps {
   // Phase 5: External classification filter control
   classificationFilter?: ClassificationFilter;
   onClassificationFilterChange?: (filter: ClassificationFilter) => void;
+  // Target category filter (Flowise Prompt, Flowise Tool, Test Bot)
+  targetCategoryFilter?: TargetCategoryFilter;
+  onTargetCategoryFilterChange?: (filter: TargetCategoryFilter) => void;
 }
 
 const priorityColors: Record<string, string> = {
@@ -687,6 +693,9 @@ export function FixesPanel({
   // Phase 5: External classification filter control
   classificationFilter: externalFilter,
   onClassificationFilterChange,
+  // Target category filter
+  targetCategoryFilter: externalTargetFilter,
+  onTargetCategoryFilterChange,
 }: FixesPanelProps) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -698,10 +707,13 @@ export function FixesPanel({
   const [conflictModalOpen, setConflictModalOpen] = useState<ConflictGroup | null>(null);
   const [popoutFix, setPopoutFix] = useState<GeneratedFix | null>(null);
   const [internalFilter, setInternalFilter] = useState<ClassificationFilter>('all');
+  const [internalTargetFilter, setInternalTargetFilter] = useState<TargetCategoryFilter>('all');
 
   // Use external filter if provided, otherwise use internal state
   const classificationFilter = externalFilter ?? internalFilter;
   const setClassificationFilter = onClassificationFilterChange ?? setInternalFilter;
+  const targetCategoryFilter = externalTargetFilter ?? internalTargetFilter;
+  const setTargetCategoryFilter = onTargetCategoryFilterChange ?? setInternalTargetFilter;
   // Section expand/collapse state - bot sections expanded by default, test-agent collapsed
   const [sectionExpanded, setSectionExpanded] = useState<Record<FixCategory, boolean>>({
     'prompt': true,
@@ -726,20 +738,37 @@ export function FixesPanel({
     });
   }, [fixes]);
 
-  // Filter fixes by classification
+  // Filter fixes by classification AND target category
   const filteredFixes = useMemo(() => {
-    if (classificationFilter === 'all') return sortedFixes;
     return sortedFixes.filter(fix => {
-      const issueLocation = fix.classification?.issueLocation || 'unknown';
-      return issueLocation === classificationFilter;
+      // Filter by classification (who needs to fix it)
+      if (classificationFilter !== 'all') {
+        const issueLocation = fix.classification?.issueLocation || 'unknown';
+        if (issueLocation !== classificationFilter) return false;
+      }
+      // Filter by target category (what type of file)
+      if (targetCategoryFilter !== 'all') {
+        const category = getFixCategory(fix.targetFile);
+        if (category !== targetCategoryFilter) return false;
+      }
+      return true;
     });
-  }, [sortedFixes, classificationFilter]);
+  }, [sortedFixes, classificationFilter, targetCategoryFilter]);
 
   // Count fixes by classification for filter badges
   const classificationCounts = useMemo(() => {
     return fixes.reduce((acc, fix) => {
       const loc = fix.classification?.issueLocation || 'unknown';
       acc[loc] = (acc[loc] || 0) + 1;
+      return acc;
+    }, {} as Record<string, number>);
+  }, [fixes]);
+
+  // Count fixes by target category for filter badges
+  const targetCategoryCounts = useMemo(() => {
+    return fixes.reduce((acc, fix) => {
+      const category = getFixCategory(fix.targetFile);
+      acc[category] = (acc[category] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
   }, [fixes]);
@@ -1034,6 +1063,55 @@ export function FixesPanel({
         >
           <span className="w-2 h-2 rounded-full bg-current opacity-70"></span>
           Test Agent ({classificationCounts['test-agent'] || 0})
+        </button>
+      </div>
+
+      {/* Target Category Filter Buttons (Flowise Prompt, Tool, Test Bot) */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-xs font-medium text-gray-500 dark:text-gray-400 mr-1">Target:</span>
+        <button
+          onClick={() => setTargetCategoryFilter('all')}
+          className={cn(
+            'px-3 py-1.5 text-xs font-medium rounded-full transition-colors',
+            targetCategoryFilter === 'all'
+              ? 'bg-gray-900 text-white dark:bg-white dark:text-gray-900'
+              : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700'
+          )}
+        >
+          All ({fixes.length})
+        </button>
+        <button
+          onClick={() => setTargetCategoryFilter('prompt')}
+          className={cn(
+            'px-3 py-1.5 text-xs font-medium rounded-full transition-colors flex items-center gap-1.5',
+            targetCategoryFilter === 'prompt'
+              ? 'bg-purple-600 text-white'
+              : 'bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/50 dark:text-purple-300 dark:hover:bg-purple-900/70'
+          )}
+        >
+          🟣 Flowise Prompt ({targetCategoryCounts['prompt'] || 0})
+        </button>
+        <button
+          onClick={() => setTargetCategoryFilter('tool')}
+          className={cn(
+            'px-3 py-1.5 text-xs font-medium rounded-full transition-colors flex items-center gap-1.5',
+            targetCategoryFilter === 'tool'
+              ? 'bg-blue-600 text-white'
+              : 'bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-900/50 dark:text-blue-300 dark:hover:bg-blue-900/70'
+          )}
+        >
+          🔵 Flowise Tool ({targetCategoryCounts['tool'] || 0})
+        </button>
+        <button
+          onClick={() => setTargetCategoryFilter('test-agent')}
+          className={cn(
+            'px-3 py-1.5 text-xs font-medium rounded-full transition-colors flex items-center gap-1.5',
+            targetCategoryFilter === 'test-agent'
+              ? 'bg-orange-600 text-white'
+              : 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/50 dark:text-orange-300 dark:hover:bg-orange-900/70'
+          )}
+        >
+          🟠 Test Bot ({targetCategoryCounts['test-agent'] || 0})
         </button>
       </div>
 
