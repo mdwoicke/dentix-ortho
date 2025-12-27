@@ -124,14 +124,21 @@ export const INTENT_KEYWORDS: Record<AgentIntent, RegExp[]> = {
     /\bwhat.*(phone|number|contact)\b/i,      // "What is your phone/contact number?"
     /\bcan i (have|get) your.*(phone|number)\b/i, // "Can I have your phone number?"
   ],
-  'asking_email': [/\b(email|e-mail)\b/i],
+  'asking_email': [
+    /\bwhat('s| is) your (email|e-mail)\b/i,          // "What is your email?"
+    /\b(email|e-mail) address\b/i,                     // "email address" in question context
+    /\bmay i have your.*(email|e-mail)\b/i,           // "May I have your email?"
+    /\bcan i get your.*(email|e-mail)\b/i,            // "Can I get your email?"
+    /\bprovide.*(email|e-mail)\b/i,                   // "Please provide your email"
+  ],
 
   'asking_child_count': [/\b(how many|number of).*child/i, /\bchildren.*coming in\b/i],
   'asking_child_name': [
     /\bchild'?s?\s+(?:\w+\s+){0,4}name\b/i,   // "child's first and last name" - limit to 4 words between
-    /\bname\s+of\s+(?:your\s+)?child\b/i,     // "name of your child"
+    /\bname\s+of\s+(?:your\s+)?(?:\w+\s+)?child\b/i,  // "name of your child", "name of your second child"
     /\bwhat is (your )?child'?s?\b/i,         // "What is your child's..."
     /\bpatient'?s?\s+(?:\w+\s+){0,3}name\b/i, // "patient's name", "patient's first name"
+    /\b(first|second|other)\s+child\b/i,      // "second child", "first child", "other child"
   ],
   'asking_child_dob': [/\b(birth|birthday|born|date of birth|dob)\b/i],
   'asking_child_age': [/\b(how old|age)\b/i],
@@ -178,6 +185,9 @@ export const INTENT_KEYWORDS: Record<AgentIntent, RegExp[]> = {
   'searching_availability': [
     /\b(let me check|one moment|checking|looking up|look up)\b.*\b(available|availability|times|slots)\b/i,
     /\b(available|availability).*\b(let me|one moment|checking)\b/i,
+    /\bworking on finding\b.*\b(appointment|time|slot)\b/i,  // "working on finding the next available appointment"
+    /\bchecking available appointment\b/i,                    // "checking available appointment times"
+    /\bwill (let you know|offer you).*\b(slot|time)\b/i,      // "will let you know the first available slot"
   ],
   'offering_time_slots': [
     /\b(I have|we have|there is|there are).*\b(available|opening|slot)\b/i,
