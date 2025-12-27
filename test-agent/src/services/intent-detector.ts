@@ -44,7 +44,7 @@ export interface IntentDetectorConfig {
 
 const DEFAULT_CONFIG: IntentDetectorConfig = {
   useLlm: true,
-  model: 'claude-3-5-haiku-20241022', // Using Haiku for faster intent detection
+  model: 'claude-opus-4-5-20251101', // Using Opus 4.5 for all LLM calls
   temperature: 0.1,
   maxTokens: 512,
   timeout: 15000,
@@ -92,6 +92,34 @@ export class IntentDetector {
   }
 
   /**
+   * Check for terminal intent patterns that should override LLM detection
+   * These are high-confidence patterns that indicate definitive state changes
+   */
+  private checkForTerminalIntentOverride(agentResponse: string): IntentDetectionResult | null {
+    // Explicit booking confirmation patterns
+    const bookingPatterns = [
+      /\bappointment has been (successfully )?scheduled\b/i,
+      /\bI have booked\b/i,
+      /\byour appointment is confirmed\b/i,
+      /\bappointment.*scheduled.*for (Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)/i,
+    ];
+
+    for (const pattern of bookingPatterns) {
+      if (pattern.test(agentResponse)) {
+        return {
+          primaryIntent: 'confirming_booking',
+          confidence: 0.95,
+          isQuestion: false,
+          requiresUserResponse: false,
+          reasoning: 'Explicit booking confirmation detected',
+        };
+      }
+    }
+
+    return null;
+  }
+
+  /**
    * Detect the intent from an agent response
    */
   async detectIntent(
@@ -99,14 +127,20 @@ export class IntentDetector {
     conversationHistory: ConversationTurn[],
     pendingFields: CollectableField[] = []
   ): Promise<IntentDetectionResult> {
-    // Check cache first
+    // FIRST: Check for terminal intent patterns that should override everything
+    const terminalOverride = this.checkForTerminalIntentOverride(agentResponse);
+    if (terminalOverride) {
+      return terminalOverride;
+    }
+
+    // Check cache
     const cacheKey = this.getCacheKey(agentResponse, pendingFields);
     const cached = this.getFromCache(cacheKey);
     if (cached) {
       return cached;
     }
 
-    // Try LLM detection first
+    // Try LLM detection
     if (this.client && this.config.useLlm) {
       try {
         const result = await this.detectWithLlm(agentResponse, conversationHistory, pendingFields);
@@ -194,11 +228,14 @@ Return ONLY a JSON object (no markdown, no explanation):
 - asking_new_patient, asking_previous_visit, asking_previous_ortho
 - asking_insurance, asking_special_needs, asking_time_preference, asking_location_preference
 - confirming_information, confirming_spelling, asking_proceed_confirmation
-- offering_time_slots, confirming_booking
+- searching_availability, offering_time_slots, confirming_booking
 - initiating_transfer, handling_error, asking_clarification
 - unknown
 
-Note: Use asking_proceed_confirmation when agent asks "Would you like to proceed anyway?" (e.g., for out-of-network insurance)
+## Critical Intent Distinctions
+- searching_availability: Use when agent says "Let me check", "One moment", "Looking up available times" WITHOUT offering specific times yet
+- offering_time_slots: Use when agent explicitly offers specific times like "I have 9:30 AM available" or "Would you prefer 10 AM or 2 PM?"
+- asking_proceed_confirmation: Use when agent asks "Would you like to proceed anyway?" (e.g., for out-of-network insurance)
 
 ## Guidelines
 - Choose the MOST SPECIFIC intent that matches
