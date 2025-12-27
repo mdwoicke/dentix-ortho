@@ -324,6 +324,18 @@ Categorize as one of:
    - Confidence score (0.0 to 1.0)
    - Priority (critical, high, medium, low)
 
+**AVAILABLE TARGET FILES:**
+- **System Prompt**: \`docs/Chord_Cloud9_SystemPrompt.md\` - Bot behavior instructions
+- **Scheduling Tool (.js)**: \`docs/chord_dso_scheduling-StepwiseSearch.js\` - JavaScript logic
+- **Scheduling Tool (.json)**: \`docs/chord_dso_scheduling-StepwiseSearch.json\` - Flowise config
+- **Patient Tool (.js)**: \`docs/chord_dso_patient-FIXED.js\` - JavaScript logic
+- **Patient Tool (.json)**: \`docs/chord_dso_patient-FIXED.json\` - Flowise config
+
+**When to use each:**
+- **.js files**: For fixing tool LOGIC (defaults, parsing, validation, API calls)
+- **.json files**: For fixing Flowise CONFIGURATION (descriptions, schemas, parameters)
+- **.md files**: For fixing bot BEHAVIOR (instructions, rules, examples)
+
 ### Step 3: Respond in this exact JSON format:
 \`\`\`json
 {
@@ -460,7 +472,7 @@ Be specific and actionable. Generate complete code that can be directly applied.
         targetFile.includes('systemprompt') ||
         targetFile.endsWith('.md') ||
         targetFile.includes('chord_dso') ||
-        (targetFile.includes('docs/') && targetFile.endsWith('.js'))
+        (targetFile.includes('docs/') && (targetFile.endsWith('.js') || targetFile.endsWith('.json')))
       ) {
         hasBotFixes = true;
       } else if (targetFile.includes('test-agent/') || targetFile.includes('test-cases/')) {

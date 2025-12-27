@@ -46,8 +46,11 @@ function getFixCategory(targetFile: string): FixCategory {
     return 'prompt';
   }
 
-  // Flowise tools - DSO scheduling/patient tools
-  if (normalized.includes('chord_dso') || (normalized.includes('docs/') && normalized.endsWith('.js'))) {
+  // Flowise tools - DSO scheduling/patient tools (BOTH .js AND .json)
+  if (
+    normalized.includes('chord_dso') ||
+    (normalized.includes('docs/') && (normalized.endsWith('.js') || normalized.endsWith('.json')))
+  ) {
     return 'tool';
   }
 
