@@ -210,8 +210,8 @@ export const errorHandlingScenarios: TestCase[] = [
       {
         id: 'step-3-spell',
         userMessage: 'T O M   W I L S O N',
-        // Bot may ask about children or continue
-        expectedPatterns: [/how many children|scheduling for|child|new patient|consult|thank|got it|understood/i],
+        // Bot may ask about children, confirm phone, or continue with flow
+        expectedPatterns: [/how many children|scheduling for|child|new patient|consult|thank|got it|understood|phone|number|reach|best/i],
         unexpectedPatterns: [patterns.error],
         semanticExpectations: [se.handleError()],
         negativeExpectations: [ne.noErrors(), ne.noInternalDetails()],

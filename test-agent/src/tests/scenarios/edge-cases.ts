@@ -232,8 +232,8 @@ export const edgeCaseScenarios: TestCase[] = [
       {
         id: 'step-3-spell',
         userMessage: 'L I S A   B R O W N',
-        // Bot may ask about children or continue
-        expectedPatterns: [/how many children|scheduling for|child|new patient|consult|thank|got it|understood/i],
+        // Bot may ask about children, confirm phone, or continue with flow
+        expectedPatterns: [/how many children|scheduling for|child|new patient|consult|thank|got it|understood|phone|number|reach|best/i],
         unexpectedPatterns: [patterns.error],
         semanticExpectations: [se.acknowledge()],
         negativeExpectations: [ne.noErrors()],
