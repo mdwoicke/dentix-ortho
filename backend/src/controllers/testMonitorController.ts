@@ -3470,9 +3470,29 @@ export async function updateSandbox(
       return;
     }
 
+    // Fetch the updated sandbox to return
+    const updatedSandbox = db.prepare(`
+      SELECT id, sandbox_id, name, description, flowise_endpoint, flowise_api_key,
+             langfuse_host, langfuse_public_key, langfuse_secret_key,
+             is_active, created_at, updated_at
+      FROM ab_sandboxes WHERE sandbox_id = ?
+    `).get(sandboxId) as any;
+
     res.json({
       success: true,
-      message: `Sandbox ${sandboxId} updated successfully`,
+      data: {
+        sandboxId: updatedSandbox.sandbox_id,
+        name: updatedSandbox.name,
+        description: updatedSandbox.description,
+        flowiseEndpoint: updatedSandbox.flowise_endpoint || '',
+        flowiseApiKey: updatedSandbox.flowise_api_key || '',
+        langfuseHost: updatedSandbox.langfuse_host || '',
+        langfusePublicKey: updatedSandbox.langfuse_public_key || '',
+        langfuseSecretKey: updatedSandbox.langfuse_secret_key || '',
+        isActive: updatedSandbox.is_active === 1,
+        createdAt: updatedSandbox.created_at,
+        updatedAt: updatedSandbox.updated_at,
+      },
     });
   } catch (error) {
     next(error);
