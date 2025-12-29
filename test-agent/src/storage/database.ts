@@ -108,6 +108,74 @@ export interface PromptVersion {
 }
 
 // ============================================================================
+// AI ENHANCEMENT INTERFACES
+// ============================================================================
+
+export interface AIEnhancementHistory {
+  id?: number;
+  enhancementId: string;
+  fileKey: string;
+  sourceVersion: number;
+  resultVersion?: number;
+  command: string;
+  commandTemplate?: string;
+  webSearchUsed: boolean;
+  webSearchQueries?: string;
+  webSearchResultsJson?: string;
+  enhancementPrompt?: string;
+  aiResponseJson?: string;
+  qualityScoreBefore?: number;
+  qualityScoreAfter?: number;
+  status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'applied' | 'promoted';
+  errorMessage?: string;
+  createdAt: string;
+  completedAt?: string;
+  createdBy: string;
+  metadataJson?: string;
+  // New fields for applied/promoted workflow
+  appliedAt?: string;
+  promotedAt?: string;
+  appliedContent?: string;
+}
+
+export interface AIEnhancementTemplate {
+  id?: number;
+  templateId: string;
+  name: string;
+  description?: string;
+  commandTemplate: string;
+  category: 'clarity' | 'examples' | 'edge-cases' | 'format' | 'validation' | 'custom';
+  useWebSearch: boolean;
+  defaultSearchQueries?: string;
+  isBuiltIn: boolean;
+  createdAt?: string;
+  usageCount: number;
+}
+
+export interface QualityScore {
+  overall: number;
+  dimensions: {
+    clarity: number;
+    completeness: number;
+    examples: number;
+    consistency: number;
+    edgeCases: number;
+  };
+  suggestions: string[];
+  tokenCount?: number;
+  charCount?: number;
+  lineCount?: number;
+}
+
+export interface WebSearchResult {
+  source: string;
+  title: string;
+  excerpt: string;
+  relevanceScore: number;
+  keyTakeaways: string[];
+}
+
+// ============================================================================
 // GOAL-ORIENTED TEST INTERFACES
 // ============================================================================
 
@@ -194,7 +262,9 @@ export class Database {
   private dbPath: string;
 
   constructor() {
-    this.dbPath = path.resolve(process.cwd(), config.database.path);
+    // Use __dirname to ensure consistent path regardless of where the process runs from
+    // This ensures backend and test-agent use the same database file
+    this.dbPath = path.resolve(__dirname, '../../data/test-results.db');
   }
 
   /**
@@ -631,6 +701,57 @@ export class Database {
       CREATE INDEX IF NOT EXISTS idx_sandbox_history_sandbox ON ab_sandbox_file_history(sandbox_id);
       CREATE INDEX IF NOT EXISTS idx_sandbox_history_file ON ab_sandbox_file_history(file_key);
       CREATE INDEX IF NOT EXISTS idx_comparison_runs_status ON ab_sandbox_comparison_runs(status);
+
+      -- ========================================================================
+      -- AI ENHANCEMENT TABLES
+      -- ========================================================================
+
+      -- AI Enhancement History: Track all AI prompt enhancement operations
+      CREATE TABLE IF NOT EXISTS ai_enhancement_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        enhancement_id TEXT UNIQUE NOT NULL,
+        file_key TEXT NOT NULL,
+        source_version INTEGER NOT NULL,
+        result_version INTEGER,
+        command TEXT NOT NULL,
+        command_template TEXT,
+        web_search_used INTEGER DEFAULT 0,
+        web_search_queries TEXT,
+        web_search_results_json TEXT,
+        enhancement_prompt TEXT,
+        ai_response_json TEXT,
+        quality_score_before REAL,
+        quality_score_after REAL,
+        status TEXT CHECK(status IN ('pending', 'processing', 'completed', 'failed', 'cancelled', 'applied', 'promoted')) DEFAULT 'pending',
+        error_message TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        completed_at TEXT,
+        created_by TEXT DEFAULT 'user',
+        metadata_json TEXT,
+        FOREIGN KEY (file_key) REFERENCES prompt_working_copies(file_key)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_ai_enhancement_file_key ON ai_enhancement_history(file_key);
+      CREATE INDEX IF NOT EXISTS idx_ai_enhancement_status ON ai_enhancement_history(status);
+      CREATE INDEX IF NOT EXISTS idx_ai_enhancement_created ON ai_enhancement_history(created_at);
+
+      -- AI Enhancement Templates: Pre-built and custom enhancement templates
+      CREATE TABLE IF NOT EXISTS ai_enhancement_templates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        template_id TEXT UNIQUE NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        command_template TEXT NOT NULL,
+        category TEXT CHECK(category IN ('clarity', 'examples', 'edge-cases', 'format', 'validation', 'custom')) NOT NULL,
+        use_web_search INTEGER DEFAULT 0,
+        default_search_queries TEXT,
+        is_built_in INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        usage_count INTEGER DEFAULT 0
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_ai_templates_category ON ai_enhancement_templates(category);
+      CREATE INDEX IF NOT EXISTS idx_ai_templates_built_in ON ai_enhancement_templates(is_built_in);
     `);
 
     // Migration: Add agent_question column if it doesn't exist
@@ -653,6 +774,22 @@ export class Database {
     this.addColumnIfNotExists('ab_sandboxes', 'langfuse_host', 'TEXT');
     this.addColumnIfNotExists('ab_sandboxes', 'langfuse_public_key', 'TEXT');
     this.addColumnIfNotExists('ab_sandboxes', 'langfuse_secret_key', 'TEXT');
+
+    // Migration: Add AI enhancement tracking columns to prompt_version_history
+    this.addColumnIfNotExists('prompt_version_history', 'enhancement_id', 'TEXT');
+    this.addColumnIfNotExists('prompt_version_history', 'is_experimental', 'INTEGER DEFAULT 0');
+    this.addColumnIfNotExists('prompt_version_history', 'ai_generated', 'INTEGER DEFAULT 0');
+
+    // Migration: Add applied/promoted tracking columns to ai_enhancement_history
+    this.addColumnIfNotExists('ai_enhancement_history', 'applied_at', 'TEXT');
+    this.addColumnIfNotExists('ai_enhancement_history', 'promoted_at', 'TEXT');
+    this.addColumnIfNotExists('ai_enhancement_history', 'applied_content', 'TEXT');
+
+    // Migration: Update CHECK constraint to include 'applied' and 'promoted' statuses
+    this.migrateEnhancementHistoryCheckConstraint();
+
+    // Initialize built-in enhancement templates
+    this.initializeBuiltInTemplates();
   }
 
   /**
@@ -667,6 +804,153 @@ export class Database {
 
     if (!columnExists) {
       db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    }
+  }
+
+  /**
+   * Migrate ai_enhancement_history table to add 'applied' and 'promoted' to CHECK constraint
+   * SQLite requires recreating the table to modify CHECK constraints
+   */
+  private migrateEnhancementHistoryCheckConstraint(): void {
+    const db = this.getDb();
+
+    // Check if migration is needed by looking at the table SQL
+    const tableInfo = db.prepare(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name='ai_enhancement_history'"
+    ).get() as any;
+
+    if (!tableInfo || !tableInfo.sql) {
+      return; // Table doesn't exist yet, will be created with correct constraint
+    }
+
+    // Check if the CHECK constraint already includes 'applied' and 'promoted'
+    if (tableInfo.sql.includes("'applied'") && tableInfo.sql.includes("'promoted'")) {
+      return; // Already migrated
+    }
+
+    // Need to recreate the table with the new CHECK constraint
+    db.exec(`
+      -- Create temporary table with new CHECK constraint
+      CREATE TABLE ai_enhancement_history_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        enhancement_id TEXT UNIQUE NOT NULL,
+        file_key TEXT NOT NULL,
+        source_version INTEGER NOT NULL,
+        result_version INTEGER,
+        command TEXT NOT NULL,
+        command_template TEXT,
+        web_search_used INTEGER DEFAULT 0,
+        web_search_queries TEXT,
+        web_search_results_json TEXT,
+        enhancement_prompt TEXT,
+        ai_response_json TEXT,
+        quality_score_before REAL,
+        quality_score_after REAL,
+        status TEXT CHECK(status IN ('pending', 'processing', 'completed', 'failed', 'cancelled', 'applied', 'promoted')) DEFAULT 'pending',
+        error_message TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        completed_at TEXT,
+        created_by TEXT DEFAULT 'user',
+        metadata_json TEXT,
+        applied_at TEXT,
+        promoted_at TEXT,
+        applied_content TEXT,
+        FOREIGN KEY (file_key) REFERENCES prompt_working_copies(file_key)
+      );
+
+      -- Copy data from old table
+      INSERT INTO ai_enhancement_history_new
+      SELECT id, enhancement_id, file_key, source_version, result_version, command, command_template,
+             web_search_used, web_search_queries, web_search_results_json, enhancement_prompt,
+             ai_response_json, quality_score_before, quality_score_after, status, error_message,
+             created_at, completed_at, created_by, metadata_json, applied_at, promoted_at, applied_content
+      FROM ai_enhancement_history;
+
+      -- Drop old table
+      DROP TABLE ai_enhancement_history;
+
+      -- Rename new table
+      ALTER TABLE ai_enhancement_history_new RENAME TO ai_enhancement_history;
+
+      -- Recreate indexes
+      CREATE INDEX IF NOT EXISTS idx_ai_enhancement_file_key ON ai_enhancement_history(file_key);
+      CREATE INDEX IF NOT EXISTS idx_ai_enhancement_status ON ai_enhancement_history(status);
+      CREATE INDEX IF NOT EXISTS idx_ai_enhancement_created ON ai_enhancement_history(created_at);
+    `);
+  }
+
+  /**
+   * Initialize built-in enhancement templates (runs once on first setup)
+   */
+  private initializeBuiltInTemplates(): void {
+    const db = this.getDb();
+
+    const builtInTemplates = [
+      {
+        template_id: 'add-examples',
+        name: 'Add Examples',
+        description: 'Add 2-3 clear, concrete examples for key scenarios',
+        command_template: 'Add 2-3 clear examples showing how to handle {{topic}}',
+        category: 'examples',
+        use_web_search: 1,
+      },
+      {
+        template_id: 'improve-clarity',
+        name: 'Improve Clarity',
+        description: 'Rewrite unclear sections to be more specific and actionable',
+        command_template: 'Rewrite unclear sections to be more specific and actionable. Focus on removing ambiguity.',
+        category: 'clarity',
+        use_web_search: 0,
+      },
+      {
+        template_id: 'add-edge-cases',
+        name: 'Add Edge Case Handling',
+        description: 'Add explicit handling for edge cases and error scenarios',
+        command_template: 'Add explicit handling for edge cases including: {{scenarios}}',
+        category: 'edge-cases',
+        use_web_search: 1,
+      },
+      {
+        template_id: 'improve-format',
+        name: 'Improve Formatting',
+        description: 'Reorganize content with clear sections, headers, and consistent formatting',
+        command_template: 'Reorganize content with clear sections, headers, and consistent formatting throughout.',
+        category: 'format',
+        use_web_search: 0,
+      },
+      {
+        template_id: 'add-validation',
+        name: 'Add Input Validation',
+        description: 'Add validation rules and helpful error messages for user inputs',
+        command_template: 'Add input validation and helpful error messages for: {{fields}}',
+        category: 'validation',
+        use_web_search: 1,
+      },
+      {
+        template_id: 'best-practices',
+        name: 'Apply Best Practices',
+        description: 'Apply prompt engineering best practices: clear structure, explicit constraints, chain-of-thought',
+        command_template: 'Apply prompt engineering best practices: clear structure, explicit constraints, chain-of-thought reasoning where applicable.',
+        category: 'custom',
+        use_web_search: 1,
+      },
+    ];
+
+    const stmt = db.prepare(`
+      INSERT OR IGNORE INTO ai_enhancement_templates
+      (template_id, name, description, command_template, category, use_web_search, is_built_in)
+      VALUES (?, ?, ?, ?, ?, ?, 1)
+    `);
+
+    for (const template of builtInTemplates) {
+      stmt.run(
+        template.template_id,
+        template.name,
+        template.description,
+        template.command_template,
+        template.category,
+        template.use_web_search
+      );
     }
   }
 
@@ -710,6 +994,118 @@ export class Database {
       JSON.stringify(summary),
       runId
     );
+  }
+
+  /**
+   * Mark a test run as failed (for error cases)
+   */
+  failTestRun(runId: string, errorMessage?: string): void {
+    const db = this.getDb();
+
+    // Get current counts from existing results
+    const stats = db.prepare(`
+      SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN status = 'passed' THEN 1 ELSE 0 END) as passed,
+        SUM(CASE WHEN status IN ('failed', 'error') THEN 1 ELSE 0 END) as failed,
+        SUM(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END) as skipped
+      FROM test_results WHERE run_id = ?
+    `).get(runId) as { total: number; passed: number; failed: number; skipped: number } | undefined;
+
+    const summary = {
+      totalTests: stats?.total || 0,
+      passed: stats?.passed || 0,
+      failed: stats?.failed || 0,
+      skipped: stats?.skipped || 0,
+      error: errorMessage || 'Test run failed unexpectedly',
+    };
+
+    db.prepare(`
+      UPDATE test_runs
+      SET completed_at = ?,
+          status = 'failed',
+          total_tests = ?,
+          passed = ?,
+          failed = ?,
+          skipped = ?,
+          summary = ?
+      WHERE run_id = ?
+    `).run(
+      new Date().toISOString(),
+      summary.totalTests,
+      summary.passed,
+      summary.failed,
+      summary.skipped,
+      JSON.stringify(summary),
+      runId
+    );
+  }
+
+  /**
+   * Mark a test run as aborted (for user cancellation)
+   */
+  abortTestRun(runId: string): void {
+    const db = this.getDb();
+
+    // Get current counts from existing results
+    const stats = db.prepare(`
+      SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN status = 'passed' THEN 1 ELSE 0 END) as passed,
+        SUM(CASE WHEN status IN ('failed', 'error') THEN 1 ELSE 0 END) as failed,
+        SUM(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END) as skipped
+      FROM test_results WHERE run_id = ?
+    `).get(runId) as { total: number; passed: number; failed: number; skipped: number } | undefined;
+
+    const summary = {
+      totalTests: stats?.total || 0,
+      passed: stats?.passed || 0,
+      failed: stats?.failed || 0,
+      skipped: stats?.skipped || 0,
+      aborted: true,
+    };
+
+    db.prepare(`
+      UPDATE test_runs
+      SET completed_at = ?,
+          status = 'aborted',
+          total_tests = ?,
+          passed = ?,
+          failed = ?,
+          skipped = ?,
+          summary = ?
+      WHERE run_id = ?
+    `).run(
+      new Date().toISOString(),
+      summary.totalTests,
+      summary.passed,
+      summary.failed,
+      summary.skipped,
+      JSON.stringify(summary),
+      runId
+    );
+  }
+
+  /**
+   * Clean up stale running test runs (runs started more than X hours ago still showing as running)
+   */
+  cleanupStaleRuns(maxAgeHours: number = 2): number {
+    const db = this.getDb();
+    const cutoffTime = new Date(Date.now() - maxAgeHours * 60 * 60 * 1000).toISOString();
+
+    const result = db.prepare(`
+      UPDATE test_runs
+      SET completed_at = ?,
+          status = 'aborted',
+          summary = ?
+      WHERE status = 'running' AND started_at < ?
+    `).run(
+      new Date().toISOString(),
+      JSON.stringify({ aborted: true, reason: 'Stale run cleanup - exceeded maximum age' }),
+      cutoffTime
+    );
+
+    return result.changes;
   }
 
   /**
@@ -2919,6 +3315,264 @@ export class Database {
       summary: row.summary_json ? JSON.parse(row.summary_json) : undefined,
       createdAt: row.created_at,
     }));
+  }
+
+  // ============================================================================
+  // AI ENHANCEMENT METHODS
+  // ============================================================================
+
+  /**
+   * Create a new AI enhancement record
+   */
+  createEnhancement(enhancement: Omit<AIEnhancementHistory, 'id' | 'createdAt'>): string {
+    const db = this.getDb();
+    const enhancementId = `enh-${new Date().toISOString().slice(0, 10)}-${uuidv4().slice(0, 8)}`;
+
+    db.prepare(`
+      INSERT INTO ai_enhancement_history
+      (enhancement_id, file_key, source_version, command, command_template, web_search_used, status, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      enhancementId,
+      enhancement.fileKey,
+      enhancement.sourceVersion,
+      enhancement.command,
+      enhancement.commandTemplate || null,
+      enhancement.webSearchUsed ? 1 : 0,
+      enhancement.status,
+      enhancement.createdBy
+    );
+
+    return enhancementId;
+  }
+
+  /**
+   * Update an enhancement record
+   */
+  updateEnhancement(enhancementId: string, updates: Partial<AIEnhancementHistory>): void {
+    const db = this.getDb();
+
+    const setClauses: string[] = [];
+    const values: any[] = [];
+
+    if (updates.status !== undefined) {
+      setClauses.push('status = ?');
+      values.push(updates.status);
+    }
+    if (updates.resultVersion !== undefined) {
+      setClauses.push('result_version = ?');
+      values.push(updates.resultVersion);
+    }
+    if (updates.webSearchQueries !== undefined) {
+      setClauses.push('web_search_queries = ?');
+      values.push(updates.webSearchQueries);
+    }
+    if (updates.webSearchResultsJson !== undefined) {
+      setClauses.push('web_search_results_json = ?');
+      values.push(updates.webSearchResultsJson);
+    }
+    if (updates.enhancementPrompt !== undefined) {
+      setClauses.push('enhancement_prompt = ?');
+      values.push(updates.enhancementPrompt);
+    }
+    if (updates.aiResponseJson !== undefined) {
+      setClauses.push('ai_response_json = ?');
+      values.push(updates.aiResponseJson);
+    }
+    if (updates.qualityScoreBefore !== undefined) {
+      setClauses.push('quality_score_before = ?');
+      values.push(updates.qualityScoreBefore);
+    }
+    if (updates.qualityScoreAfter !== undefined) {
+      setClauses.push('quality_score_after = ?');
+      values.push(updates.qualityScoreAfter);
+    }
+    if (updates.errorMessage !== undefined) {
+      setClauses.push('error_message = ?');
+      values.push(updates.errorMessage);
+    }
+    if (updates.completedAt !== undefined) {
+      setClauses.push('completed_at = ?');
+      values.push(updates.completedAt);
+    }
+    if (updates.metadataJson !== undefined) {
+      setClauses.push('metadata_json = ?');
+      values.push(updates.metadataJson);
+    }
+    // New applied/promoted fields
+    if (updates.appliedAt !== undefined) {
+      setClauses.push('applied_at = ?');
+      values.push(updates.appliedAt);
+    }
+    if (updates.promotedAt !== undefined) {
+      setClauses.push('promoted_at = ?');
+      values.push(updates.promotedAt);
+    }
+    if (updates.appliedContent !== undefined) {
+      setClauses.push('applied_content = ?');
+      values.push(updates.appliedContent);
+    }
+
+    if (setClauses.length === 0) return;
+
+    values.push(enhancementId);
+    db.prepare(`
+      UPDATE ai_enhancement_history
+      SET ${setClauses.join(', ')}
+      WHERE enhancement_id = ?
+    `).run(...values);
+  }
+
+  /**
+   * Get enhancement by ID
+   */
+  getEnhancement(enhancementId: string): AIEnhancementHistory | null {
+    const db = this.getDb();
+
+    const row = db.prepare(`
+      SELECT * FROM ai_enhancement_history WHERE enhancement_id = ?
+    `).get(enhancementId) as any;
+
+    if (!row) return null;
+
+    return this.mapEnhancementRow(row);
+  }
+
+  /**
+   * Get enhancement history for a file
+   */
+  getEnhancementHistory(fileKey: string, limit: number = 20): AIEnhancementHistory[] {
+    const db = this.getDb();
+
+    const rows = db.prepare(`
+      SELECT * FROM ai_enhancement_history
+      WHERE file_key = ?
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(fileKey, limit) as any[];
+
+    return rows.map(row => this.mapEnhancementRow(row));
+  }
+
+  /**
+   * Get all enhancement templates
+   */
+  getEnhancementTemplates(): AIEnhancementTemplate[] {
+    const db = this.getDb();
+
+    const rows = db.prepare(`
+      SELECT * FROM ai_enhancement_templates
+      ORDER BY is_built_in DESC, usage_count DESC, name ASC
+    `).all() as any[];
+
+    return rows.map(row => ({
+      id: row.id,
+      templateId: row.template_id,
+      name: row.name,
+      description: row.description,
+      commandTemplate: row.command_template,
+      category: row.category,
+      useWebSearch: row.use_web_search === 1,
+      defaultSearchQueries: row.default_search_queries,
+      isBuiltIn: row.is_built_in === 1,
+      createdAt: row.created_at,
+      usageCount: row.usage_count,
+    }));
+  }
+
+  /**
+   * Get a specific enhancement template
+   */
+  getEnhancementTemplate(templateId: string): AIEnhancementTemplate | null {
+    const db = this.getDb();
+
+    const row = db.prepare(`
+      SELECT * FROM ai_enhancement_templates WHERE template_id = ?
+    `).get(templateId) as any;
+
+    if (!row) return null;
+
+    return {
+      id: row.id,
+      templateId: row.template_id,
+      name: row.name,
+      description: row.description,
+      commandTemplate: row.command_template,
+      category: row.category,
+      useWebSearch: row.use_web_search === 1,
+      defaultSearchQueries: row.default_search_queries,
+      isBuiltIn: row.is_built_in === 1,
+      createdAt: row.created_at,
+      usageCount: row.usage_count,
+    };
+  }
+
+  /**
+   * Increment template usage count
+   */
+  incrementTemplateUsage(templateId: string): void {
+    const db = this.getDb();
+
+    db.prepare(`
+      UPDATE ai_enhancement_templates
+      SET usage_count = usage_count + 1
+      WHERE template_id = ?
+    `).run(templateId);
+  }
+
+  /**
+   * Create a custom enhancement template
+   */
+  createEnhancementTemplate(template: Omit<AIEnhancementTemplate, 'id' | 'createdAt' | 'usageCount' | 'isBuiltIn'>): string {
+    const db = this.getDb();
+    const templateId = `tpl-${uuidv4().slice(0, 8)}`;
+
+    db.prepare(`
+      INSERT INTO ai_enhancement_templates
+      (template_id, name, description, command_template, category, use_web_search, is_built_in)
+      VALUES (?, ?, ?, ?, ?, ?, 0)
+    `).run(
+      templateId,
+      template.name,
+      template.description || null,
+      template.commandTemplate,
+      template.category,
+      template.useWebSearch ? 1 : 0
+    );
+
+    return templateId;
+  }
+
+  /**
+   * Helper to map enhancement row to interface
+   */
+  private mapEnhancementRow(row: any): AIEnhancementHistory {
+    return {
+      id: row.id,
+      enhancementId: row.enhancement_id,
+      fileKey: row.file_key,
+      sourceVersion: row.source_version,
+      resultVersion: row.result_version,
+      command: row.command,
+      commandTemplate: row.command_template,
+      webSearchUsed: row.web_search_used === 1,
+      webSearchQueries: row.web_search_queries,
+      webSearchResultsJson: row.web_search_results_json,
+      enhancementPrompt: row.enhancement_prompt,
+      aiResponseJson: row.ai_response_json,
+      qualityScoreBefore: row.quality_score_before,
+      qualityScoreAfter: row.quality_score_after,
+      status: row.status,
+      errorMessage: row.error_message,
+      createdAt: row.created_at,
+      completedAt: row.completed_at,
+      createdBy: row.created_by,
+      metadataJson: row.metadata_json,
+      // New applied/promoted fields
+      appliedAt: row.applied_at,
+      promotedAt: row.promoted_at,
+      appliedContent: row.applied_content,
+    };
   }
 
   /**

@@ -87,6 +87,14 @@ router.get('/prompts', testMonitorController.getPromptFiles);
 // Must be defined before /:fileKey routes to avoid conflicts
 router.post('/prompts/apply-batch', testMonitorController.applyBatchFixes);
 
+// GET /api/test-monitor/prompts/deployed - Get deployed versions for all prompts
+// Must be defined before /:fileKey routes to avoid conflicts
+router.get('/prompts/deployed', testMonitorController.getDeployedVersions);
+
+// GET /api/test-monitor/prompts/enhance/templates - Get enhancement templates
+// Must be defined before /:fileKey routes to avoid conflicts
+router.get('/prompts/enhance/templates', testMonitorController.getEnhancementTemplates);
+
 // GET /api/test-monitor/prompts/:fileKey - Get prompt content
 router.get('/prompts/:fileKey', testMonitorController.getPromptContent);
 
@@ -107,13 +115,6 @@ router.post('/prompts/:fileKey/sync', testMonitorController.syncPromptToDisk);
 
 // POST /api/test-monitor/prompts/:fileKey/reset - Reset from disk (reload V3 files)
 router.post('/prompts/:fileKey/reset', testMonitorController.resetPromptFromDisk);
-
-// ============================================================================
-// DEPLOYMENT TRACKING ROUTES (Phase 5: Flowise Sync)
-// ============================================================================
-
-// GET /api/test-monitor/prompts/deployed - Get deployed versions for all prompts
-router.get('/prompts/deployed', testMonitorController.getDeployedVersions);
 
 // POST /api/test-monitor/prompts/:fileKey/mark-deployed - Mark a prompt version as deployed
 router.post('/prompts/:fileKey/mark-deployed', testMonitorController.markPromptAsDeployed);
@@ -274,5 +275,33 @@ router.post('/sandboxes/:sandboxId/reset', testMonitorController.resetSandbox);
 
 // POST /api/test-monitor/sandboxes/:sandboxId/copy-all - Copy all files from production
 router.post('/sandboxes/:sandboxId/copy-all', testMonitorController.copySandboxAllFromProduction);
+
+// ============================================================================
+// AI ENHANCEMENT ROUTES (parameterized routes - must come after static routes)
+// ============================================================================
+
+// POST /api/test-monitor/prompts/:fileKey/enhance - Generate enhancement and save to database
+router.post('/prompts/:fileKey/enhance', testMonitorController.enhancePrompt);
+
+// POST /api/test-monitor/prompts/:fileKey/enhance/preview - Preview enhancement without saving
+router.post('/prompts/:fileKey/enhance/preview', testMonitorController.previewEnhancement);
+
+// GET /api/test-monitor/prompts/:fileKey/enhancements - Get enhancement history
+router.get('/prompts/:fileKey/enhancements', testMonitorController.getEnhancementHistory);
+
+// POST /api/test-monitor/prompts/:fileKey/enhancements/:enhancementId/apply - Apply enhancement (saves to AI Enhancements, not main files)
+router.post('/prompts/:fileKey/enhancements/:enhancementId/apply', testMonitorController.applyEnhancement);
+
+// POST /api/test-monitor/prompts/:fileKey/enhancements/:enhancementId/promote - Promote to production (saves to main prompt files)
+router.post('/prompts/:fileKey/enhancements/:enhancementId/promote', testMonitorController.promoteToProduction);
+
+// POST /api/test-monitor/prompts/:fileKey/enhancements/:enhancementId/discard - Discard enhancement
+router.post('/prompts/:fileKey/enhancements/:enhancementId/discard', testMonitorController.discardEnhancement);
+
+// GET /api/test-monitor/prompts/:fileKey/quality-score - Get quality score
+router.get('/prompts/:fileKey/quality-score', testMonitorController.getQualityScore);
+
+// GET /api/test-monitor/enhancements/:enhancementId - Get enhancement by ID
+router.get('/enhancements/:enhancementId', testMonitorController.getEnhancement);
 
 export default router;

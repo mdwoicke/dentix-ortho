@@ -4,6 +4,7 @@
  */
 
 import { get, put, post } from './client';
+import { API_CONFIG } from '../../utils/constants';
 import type {
   TestRun,
   TestRunWithResults,
@@ -645,11 +646,37 @@ export async function getDeploymentHistory(
 }
 
 /**
+ * Escape curly brackets for Flowise templating system
+ * Converts single { and } to {{ and }} to prevent Flowise from interpreting them as variables
+ * Only applies to system_prompt, not to tool files which use JavaScript
+ */
+function escapeForFlowise(content: string): string {
+  // Escape { to {{ and } to }}
+  // We need to be careful not to double-escape already escaped brackets
+  // First, temporarily mark already-escaped brackets, then escape singles, then restore
+  return content
+    .replace(/\{\{/g, '\x00DOUBLE_OPEN\x00')
+    .replace(/\}\}/g, '\x00DOUBLE_CLOSE\x00')
+    .replace(/\{/g, '{{')
+    .replace(/\}/g, '}}')
+    .replace(/\x00DOUBLE_OPEN\x00/g, '{{')
+    .replace(/\x00DOUBLE_CLOSE\x00/g, '}}');
+}
+
+/**
  * Copy full prompt content for pasting into Flowise
  * Returns the full prompt content for clipboard copy
+ * For system_prompt, escapes curly brackets to prevent Flowise template interpretation
  */
 export async function getPromptForFlowise(fileKey: string): Promise<string> {
   const content = await getPromptContent(fileKey);
+
+  // Only escape curly brackets for system_prompt (markdown prompt)
+  // Tool files (patient_tool, scheduling_tool) are JavaScript and need their brackets intact
+  if (fileKey === 'system_prompt') {
+    return escapeForFlowise(content.content);
+  }
+
   return content.content;
 }
 
@@ -979,6 +1006,156 @@ export async function analyzeGoalDescription(
   const response = await post<TestMonitorApiResponse<GoalAnalysisResult>>(
     '/test-monitor/goal-tests/analyze',
     request
+  );
+  return response.data;
+}
+
+// ============================================================================
+// AI ENHANCEMENT API
+// ============================================================================
+
+import type {
+  EnhanceRequest,
+  EnhanceResult,
+  EnhancementTemplate,
+  EnhancementHistory,
+  ApplyEnhancementResult,
+  QualityScore,
+} from '../../types/aiPrompting.types';
+
+/**
+ * Get available enhancement templates
+ */
+export async function getEnhancementTemplates(): Promise<EnhancementTemplate[]> {
+  const response = await get<TestMonitorApiResponse<EnhancementTemplate[]>>(
+    '/test-monitor/prompts/enhance/templates'
+  );
+  return response.data;
+}
+
+/**
+ * Preview an enhancement without saving
+ * Uses extended timeout for AI operations
+ */
+export async function previewEnhancement(
+  fileKey: string,
+  request: Omit<EnhanceRequest, 'fileKey'>
+): Promise<EnhanceResult> {
+  const response = await post<TestMonitorApiResponse<EnhanceResult>>(
+    `/test-monitor/prompts/${fileKey}/enhance/preview`,
+    request,
+    { timeout: API_CONFIG.AI_TIMEOUT }
+  );
+  return response.data;
+}
+
+/**
+ * Generate an enhancement and save to database
+ * Uses extended timeout for AI operations
+ */
+export async function enhancePrompt(
+  fileKey: string,
+  request: Omit<EnhanceRequest, 'fileKey'>
+): Promise<EnhanceResult> {
+  const response = await post<TestMonitorApiResponse<EnhanceResult>>(
+    `/test-monitor/prompts/${fileKey}/enhance`,
+    request,
+    { timeout: API_CONFIG.AI_TIMEOUT }
+  );
+  return response.data;
+}
+
+/**
+ * Get enhancement history for a file
+ */
+export async function getEnhancementHistory(
+  fileKey: string,
+  limit?: number
+): Promise<EnhancementHistory[]> {
+  const params = new URLSearchParams();
+  if (limit) params.append('limit', limit.toString());
+  const queryString = params.toString() ? `?${params.toString()}` : '';
+
+  const response = await get<TestMonitorApiResponse<EnhancementHistory[]>>(
+    `/test-monitor/prompts/${fileKey}/enhancements${queryString}`
+  );
+  return response.data;
+}
+
+/**
+ * Apply an enhancement - saves to AI Enhancements storage (NOT to main prompt files)
+ * Use promoteToProduction() to actually save to the main prompt files
+ * @param description - Optional custom description for when promoted
+ */
+export async function applyEnhancement(
+  fileKey: string,
+  enhancementId: string,
+  description?: string
+): Promise<ApplyEnhancementResult> {
+  const response = await post<TestMonitorApiResponse<ApplyEnhancementResult>>(
+    `/test-monitor/prompts/${fileKey}/enhancements/${enhancementId}/apply`,
+    { description }
+  );
+  return response.data;
+}
+
+/**
+ * Promote an applied enhancement to production (main prompt files)
+ * This creates a new version in the main prompt file
+ * @param description - Optional custom description override
+ */
+export async function promoteToProduction(
+  fileKey: string,
+  enhancementId: string,
+  description?: string
+): Promise<ApplyEnhancementResult> {
+  const response = await post<TestMonitorApiResponse<ApplyEnhancementResult>>(
+    `/test-monitor/prompts/${fileKey}/enhancements/${enhancementId}/promote`,
+    { description }
+  );
+  return response.data;
+}
+
+/**
+ * Discard an enhancement
+ */
+export async function discardEnhancement(
+  fileKey: string,
+  enhancementId: string
+): Promise<void> {
+  await post<TestMonitorApiResponse<void>>(
+    `/test-monitor/prompts/${fileKey}/enhancements/${enhancementId}/discard`,
+    {}
+  );
+}
+
+/**
+ * Get quality score for a prompt
+ * Uses extended timeout for AI operations (may be cached)
+ */
+export async function getQualityScore(
+  fileKey: string,
+  version?: number
+): Promise<QualityScore> {
+  const params = new URLSearchParams();
+  if (version) params.append('version', version.toString());
+  const queryString = params.toString() ? `?${params.toString()}` : '';
+
+  const response = await get<TestMonitorApiResponse<QualityScore>>(
+    `/test-monitor/prompts/${fileKey}/quality-score${queryString}`,
+    { timeout: API_CONFIG.AI_TIMEOUT }
+  );
+  return response.data;
+}
+
+/**
+ * Get enhancement by ID
+ */
+export async function getEnhancement(
+  enhancementId: string
+): Promise<EnhancementHistory> {
+  const response = await get<TestMonitorApiResponse<EnhancementHistory>>(
+    `/test-monitor/enhancements/${enhancementId}`
   );
   return response.data;
 }

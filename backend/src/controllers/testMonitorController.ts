@@ -13,6 +13,7 @@ import * as goalTestService from '../services/goalTestService';
 import { goalSuggestionService } from '../services/goalSuggestionService';
 import { goalAnalysisService } from '../services/goalAnalysisService';
 import * as comparisonService from '../services/comparisonService';
+import { aiEnhancementService } from '../services/aiEnhancementService';
 
 // Path to test-agent database
 const TEST_AGENT_DB_PATH = path.resolve(__dirname, '../../../test-agent/data/test-results.db');
@@ -3507,7 +3508,7 @@ export async function updateSandbox(
 export async function testLangfuseConnection(
   req: Request,
   res: Response,
-  next: NextFunction
+  _next: NextFunction
 ): Promise<void> {
   try {
     const { host, publicKey, secretKey } = req.body;
@@ -4267,5 +4268,302 @@ export async function getComparisonHistory(
     next(error);
   } finally {
     db?.close();
+  }
+}
+
+// ============================================================================
+// AI ENHANCEMENT ENDPOINTS
+// ============================================================================
+
+/**
+ * Get enhancement templates
+ */
+export async function getEnhancementTemplates(
+  _req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const templates = aiEnhancementService.getTemplates();
+    res.json({
+      success: true,
+      data: templates,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Preview an enhancement without saving
+ */
+export async function previewEnhancement(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const { fileKey } = req.params;
+    const { command, templateId, useWebSearch, sourceVersion } = req.body;
+
+    if (!command && !templateId) {
+      res.status(400).json({
+        success: false,
+        error: 'Either command or templateId is required',
+      });
+      return;
+    }
+
+    const result = await aiEnhancementService.previewEnhancement({
+      fileKey,
+      command: command || '',
+      templateId,
+      useWebSearch: useWebSearch || false,
+      sourceVersion,
+    });
+
+    res.json({
+      success: result.status === 'success',
+      data: result,
+      error: result.errorMessage,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Enhance a prompt and save to database
+ */
+export async function enhancePrompt(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const { fileKey } = req.params;
+    const { command, templateId, useWebSearch, sourceVersion } = req.body;
+
+    if (!command && !templateId) {
+      res.status(400).json({
+        success: false,
+        error: 'Either command or templateId is required',
+      });
+      return;
+    }
+
+    const result = await aiEnhancementService.enhancePrompt({
+      fileKey,
+      command: command || '',
+      templateId,
+      useWebSearch: useWebSearch || false,
+      sourceVersion,
+    });
+
+    res.json({
+      success: result.status === 'success',
+      data: result,
+      error: result.errorMessage,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Get enhancement history for a file
+ */
+export async function getEnhancementHistory(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const { fileKey } = req.params;
+    const limit = parseInt(req.query.limit as string) || 20;
+
+    const history = aiEnhancementService.getEnhancementHistory(fileKey, limit);
+
+    res.json({
+      success: true,
+      data: history,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Apply an enhancement to create a new version
+ */
+export async function applyEnhancement(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const { fileKey, enhancementId } = req.params;
+    const { description } = req.body;
+
+    const result = await aiEnhancementService.applyEnhancement(
+      fileKey,
+      enhancementId,
+      description // Optional custom description
+    );
+
+    res.json({
+      success: result.success,
+      data: result,
+      error: result.error,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Promote an applied enhancement to production (main prompt files)
+ */
+export async function promoteToProduction(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const { fileKey, enhancementId } = req.params;
+    const { description } = req.body;
+
+    const result = await aiEnhancementService.promoteToProduction(
+      fileKey,
+      enhancementId,
+      description // Optional custom description override
+    );
+
+    res.json({
+      success: result.success,
+      data: result,
+      error: result.error,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Discard an enhancement
+ */
+export async function discardEnhancement(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const { enhancementId } = req.params;
+
+    aiEnhancementService.discardEnhancement(enhancementId);
+
+    res.json({
+      success: true,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Get quality score for a prompt
+ * Uses caching to avoid re-analyzing the same version
+ */
+export async function getQualityScore(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const { fileKey } = req.params;
+    const version = req.query.version ? parseInt(req.query.version as string) : undefined;
+
+    // Determine the actual version number to use for caching
+    let actualVersion: number;
+    let content: string;
+
+    if (version) {
+      const versionContent = promptService.getVersionContent(fileKey, version);
+      if (!versionContent) {
+        res.status(404).json({
+          success: false,
+          error: `Version ${version} not found for ${fileKey}`,
+        });
+        return;
+      }
+      content = versionContent;
+      actualVersion = version;
+    } else {
+      const promptFile = promptService.getPromptContent(fileKey);
+      if (!promptFile) {
+        res.status(404).json({
+          success: false,
+          error: `Prompt file not found: ${fileKey}`,
+        });
+        return;
+      }
+      content = promptFile.content;
+      actualVersion = promptFile.version;
+    }
+
+    // Check cache first
+    const cachedScore = promptService.getCachedQualityScore(fileKey, actualVersion);
+    if (cachedScore) {
+      res.json({
+        success: true,
+        data: cachedScore,
+        cached: true,
+      });
+      return;
+    }
+
+    // Not in cache - analyze with AI
+    const score = await aiEnhancementService.scorePromptQuality(content, fileKey);
+
+    // Save to cache
+    promptService.saveQualityScoreToCache(fileKey, actualVersion, score);
+
+    res.json({
+      success: true,
+      data: score,
+      cached: false,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Get enhancement by ID
+ */
+export async function getEnhancement(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const { enhancementId } = req.params;
+
+    const enhancement = aiEnhancementService.getEnhancement(enhancementId);
+
+    if (!enhancement) {
+      res.status(404).json({
+        success: false,
+        error: 'Enhancement not found',
+      });
+      return;
+    }
+
+    res.json({
+      success: true,
+      data: enhancement,
+    });
+  } catch (error) {
+    next(error);
   }
 }
