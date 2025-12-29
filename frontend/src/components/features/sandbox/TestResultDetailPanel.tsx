@@ -5,7 +5,7 @@
 
 import { useState, useEffect } from 'react';
 import { cn } from '../../../utils/cn';
-import type { DetailedEndpointResult, GoalResult, TranscriptEntry } from '../../../types/sandbox.types';
+import type { DetailedEndpointResult, GoalResult, TranscriptEntry, ConstraintViolation, TestIssue } from '../../../types/sandbox.types';
 
 interface TestResultDetailPanelProps {
   testId: string;
@@ -215,18 +215,27 @@ function EndpointResultContent({ result, tabKey }: { result: DetailedEndpointRes
             Constraint Violations
           </h4>
           <ul className="space-y-1">
-            {result.constraintViolations.map((violation, idx) => (
-              <li key={idx} className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded px-3 py-2">
-                {typeof violation === 'string' ? violation : (
-                  <div>
-                    <span className="font-medium">{(violation as any).type || 'Violation'}</span>
-                    {(violation as any).description && (
-                      <span className="ml-1">- {(violation as any).description}</span>
-                    )}
-                  </div>
-                )}
-              </li>
-            ))}
+            {result.constraintViolations.map((violation, idx) => {
+              const isString = typeof violation === 'string';
+              const violationObj = violation as ConstraintViolation;
+              return (
+                <li key={idx} className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded px-3 py-2">
+                  {isString ? (
+                    violation
+                  ) : (
+                    <div>
+                      <span className="font-medium">{violationObj.type || 'Violation'}</span>
+                      {violationObj.description && (
+                        <span className="ml-1">- {violationObj.description}</span>
+                      )}
+                      {violationObj.turnNumber && (
+                        <span className="text-xs ml-2 text-red-500">(Turn {violationObj.turnNumber})</span>
+                      )}
+                    </div>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         </div>
       )}
@@ -241,21 +250,27 @@ function EndpointResultContent({ result, tabKey }: { result: DetailedEndpointRes
             Issues
           </h4>
           <ul className="space-y-1">
-            {result.issues.map((issue, idx) => (
-              <li key={idx} className="text-sm text-yellow-600 dark:text-yellow-400 bg-yellow-50 dark:bg-yellow-900/20 rounded px-3 py-2">
-                {typeof issue === 'string' ? issue : (
-                  <div>
-                    <span className="font-medium">{(issue as any).type || 'Issue'}</span>
-                    {(issue as any).description && (
-                      <span className="ml-1">- {(issue as any).description}</span>
-                    )}
-                    {(issue as any).turnNumber && (
-                      <span className="text-xs ml-2 text-yellow-500">(Turn {(issue as any).turnNumber})</span>
-                    )}
-                  </div>
-                )}
-              </li>
-            ))}
+            {result.issues.map((issue, idx) => {
+              const isString = typeof issue === 'string';
+              const issueObj = issue as TestIssue;
+              return (
+                <li key={idx} className="text-sm text-yellow-600 dark:text-yellow-400 bg-yellow-50 dark:bg-yellow-900/20 rounded px-3 py-2">
+                  {isString ? (
+                    issue
+                  ) : (
+                    <div>
+                      <span className="font-medium">{issueObj.type || 'Issue'}</span>
+                      {issueObj.description && (
+                        <span className="ml-1">- {issueObj.description}</span>
+                      )}
+                      {issueObj.turnNumber && (
+                        <span className="text-xs ml-2 text-yellow-500">(Turn {issueObj.turnNumber})</span>
+                      )}
+                    </div>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         </div>
       )}

@@ -70,6 +70,28 @@ export interface GoalResult {
 }
 
 /**
+ * Constraint violation from a test run
+ */
+export interface ConstraintViolation {
+  type: string;
+  description: string;
+  turnNumber?: number;
+  severity?: string;
+  context?: string;
+}
+
+/**
+ * Issue from a test run
+ */
+export interface TestIssue {
+  type: string;
+  description: string;
+  turnNumber?: number;
+  severity?: string;
+  context?: string;
+}
+
+/**
  * Transcript entry from a conversation
  */
 export interface TranscriptEntry {
@@ -94,10 +116,10 @@ export interface EndpointTestResult {
  */
 export interface DetailedEndpointResult extends EndpointTestResult {
   goalResults?: GoalResult[];
-  constraintViolations?: string[];
+  constraintViolations?: (string | ConstraintViolation)[];
   summary?: string;
   transcript?: TranscriptEntry[];
-  issues?: string[];
+  issues?: (string | TestIssue)[];
 }
 
 /**
