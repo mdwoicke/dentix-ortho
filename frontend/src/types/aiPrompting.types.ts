@@ -13,6 +13,7 @@ export interface EnhanceRequest {
   templateId?: string;
   useWebSearch?: boolean;
   sourceVersion?: number;
+  enhancementId?: string; // If provided, saves an existing preview (fast - no LLM call)
 }
 
 /**
@@ -131,10 +132,11 @@ export interface EnhancementHistory {
   commandTemplate?: string;
   webSearchUsed: boolean;
   webSearchResultsJson?: string;
+  /** JSON containing originalContent, enhancedContent, reasoning, diff, changes, qualityImprovements */
   aiResponseJson?: string;
   qualityScoreBefore?: number;
   qualityScoreAfter?: number;
-  status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'applied' | 'promoted';
+  status: 'pending' | 'preview' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'applied' | 'promoted';
   errorMessage?: string;
   createdAt: string;
   completedAt?: string;
@@ -142,6 +144,23 @@ export interface EnhancementHistory {
   appliedAt?: string;
   promotedAt?: string;
   appliedContent?: string;
+}
+
+/**
+ * Parsed AI response stored in aiResponseJson
+ * Contains both original and enhanced content for diff history
+ */
+export interface ParsedAIResponse {
+  originalContent?: string;       // Original content for diff comparison
+  enhancedContent: string;        // The enhanced content
+  reasoning: string;              // AI's explanation of changes
+  changes?: Array<{               // List of changes made
+    type: 'added' | 'modified' | 'removed';
+    location: string;
+    description: string;
+  }>;
+  qualityImprovements?: string[]; // List of quality improvements
+  diff?: DiffResult;              // Pre-calculated diff for history
 }
 
 /**

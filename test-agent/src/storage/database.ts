@@ -126,7 +126,7 @@ export interface AIEnhancementHistory {
   aiResponseJson?: string;
   qualityScoreBefore?: number;
   qualityScoreAfter?: number;
-  status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'applied' | 'promoted';
+  status: 'pending' | 'preview' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'applied' | 'promoted';
   errorMessage?: string;
   createdAt: string;
   completedAt?: string;
@@ -722,7 +722,7 @@ export class Database {
         ai_response_json TEXT,
         quality_score_before REAL,
         quality_score_after REAL,
-        status TEXT CHECK(status IN ('pending', 'processing', 'completed', 'failed', 'cancelled', 'applied', 'promoted')) DEFAULT 'pending',
+        status TEXT CHECK(status IN ('pending', 'preview', 'processing', 'completed', 'failed', 'cancelled', 'applied', 'promoted')) DEFAULT 'pending',
         error_message TEXT,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         completed_at TEXT,
@@ -808,7 +808,7 @@ export class Database {
   }
 
   /**
-   * Migrate ai_enhancement_history table to add 'applied' and 'promoted' to CHECK constraint
+   * Migrate ai_enhancement_history table to add 'preview', 'applied' and 'promoted' to CHECK constraint
    * SQLite requires recreating the table to modify CHECK constraints
    */
   private migrateEnhancementHistoryCheckConstraint(): void {
@@ -823,8 +823,8 @@ export class Database {
       return; // Table doesn't exist yet, will be created with correct constraint
     }
 
-    // Check if the CHECK constraint already includes 'applied' and 'promoted'
-    if (tableInfo.sql.includes("'applied'") && tableInfo.sql.includes("'promoted'")) {
+    // Check if the CHECK constraint already includes 'preview', 'applied' and 'promoted'
+    if (tableInfo.sql.includes("'preview'") && tableInfo.sql.includes("'applied'") && tableInfo.sql.includes("'promoted'")) {
       return; // Already migrated
     }
 
@@ -846,7 +846,7 @@ export class Database {
         ai_response_json TEXT,
         quality_score_before REAL,
         quality_score_after REAL,
-        status TEXT CHECK(status IN ('pending', 'processing', 'completed', 'failed', 'cancelled', 'applied', 'promoted')) DEFAULT 'pending',
+        status TEXT CHECK(status IN ('pending', 'preview', 'processing', 'completed', 'failed', 'cancelled', 'applied', 'promoted')) DEFAULT 'pending',
         error_message TEXT,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         completed_at TEXT,

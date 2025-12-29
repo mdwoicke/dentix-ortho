@@ -13,8 +13,15 @@ import type {
 import {
   FILE_KEY_DISPLAY_NAMES,
 } from '../../types/aiPrompting.types';
-import type { PromptFile, PromptVersionHistory } from '../../types/testMonitor.types';
+import type { PromptFile, PromptVersionHistory, PromptContent } from '../../types/testMonitor.types';
 import * as testMonitorApi from '../../services/api/testMonitorApi';
+
+// Content viewer state type
+interface ContentViewState {
+  content: string;
+  version: number;
+  isLoading: boolean;
+}
 
 // File icons for each prompt type
 const FILE_ICONS: Record<string, React.ReactNode> = {
@@ -608,7 +615,7 @@ const TemplateButton: React.FC<{
 };
 
 /**
- * Diff View Component
+ * Diff View Component - Shows changes in traditional patch format
  */
 const DiffView: React.FC<{ diff: EnhanceResult['diff'] }> = ({ diff }) => {
   if (diff.hunks.length === 0) {
@@ -652,6 +659,637 @@ const DiffView: React.FC<{ diff: EnhanceResult['diff'] }> = ({ diff }) => {
   );
 };
 
+/**
+ * View Mode for content display
+ */
+type ContentViewMode = 'highlighted' | 'diff' | 'clean';
+
+/**
+ * Highlighted Content View Component
+ * Shows the full enhanced content with inline diff highlighting:
+ * - Added lines: green background
+ * - Removed lines: red background with strikethrough
+ * - Unchanged lines: normal background
+ *
+ * This creates a unified view of the document showing all changes in context.
+ */
+const HighlightedContentView: React.FC<{
+  originalContent: string;
+  enhancedContent: string;
+  diff: EnhanceResult['diff'];
+}> = ({ originalContent, enhancedContent, diff }) => {
+  // Build a unified view by merging original and enhanced content
+  // showing additions in green and removals in red
+
+  const originalLines = originalContent.split('\n');
+  const enhancedLines = enhancedContent.split('\n');
+
+  // Create a map of line changes from the diff
+  interface UnifiedLine {
+    content: string;
+    type: 'add' | 'remove' | 'context';
+    lineNumber: number;
+  }
+
+  const unifiedLines: UnifiedLine[] = [];
+
+  // Track positions in both original and enhanced
+  let origIdx = 0;
+  let enhIdx = 0;
+  let displayLineNum = 1;
+
+  // Process each hunk
+  for (const hunk of diff.hunks) {
+    // Add context lines before this hunk (from enhanced content)
+    while (enhIdx < hunk.newStart - 1 && enhIdx < enhancedLines.length) {
+      unifiedLines.push({
+        content: enhancedLines[enhIdx],
+        type: 'context',
+        lineNumber: displayLineNum++,
+      });
+      enhIdx++;
+      origIdx++;
+    }
+
+    // Process lines in this hunk
+    for (const line of hunk.lines) {
+      if (line.type === 'remove') {
+        unifiedLines.push({
+          content: line.content,
+          type: 'remove',
+          lineNumber: displayLineNum, // Don't increment for removed lines
+        });
+        origIdx++;
+      } else if (line.type === 'add') {
+        unifiedLines.push({
+          content: line.content,
+          type: 'add',
+          lineNumber: displayLineNum++,
+        });
+        enhIdx++;
+      } else {
+        unifiedLines.push({
+          content: line.content,
+          type: 'context',
+          lineNumber: displayLineNum++,
+        });
+        origIdx++;
+        enhIdx++;
+      }
+    }
+  }
+
+  // Add remaining context lines after the last hunk
+  while (enhIdx < enhancedLines.length) {
+    unifiedLines.push({
+      content: enhancedLines[enhIdx],
+      type: 'context',
+      lineNumber: displayLineNum++,
+    });
+    enhIdx++;
+  }
+
+  // If no hunks (no changes), just show enhanced content as context
+  if (diff.hunks.length === 0) {
+    return (
+      <div className="font-mono text-sm bg-gray-50 dark:bg-gray-900 rounded-lg overflow-hidden">
+        <div className="flex gap-4 p-2 bg-gray-100 dark:bg-gray-800 text-xs text-gray-600 dark:text-gray-400">
+          <span>No changes - content unchanged</span>
+        </div>
+        <div className="max-h-[600px] overflow-auto">
+          {enhancedLines.map((line, i) => (
+            <div key={i} className="flex">
+              <span className="select-none w-12 px-2 py-0.5 text-right text-gray-400 dark:text-gray-500 bg-gray-100 dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700">
+                {i + 1}
+              </span>
+              <span className="flex-1 px-4 py-0.5 text-gray-800 dark:text-gray-200 whitespace-pre-wrap break-all">
+                {line || ' '}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="font-mono text-sm bg-gray-50 dark:bg-gray-900 rounded-lg overflow-hidden">
+      <div className="flex gap-4 p-2 bg-gray-100 dark:bg-gray-800 text-xs text-gray-600 dark:text-gray-400">
+        <span className="text-green-600 dark:text-green-400">+{diff.additions} additions</span>
+        <span className="text-red-600 dark:text-red-400">-{diff.deletions} deletions</span>
+        <span className="ml-auto text-gray-500">Highlighted Preview</span>
+      </div>
+      <div className="max-h-[600px] overflow-auto">
+        {unifiedLines.map((line, i) => (
+          <div
+            key={i}
+            className={`flex ${
+              line.type === 'add'
+                ? 'bg-green-50 dark:bg-green-900/30'
+                : line.type === 'remove'
+                ? 'bg-red-50 dark:bg-red-900/30'
+                : ''
+            }`}
+          >
+            {/* Line number column */}
+            <span className={`select-none w-12 px-2 py-0.5 text-right border-r ${
+              line.type === 'add'
+                ? 'text-green-600 dark:text-green-400 bg-green-100 dark:bg-green-900/50 border-green-200 dark:border-green-800'
+                : line.type === 'remove'
+                ? 'text-red-400 dark:text-red-500 bg-red-100 dark:bg-red-900/50 border-red-200 dark:border-red-800'
+                : 'text-gray-400 dark:text-gray-500 bg-gray-100 dark:bg-gray-800 border-gray-200 dark:border-gray-700'
+            }`}>
+              {line.type === 'remove' ? '' : line.lineNumber}
+            </span>
+
+            {/* Change indicator column */}
+            <span className={`select-none w-6 px-1 py-0.5 text-center ${
+              line.type === 'add'
+                ? 'text-green-600 dark:text-green-400 font-bold'
+                : line.type === 'remove'
+                ? 'text-red-600 dark:text-red-400 font-bold'
+                : 'text-gray-300 dark:text-gray-600'
+            }`}>
+              {line.type === 'add' ? '+' : line.type === 'remove' ? '-' : ' '}
+            </span>
+
+            {/* Content column */}
+            <span className={`flex-1 px-2 py-0.5 whitespace-pre-wrap break-all ${
+              line.type === 'add'
+                ? 'text-green-800 dark:text-green-300'
+                : line.type === 'remove'
+                ? 'text-red-700 dark:text-red-400 line-through opacity-75'
+                : 'text-gray-800 dark:text-gray-200'
+            }`}>
+              {line.content || ' '}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+/**
+ * View Mode Toggle Component
+ */
+const ViewModeToggle: React.FC<{
+  mode: ContentViewMode;
+  onChange: (mode: ContentViewMode) => void;
+}> = ({ mode, onChange }) => {
+  return (
+    <div className="flex bg-gray-100 dark:bg-gray-800 rounded-lg p-1 text-sm">
+      <button
+        onClick={() => onChange('highlighted')}
+        className={`px-3 py-1.5 rounded-md transition-colors ${
+          mode === 'highlighted'
+            ? 'bg-white dark:bg-gray-700 text-blue-600 dark:text-blue-400 shadow-sm'
+            : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+        }`}
+        title="Show full content with inline highlighting"
+      >
+        <span className="flex items-center gap-1.5">
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+          </svg>
+          Highlighted
+        </span>
+      </button>
+      <button
+        onClick={() => onChange('diff')}
+        className={`px-3 py-1.5 rounded-md transition-colors ${
+          mode === 'diff'
+            ? 'bg-white dark:bg-gray-700 text-blue-600 dark:text-blue-400 shadow-sm'
+            : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+        }`}
+        title="Show only changed lines"
+      >
+        <span className="flex items-center gap-1.5">
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+          </svg>
+          Diff
+        </span>
+      </button>
+      <button
+        onClick={() => onChange('clean')}
+        className={`px-3 py-1.5 rounded-md transition-colors ${
+          mode === 'clean'
+            ? 'bg-white dark:bg-gray-700 text-blue-600 dark:text-blue-400 shadow-sm'
+            : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+        }`}
+        title="Show final content without highlighting"
+      >
+        <span className="flex items-center gap-1.5">
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+          </svg>
+          Clean
+        </span>
+      </button>
+    </div>
+  );
+};
+
+/**
+ * Popout Button Component
+ */
+const PopoutButton: React.FC<{
+  onClick: () => void;
+  title?: string;
+}> = ({ onClick, title = "Open in popout" }) => {
+  return (
+    <button
+      onClick={onClick}
+      className="p-1.5 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-700 rounded transition-colors"
+      title={title}
+    >
+      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+      </svg>
+    </button>
+  );
+};
+
+/**
+ * Popout Modal Component for viewing code in full screen
+ */
+const PopoutModal: React.FC<{
+  isOpen: boolean;
+  onClose: () => void;
+  title: string;
+  subtitle?: string;
+  children: React.ReactNode;
+  viewMode: ContentViewMode;
+  onViewModeChange: (mode: ContentViewMode) => void;
+  stats?: { additions?: number; deletions?: number; lines?: number };
+}> = ({ isOpen, onClose, title, subtitle, children, viewMode, onViewModeChange, stats }) => {
+  // Handle escape key to close
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    if (isOpen) {
+      document.addEventListener('keydown', handleEscape);
+      document.body.style.overflow = 'hidden';
+    }
+    return () => {
+      document.removeEventListener('keydown', handleEscape);
+      document.body.style.overflow = 'unset';
+    };
+  }, [isOpen, onClose]);
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      {/* Backdrop */}
+      <div
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        onClick={onClose}
+      />
+
+      {/* Modal Content */}
+      <div className="relative w-[95vw] h-[90vh] bg-white dark:bg-gray-900 rounded-xl shadow-2xl flex flex-col overflow-hidden">
+        {/* Header */}
+        <div className="flex-shrink-0 flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800">
+          <div className="flex items-center gap-4">
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+                {title}
+              </h2>
+              {subtitle && (
+                <p className="text-sm text-gray-500 dark:text-gray-400 max-w-md truncate">{subtitle}</p>
+              )}
+            </div>
+            {stats && (
+              <div className="flex gap-3 text-sm">
+                {stats.additions !== undefined && (
+                  <span className="text-green-600 dark:text-green-400">
+                    +{stats.additions} additions
+                  </span>
+                )}
+                {stats.deletions !== undefined && (
+                  <span className="text-red-600 dark:text-red-400">
+                    -{stats.deletions} deletions
+                  </span>
+                )}
+                {stats.lines !== undefined && (
+                  <span className="text-gray-500 dark:text-gray-400">
+                    {stats.lines} lines
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="flex items-center gap-3">
+            <ViewModeToggle mode={viewMode} onChange={onViewModeChange} />
+            <button
+              onClick={onClose}
+              className="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg transition-colors"
+              title="Close (Esc)"
+            >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        {/* Content Area - Scrollable */}
+        <div className="flex-1 min-h-0 overflow-auto">
+          {children}
+        </div>
+
+        {/* Footer with keyboard shortcut hint */}
+        <div className="flex-shrink-0 px-6 py-2 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-xs text-gray-500 dark:text-gray-400">
+          Press <kbd className="px-1.5 py-0.5 bg-gray-200 dark:bg-gray-700 rounded">Esc</kbd> to close
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/**
+ * Content Popout Modal - Simple modal for viewing file content in full screen
+ */
+const ContentPopoutModal: React.FC<{
+  isOpen: boolean;
+  onClose: () => void;
+  title: string;
+  subtitle?: string;
+  content: string;
+  onCopy?: () => void;
+}> = ({ isOpen, onClose, title, subtitle, content, onCopy }) => {
+  // Handle escape key to close
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    if (isOpen) {
+      document.addEventListener('keydown', handleEscape);
+      document.body.style.overflow = 'hidden';
+    }
+    return () => {
+      document.removeEventListener('keydown', handleEscape);
+      document.body.style.overflow = 'unset';
+    };
+  }, [isOpen, onClose]);
+
+  if (!isOpen) return null;
+
+  const lineCount = content.split('\n').length;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      {/* Backdrop */}
+      <div
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        onClick={onClose}
+      />
+
+      {/* Modal Content */}
+      <div className="relative w-[95vw] h-[90vh] bg-white dark:bg-gray-900 rounded-xl shadow-2xl flex flex-col overflow-hidden">
+        {/* Header */}
+        <div className="flex-shrink-0 flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800">
+          <div className="flex items-center gap-4">
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+                {title}
+              </h2>
+              {subtitle && (
+                <p className="text-sm text-gray-500 dark:text-gray-400">{subtitle}</p>
+              )}
+            </div>
+            <span className="text-sm text-gray-500 dark:text-gray-400">
+              {lineCount} lines
+            </span>
+          </div>
+
+          <div className="flex items-center gap-3">
+            {onCopy && (
+              <button
+                onClick={onCopy}
+                className="px-3 py-1.5 text-sm text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors"
+              >
+                Copy to clipboard
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              className="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg transition-colors"
+              title="Close (Esc)"
+            >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        {/* Content Area - Scrollable */}
+        <div className="flex-1 min-h-0 overflow-auto">
+          <div className="font-mono text-sm bg-gray-50 dark:bg-gray-900 m-4 rounded-lg border border-gray-200 dark:border-gray-700">
+            {content.split('\n').map((line, i) => (
+              <div key={i} className="flex hover:bg-gray-100 dark:hover:bg-gray-800">
+                <span className="select-none w-14 px-3 py-0.5 text-right text-gray-400 dark:text-gray-500 bg-gray-100 dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700">
+                  {i + 1}
+                </span>
+                <span className="flex-1 px-4 py-0.5 text-gray-800 dark:text-gray-200 whitespace-pre-wrap break-all">
+                  {line || ' '}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Footer with keyboard shortcut hint */}
+        <div className="flex-shrink-0 px-6 py-2 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-xs text-gray-500 dark:text-gray-400">
+          Press <kbd className="px-1.5 py-0.5 bg-gray-200 dark:bg-gray-700 rounded">Esc</kbd> to close
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/**
+ * Popout Diff View - Full height version without max-height constraints
+ */
+const PopoutDiffView: React.FC<{ diff: EnhanceResult['diff'] }> = ({ diff }) => {
+  if (diff.hunks.length === 0) {
+    return (
+      <div className="text-gray-500 dark:text-gray-400 text-sm italic p-4 m-4">
+        No changes detected
+      </div>
+    );
+  }
+
+  return (
+    <div className="font-mono text-sm bg-gray-50 dark:bg-gray-900 m-4 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700">
+      {diff.hunks.map((hunk, i) => (
+        <div key={i} className="border-b border-gray-200 dark:border-gray-700 last:border-0">
+          {hunk.lines.map((line, j) => (
+            <div
+              key={j}
+              className={`px-4 py-0.5 ${
+                line.type === 'add'
+                  ? 'bg-green-50 dark:bg-green-900/30 text-green-800 dark:text-green-300'
+                  : line.type === 'remove'
+                  ? 'bg-red-50 dark:bg-red-900/30 text-red-800 dark:text-red-300'
+                  : 'text-gray-600 dark:text-gray-400'
+              }`}
+            >
+              <span className="select-none mr-2">
+                {line.type === 'add' ? '+' : line.type === 'remove' ? '-' : ' '}
+              </span>
+              <span className="whitespace-pre-wrap break-all">{line.content}</span>
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+};
+
+/**
+ * Popout Highlighted View - Full height version without max-height constraints
+ */
+const PopoutHighlightedView: React.FC<{
+  originalContent: string;
+  enhancedContent: string;
+  diff: EnhanceResult['diff'];
+}> = ({ originalContent, enhancedContent, diff }) => {
+  const enhancedLines = enhancedContent.split('\n');
+
+  interface UnifiedLine {
+    content: string;
+    type: 'add' | 'remove' | 'context';
+    lineNumber: number;
+  }
+
+  const unifiedLines: UnifiedLine[] = [];
+  let origIdx = 0;
+  let enhIdx = 0;
+  let displayLineNum = 1;
+
+  for (const hunk of diff.hunks) {
+    while (enhIdx < hunk.newStart - 1 && enhIdx < enhancedLines.length) {
+      unifiedLines.push({
+        content: enhancedLines[enhIdx],
+        type: 'context',
+        lineNumber: displayLineNum++,
+      });
+      enhIdx++;
+      origIdx++;
+    }
+
+    for (const line of hunk.lines) {
+      if (line.type === 'remove') {
+        unifiedLines.push({
+          content: line.content,
+          type: 'remove',
+          lineNumber: displayLineNum,
+        });
+        origIdx++;
+      } else if (line.type === 'add') {
+        unifiedLines.push({
+          content: line.content,
+          type: 'add',
+          lineNumber: displayLineNum++,
+        });
+        enhIdx++;
+      } else {
+        unifiedLines.push({
+          content: line.content,
+          type: 'context',
+          lineNumber: displayLineNum++,
+        });
+        origIdx++;
+        enhIdx++;
+      }
+    }
+  }
+
+  while (enhIdx < enhancedLines.length) {
+    unifiedLines.push({
+      content: enhancedLines[enhIdx],
+      type: 'context',
+      lineNumber: displayLineNum++,
+    });
+    enhIdx++;
+  }
+
+  if (diff.hunks.length === 0) {
+    return (
+      <div className="font-mono text-sm bg-gray-50 dark:bg-gray-900 m-4 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700">
+        <div className="p-2 bg-gray-100 dark:bg-gray-800 text-xs text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">
+          No changes - content unchanged
+        </div>
+        {enhancedLines.map((line, i) => (
+          <div key={i} className="flex">
+            <span className="select-none w-12 px-2 py-0.5 text-right text-gray-400 dark:text-gray-500 bg-gray-100 dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700">
+              {i + 1}
+            </span>
+            <span className="flex-1 px-4 py-0.5 text-gray-800 dark:text-gray-200 whitespace-pre-wrap break-all">
+              {line || ' '}
+            </span>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div className="font-mono text-sm bg-gray-50 dark:bg-gray-900 m-4 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700">
+      {unifiedLines.map((line, i) => (
+        <div
+          key={i}
+          className={`flex ${
+            line.type === 'add'
+              ? 'bg-green-50 dark:bg-green-900/30'
+              : line.type === 'remove'
+              ? 'bg-red-50 dark:bg-red-900/30'
+              : ''
+          }`}
+        >
+          <span className={`select-none w-12 px-2 py-0.5 text-right border-r ${
+            line.type === 'add'
+              ? 'text-green-600 dark:text-green-400 bg-green-100 dark:bg-green-900/50 border-green-200 dark:border-green-800'
+              : line.type === 'remove'
+              ? 'text-red-400 dark:text-red-500 bg-red-100 dark:bg-red-900/50 border-red-200 dark:border-red-800'
+              : 'text-gray-400 dark:text-gray-500 bg-gray-100 dark:bg-gray-800 border-gray-200 dark:border-gray-700'
+          }`}>
+            {line.type === 'remove' ? '' : line.lineNumber}
+          </span>
+          <span className={`select-none w-6 px-1 py-0.5 text-center ${
+            line.type === 'add'
+              ? 'text-green-600 dark:text-green-400 font-bold'
+              : line.type === 'remove'
+              ? 'text-red-600 dark:text-red-400 font-bold'
+              : 'text-gray-300 dark:text-gray-600'
+          }`}>
+            {line.type === 'add' ? '+' : line.type === 'remove' ? '-' : ' '}
+          </span>
+          <span className={`flex-1 px-2 py-0.5 whitespace-pre-wrap break-all ${
+            line.type === 'add'
+              ? 'text-green-800 dark:text-green-300'
+              : line.type === 'remove'
+              ? 'text-red-700 dark:text-red-400 line-through opacity-75'
+              : 'text-gray-800 dark:text-gray-200'
+          }`}>
+            {line.content || ' '}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+};
+
 // ============================================================================
 // MAIN PAGE COMPONENT
 // ============================================================================
@@ -682,6 +1320,15 @@ const AIPromptingPage: React.FC = () => {
   const [selectedEnhancementId, setSelectedEnhancementId] = useState<string | null>(null);
   const [selectedEnhancementDetails, setSelectedEnhancementDetails] = useState<EnhancementHistory | null>(null);
   const [enhancementDetailsLoading, setEnhancementDetailsLoading] = useState(false);
+  // Content viewing state
+  const [contentView, setContentView] = useState<ContentViewState | null>(null);
+  // Diff view mode state (for preview and enhancement details)
+  const [previewViewMode, setPreviewViewMode] = useState<ContentViewMode>('highlighted');
+  const [detailsViewMode, setDetailsViewMode] = useState<ContentViewMode>('highlighted');
+  // Popout modal state
+  const [isPreviewPopoutOpen, setIsPreviewPopoutOpen] = useState(false);
+  const [isDetailsPopoutOpen, setIsDetailsPopoutOpen] = useState(false);
+  const [isContentPopoutOpen, setIsContentPopoutOpen] = useState(false);
 
   // Load initial data
   useEffect(() => {
@@ -694,12 +1341,20 @@ const AIPromptingPage: React.FC = () => {
     if (selectedFileKey) {
       loadVersionHistory();
       loadEnhancementHistory();
+      loadPromptContent(); // Load content when file changes
       // Clear any stale enhancement selection when switching files
       setSelectedEnhancementId(null);
       setSelectedEnhancementDetails(null);
       setPreviewResult(null);
     }
   }, [selectedFileKey]);
+
+  // Reload content when version selection changes
+  useEffect(() => {
+    if (selectedFileKey) {
+      loadPromptContent();
+    }
+  }, [selectedVersion]);
 
   // Load quality score when file or version changes
   useEffect(() => {
@@ -747,6 +1402,29 @@ const AIPromptingPage: React.FC = () => {
       setEnhancementHistory(history);
     } catch (err) {
       console.error('Failed to load enhancement history:', err);
+    }
+  };
+
+  const loadPromptContent = async () => {
+    if (!selectedFileKey) return;
+
+    setContentView(prev => prev ? { ...prev, isLoading: true } : { content: '', version: 0, isLoading: true });
+
+    try {
+      let result: PromptContent;
+      if (selectedVersion) {
+        result = await testMonitorApi.getPromptVersionContent(selectedFileKey, selectedVersion);
+      } else {
+        result = await testMonitorApi.getPromptContent(selectedFileKey);
+      }
+      setContentView({
+        content: result.content,
+        version: result.version,
+        isLoading: false,
+      });
+    } catch (err) {
+      console.error('Failed to load prompt content:', err);
+      setContentView(prev => prev ? { ...prev, isLoading: false } : null);
     }
   };
 
@@ -807,12 +1485,14 @@ const AIPromptingPage: React.FC = () => {
     setError(null);
 
     try {
-      // First create the enhancement in the database
+      // Save the previewed enhancement (fast - uses cached preview, no LLM call)
+      // Pass the enhancementId from the preview so it just changes status to "completed"
       const enhanceResult = await testMonitorApi.enhancePrompt(selectedFileKey, {
         command,
         templateId: selectedTemplateId,
         useWebSearch,
         sourceVersion: selectedVersion,
+        enhancementId: previewResult.enhancementId, // Use cached preview - no LLM call!
       });
 
       if (enhanceResult.status === 'failed') {
@@ -1259,22 +1939,175 @@ const AIPromptingPage: React.FC = () => {
                 } catch { return null; }
               })()}
 
-              {/* Enhanced Content Preview */}
-              {(selectedEnhancementDetails.appliedContent || selectedEnhancementDetails.aiResponseJson) && (
-                <div className="bg-gray-50 dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-                  <h4 className="font-medium text-gray-700 dark:text-gray-200 mb-2">Enhanced Content</h4>
-                  <div className="max-h-96 overflow-auto">
-                    <pre className="text-xs text-gray-600 dark:text-gray-400 whitespace-pre-wrap font-mono bg-white dark:bg-gray-800 p-3 rounded border border-gray-200 dark:border-gray-700">
-                      {selectedEnhancementDetails.appliedContent || (() => {
-                        try {
-                          const aiResponse = JSON.parse(selectedEnhancementDetails.aiResponseJson || '{}');
-                          return aiResponse.enhancedContent || 'No content available';
-                        } catch { return 'No content available'; }
-                      })()}
-                    </pre>
-                  </div>
-                </div>
-              )}
+              {/* Enhanced Content Preview with View Mode */}
+              {(selectedEnhancementDetails.appliedContent || selectedEnhancementDetails.aiResponseJson) && (() => {
+                // Parse the AI response to get original content, enhanced content, and pre-calculated diff
+                let enhancedContent = selectedEnhancementDetails.appliedContent || '';
+                let originalContent = '';
+                let storedDiff: EnhanceResult['diff'] | null = null;
+
+                if (selectedEnhancementDetails.aiResponseJson) {
+                  try {
+                    const aiResponse = JSON.parse(selectedEnhancementDetails.aiResponseJson);
+                    if (!enhancedContent && aiResponse.enhancedContent) {
+                      enhancedContent = aiResponse.enhancedContent;
+                    }
+                    if (aiResponse.originalContent) {
+                      originalContent = aiResponse.originalContent;
+                    }
+                    // Use stored diff if available
+                    if (aiResponse.diff) {
+                      storedDiff = aiResponse.diff;
+                    }
+                  } catch { /* ignore */ }
+                }
+
+                // Use stored diff or calculate one if not available
+                let diff: EnhanceResult['diff'];
+
+                if (storedDiff) {
+                  // Use the pre-calculated diff from storage
+                  diff = storedDiff;
+                } else if (originalContent) {
+                  // Fallback: calculate diff for older enhancements
+                  const originalLines = originalContent.split('\n');
+                  const enhancedLines = enhancedContent.split('\n');
+
+                  const calculateSimpleDiff = () => {
+                    const hunks: EnhanceResult['diff']['hunks'] = [];
+                    let additions = 0;
+                    let deletions = 0;
+                    let i = 0, j = 0;
+                    let currentHunk: EnhanceResult['diff']['hunks'][0] | null = null;
+
+                    while (i < originalLines.length || j < enhancedLines.length) {
+                      if (i < originalLines.length && j < enhancedLines.length && originalLines[i] === enhancedLines[j]) {
+                        if (currentHunk) {
+                          hunks.push(currentHunk);
+                          currentHunk = null;
+                        }
+                        i++;
+                        j++;
+                      } else {
+                        if (!currentHunk) {
+                          currentHunk = {
+                            oldStart: i + 1,
+                            oldLines: 0,
+                            newStart: j + 1,
+                            newLines: 0,
+                            lines: [],
+                          };
+                        }
+                        if (i < originalLines.length && (j >= enhancedLines.length || originalLines[i] !== enhancedLines[j])) {
+                          currentHunk.lines.push({
+                            type: 'remove',
+                            content: originalLines[i],
+                            oldLineNumber: i + 1,
+                          });
+                          currentHunk.oldLines++;
+                          deletions++;
+                          i++;
+                        }
+                        if (j < enhancedLines.length && (i >= originalLines.length || originalLines[i] !== enhancedLines[j])) {
+                          currentHunk.lines.push({
+                            type: 'add',
+                            content: enhancedLines[j],
+                            newLineNumber: j + 1,
+                          });
+                          currentHunk.newLines++;
+                          additions++;
+                          j++;
+                        }
+                      }
+                    }
+                    if (currentHunk) {
+                      hunks.push(currentHunk);
+                    }
+                    return { additions, deletions, hunks };
+                  };
+
+                  diff = calculateSimpleDiff();
+                } else {
+                  // No original content - can't show diff
+                  diff = { additions: 0, deletions: 0, hunks: [] };
+                }
+
+                return (
+                  <>
+                    <div className="bg-gray-50 dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                          <h4 className="font-medium text-gray-700 dark:text-gray-200">Enhanced Content</h4>
+                          <PopoutButton
+                            onClick={() => setIsDetailsPopoutOpen(true)}
+                            title="Open in full screen"
+                          />
+                        </div>
+                        {originalContent && (
+                          <ViewModeToggle mode={detailsViewMode} onChange={setDetailsViewMode} />
+                        )}
+                      </div>
+
+                      {detailsViewMode === 'highlighted' && originalContent ? (
+                        <HighlightedContentView
+                          originalContent={originalContent}
+                          enhancedContent={enhancedContent}
+                          diff={diff}
+                        />
+                      ) : detailsViewMode === 'diff' && originalContent ? (
+                        <DiffView diff={diff} />
+                      ) : (
+                        <div className="font-mono text-sm bg-white dark:bg-gray-800 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700">
+                          <div className="flex items-center justify-between px-4 py-2 bg-gray-100 dark:bg-gray-700 border-b border-gray-200 dark:border-gray-600">
+                            <span className="text-xs text-gray-600 dark:text-gray-400">
+                              {enhancedContent.split('\n').length} lines
+                            </span>
+                            <span className="text-xs text-green-600 dark:text-green-400">
+                              Final Content
+                            </span>
+                          </div>
+                          <div className="max-h-[600px] overflow-auto">
+                            <pre className="p-4 text-sm text-gray-800 dark:text-gray-200 whitespace-pre-wrap break-words leading-relaxed">
+                              {enhancedContent || 'No content available'}
+                            </pre>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Details Popout Modal */}
+                    <PopoutModal
+                      isOpen={isDetailsPopoutOpen}
+                      onClose={() => setIsDetailsPopoutOpen(false)}
+                      title={`Enhancement: ${FILE_KEY_DISPLAY_NAMES[selectedEnhancementDetails.fileKey] || selectedEnhancementDetails.fileKey}`}
+                      subtitle={selectedEnhancementDetails.command}
+                      viewMode={detailsViewMode}
+                      onViewModeChange={setDetailsViewMode}
+                      stats={{
+                        additions: diff.additions,
+                        deletions: diff.deletions,
+                        lines: enhancedContent.split('\n').length,
+                      }}
+                    >
+                      {detailsViewMode === 'highlighted' && originalContent ? (
+                        <PopoutHighlightedView
+                          originalContent={originalContent}
+                          enhancedContent={enhancedContent}
+                          diff={diff}
+                        />
+                      ) : detailsViewMode === 'diff' && originalContent ? (
+                        <PopoutDiffView diff={diff} />
+                      ) : (
+                        <div className="font-mono text-sm bg-white dark:bg-gray-800 m-4 rounded-lg border border-gray-200 dark:border-gray-700">
+                          <pre className="p-4 text-sm text-gray-800 dark:text-gray-200 whitespace-pre-wrap break-words leading-relaxed">
+                            {enhancedContent || 'No content available'}
+                          </pre>
+                        </div>
+                      )}
+                    </PopoutModal>
+                  </>
+                );
+              })()}
 
               {/* Action Buttons */}
               <div className="flex gap-3 sticky bottom-0 bg-white dark:bg-gray-800 p-4 border-t border-gray-200 dark:border-gray-700 shadow-lg rounded-lg">
@@ -1376,11 +2209,84 @@ const AIPromptingPage: React.FC = () => {
                 </div>
               )}
 
-              {/* Diff View */}
+              {/* Changes View with Mode Toggle */}
               <div className="bg-gray-50 dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-                <h4 className="font-medium text-gray-700 dark:text-gray-200 mb-2">Changes</h4>
-                <DiffView diff={previewResult.diff} />
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <h4 className="font-medium text-gray-700 dark:text-gray-200">Changes</h4>
+                    <PopoutButton
+                      onClick={() => setIsPreviewPopoutOpen(true)}
+                      title="Open in full screen"
+                    />
+                  </div>
+                  <ViewModeToggle mode={previewViewMode} onChange={setPreviewViewMode} />
+                </div>
+
+                {previewViewMode === 'highlighted' && (
+                  <HighlightedContentView
+                    originalContent={previewResult.originalContent}
+                    enhancedContent={previewResult.enhancedContent}
+                    diff={previewResult.diff}
+                  />
+                )}
+
+                {previewViewMode === 'diff' && (
+                  <DiffView diff={previewResult.diff} />
+                )}
+
+                {previewViewMode === 'clean' && (
+                  <div className="font-mono text-sm bg-white dark:bg-gray-800 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700">
+                    <div className="flex items-center justify-between px-4 py-2 bg-gray-100 dark:bg-gray-700 border-b border-gray-200 dark:border-gray-600">
+                      <span className="text-xs text-gray-600 dark:text-gray-400">
+                        {previewResult.enhancedContent.split('\n').length} lines
+                      </span>
+                      <span className="text-xs text-green-600 dark:text-green-400">
+                        Final Content (will be saved when promoted)
+                      </span>
+                    </div>
+                    <div className="max-h-[600px] overflow-auto">
+                      <pre className="p-4 text-sm text-gray-800 dark:text-gray-200 whitespace-pre-wrap break-words leading-relaxed">
+                        {previewResult.enhancedContent}
+                      </pre>
+                    </div>
+                  </div>
+                )}
               </div>
+
+              {/* Preview Popout Modal */}
+              <PopoutModal
+                isOpen={isPreviewPopoutOpen}
+                onClose={() => setIsPreviewPopoutOpen(false)}
+                title={`Enhancement Preview: ${FILE_KEY_DISPLAY_NAMES[previewResult.fileKey] || previewResult.fileKey}`}
+                subtitle={`Quality: ${Math.round(previewResult.qualityScores.before)} → ${Math.round(previewResult.qualityScores.after)} (+${Math.round(previewResult.qualityScores.improvement)} pts)`}
+                viewMode={previewViewMode}
+                onViewModeChange={setPreviewViewMode}
+                stats={{
+                  additions: previewResult.diff.additions,
+                  deletions: previewResult.diff.deletions,
+                  lines: previewResult.enhancedContent.split('\n').length,
+                }}
+              >
+                {previewViewMode === 'highlighted' && (
+                  <PopoutHighlightedView
+                    originalContent={previewResult.originalContent}
+                    enhancedContent={previewResult.enhancedContent}
+                    diff={previewResult.diff}
+                  />
+                )}
+
+                {previewViewMode === 'diff' && (
+                  <PopoutDiffView diff={previewResult.diff} />
+                )}
+
+                {previewViewMode === 'clean' && (
+                  <div className="font-mono text-sm bg-white dark:bg-gray-800 m-4 rounded-lg border border-gray-200 dark:border-gray-700">
+                    <pre className="p-4 text-sm text-gray-800 dark:text-gray-200 whitespace-pre-wrap break-words leading-relaxed">
+                      {previewResult.enhancedContent}
+                    </pre>
+                  </div>
+                )}
+              </PopoutModal>
 
               {/* Apply/Discard Buttons */}
               <div className="flex gap-3 sticky bottom-0 bg-white dark:bg-gray-800 p-4 border-t border-gray-200 dark:border-gray-700 shadow-lg rounded-lg">
@@ -1400,12 +2306,101 @@ const AIPromptingPage: React.FC = () => {
                 </button>
               </div>
             </div>
+          ) : contentView ? (
+            /* Content Viewer - Shows current or selected version content */
+            <div className="space-y-4">
+              {/* Content Header */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 rounded-lg bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400">
+                    {FILE_ICONS[selectedFileKey] || FILE_ICONS.system_prompt}
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-gray-900 dark:text-white">
+                      {FILE_KEY_DISPLAY_NAMES[selectedFileKey] || selectedFileKey}
+                    </h3>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                      Version {contentView.version}
+                      {selectedVersion ? ' (selected)' : ' (current)'}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1">
+                  <PopoutButton
+                    onClick={() => setIsContentPopoutOpen(true)}
+                    title="Open in full screen"
+                  />
+                  <button
+                    onClick={loadPromptContent}
+                    className="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+                    title="Refresh content"
+                  >
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+
+              {/* Content Display */}
+              {contentView.isLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <div className="text-center">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-3"></div>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">Loading content...</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-gray-50 dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+                  <div className="flex items-center justify-between px-4 py-2 bg-gray-100 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
+                    <span className="text-xs font-medium text-gray-600 dark:text-gray-400">
+                      {contentView.content.split('\n').length} lines
+                    </span>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(contentView.content);
+                        setSuccessMessage('Content copied to clipboard!');
+                        setTimeout(() => setSuccessMessage(null), 2000);
+                      }}
+                      className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                    >
+                      Copy to clipboard
+                    </button>
+                  </div>
+                  <div className="max-h-[600px] overflow-auto">
+                    <pre className="p-4 text-sm text-gray-800 dark:text-gray-200 font-mono whitespace-pre-wrap break-words leading-relaxed">
+                      {contentView.content}
+                    </pre>
+                  </div>
+                </div>
+              )}
+
+              {/* Help Text */}
+              <div className="text-center text-sm text-gray-500 dark:text-gray-400 pt-4">
+                <p>Use the command panel to enhance this prompt with AI</p>
+                <p className="text-xs mt-1">Select a different version from the dropdown to compare</p>
+              </div>
+
+              {/* Content Popout Modal */}
+              <ContentPopoutModal
+                isOpen={isContentPopoutOpen}
+                onClose={() => setIsContentPopoutOpen(false)}
+                title={FILE_KEY_DISPLAY_NAMES[selectedFileKey] || selectedFileKey}
+                subtitle={`Version ${contentView.version}${selectedVersion ? ' (selected)' : ' (current)'}`}
+                content={contentView.content}
+                onCopy={() => {
+                  navigator.clipboard.writeText(contentView.content);
+                  setSuccessMessage('Content copied to clipboard!');
+                  setTimeout(() => setSuccessMessage(null), 2000);
+                }}
+              />
+            </div>
           ) : (
             <div className="flex items-center justify-center h-full text-gray-400 dark:text-gray-500">
               <div className="text-center">
                 <div className="text-6xl mb-4">✨</div>
-                <p>Select a template or enter a command to preview enhancement</p>
-                <p className="text-sm mt-2">Or click on an enhancement in the list to view details</p>
+                <p>Select a prompt file to view its content</p>
+                <p className="text-sm mt-2">Then use templates or commands to preview enhancements</p>
               </div>
             </div>
           )}

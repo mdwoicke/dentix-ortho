@@ -89,6 +89,65 @@ export interface PromptVersion {
     testPassRate?: number;
     capturedAt: string;
 }
+export interface AIEnhancementHistory {
+    id?: number;
+    enhancementId: string;
+    fileKey: string;
+    sourceVersion: number;
+    resultVersion?: number;
+    command: string;
+    commandTemplate?: string;
+    webSearchUsed: boolean;
+    webSearchQueries?: string;
+    webSearchResultsJson?: string;
+    enhancementPrompt?: string;
+    aiResponseJson?: string;
+    qualityScoreBefore?: number;
+    qualityScoreAfter?: number;
+    status: 'pending' | 'preview' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'applied' | 'promoted';
+    errorMessage?: string;
+    createdAt: string;
+    completedAt?: string;
+    createdBy: string;
+    metadataJson?: string;
+    appliedAt?: string;
+    promotedAt?: string;
+    appliedContent?: string;
+}
+export interface AIEnhancementTemplate {
+    id?: number;
+    templateId: string;
+    name: string;
+    description?: string;
+    commandTemplate: string;
+    category: 'clarity' | 'examples' | 'edge-cases' | 'format' | 'validation' | 'custom';
+    useWebSearch: boolean;
+    defaultSearchQueries?: string;
+    isBuiltIn: boolean;
+    createdAt?: string;
+    usageCount: number;
+}
+export interface QualityScore {
+    overall: number;
+    dimensions: {
+        clarity: number;
+        completeness: number;
+        examples: number;
+        consistency: number;
+        edgeCases: number;
+    };
+    suggestions: string[];
+    tokenCount?: number;
+    charCount?: number;
+    lineCount?: number;
+}
+export interface WebSearchResult {
+    source: string;
+    title: string;
+    excerpt: string;
+    relevanceScore: number;
+    keyTakeaways: string[];
+}
 export interface GoalTestResultRecord {
     id?: number;
     runId: string;
@@ -176,6 +235,15 @@ export declare class Database {
      */
     private addColumnIfNotExists;
     /**
+     * Migrate ai_enhancement_history table to add 'preview', 'applied' and 'promoted' to CHECK constraint
+     * SQLite requires recreating the table to modify CHECK constraints
+     */
+    private migrateEnhancementHistoryCheckConstraint;
+    /**
+     * Initialize built-in enhancement templates (runs once on first setup)
+     */
+    private initializeBuiltInTemplates;
+    /**
      * Create a new test run
      */
     createTestRun(): string;
@@ -188,6 +256,18 @@ export declare class Database {
         failed: number;
         skipped: number;
     }): void;
+    /**
+     * Mark a test run as failed (for error cases)
+     */
+    failTestRun(runId: string, errorMessage?: string): void;
+    /**
+     * Mark a test run as aborted (for user cancellation)
+     */
+    abortTestRun(runId: string): void;
+    /**
+     * Clean up stale running test runs (runs started more than X hours ago still showing as running)
+     */
+    cleanupStaleRuns(maxAgeHours?: number): number;
     /**
      * Save a test result
      */
@@ -401,8 +481,336 @@ export declare class Database {
      */
     deleteGoalTestData(runId: string): void;
     /**
+     * Save a variant
+     */
+    saveVariant(variant: ABVariant): void;
+    /**
+     * Get a variant by ID
+     */
+    getVariant(variantId: string): ABVariant | null;
+    /**
+     * Get variants by target file
+     */
+    getVariantsByFile(targetFile: string): ABVariant[];
+    /**
+     * Get baseline variant for a file
+     */
+    getBaselineVariant(targetFile: string): ABVariant | null;
+    /**
+     * Set a variant as baseline (unsets others for same file)
+     */
+    setVariantAsBaseline(variantId: string): void;
+    /**
+     * Find variant by content hash
+     */
+    findVariantByHash(contentHash: string, targetFile: string): ABVariant | null;
+    /**
+     * Get all variants
+     */
+    getAllVariants(options?: {
+        variantType?: string;
+        isBaseline?: boolean;
+    }): ABVariant[];
+    private mapRowToVariant;
+    /**
+     * Save an experiment
+     */
+    saveExperiment(experiment: ABExperiment): void;
+    /**
+     * Get an experiment by ID
+     */
+    getExperiment(experimentId: string): ABExperiment | null;
+    /**
+     * Get experiments by status
+     */
+    getExperimentsByStatus(status: string): ABExperiment[];
+    /**
+     * Get all experiments
+     */
+    getAllExperiments(options?: {
+        status?: string;
+        limit?: number;
+    }): ABExperiment[];
+    /**
+     * Update experiment status
+     */
+    updateExperimentStatus(experimentId: string, status: string, updates?: {
+        startedAt?: string;
+        completedAt?: string;
+        winningVariantId?: string;
+        conclusion?: string;
+    }): void;
+    private mapRowToExperiment;
+    /**
+     * Save an experiment run
+     */
+    saveExperimentRun(run: ABExperimentRun): number;
+    /**
+     * Get experiment runs for an experiment
+     */
+    getExperimentRuns(experimentId: string): ABExperimentRun[];
+    /**
+     * Get experiment runs for a specific variant
+     */
+    getExperimentRunsByVariant(experimentId: string, variantId: string): ABExperimentRun[];
+    /**
+     * Count runs per variant for an experiment
+     */
+    countExperimentRuns(experimentId: string): {
+        variantId: string;
+        count: number;
+        passCount: number;
+    }[];
+    private mapRowToExperimentRun;
+    /**
+     * Save an experiment trigger
+     */
+    saveExperimentTrigger(trigger: ABExperimentTrigger): void;
+    /**
+     * Get triggers for an experiment
+     */
+    getExperimentTriggers(experimentId: string): ABExperimentTrigger[];
+    /**
+     * Get enabled triggers
+     */
+    getEnabledTriggers(): ABExperimentTrigger[];
+    /**
+     * Update trigger last triggered time
+     */
+    updateTriggerLastTriggered(triggerId: string): void;
+    /**
+     * Get A/B testing statistics
+     */
+    getABTestingStats(): {
+        totalExperiments: number;
+        runningExperiments: number;
+        completedExperiments: number;
+        totalVariants: number;
+        totalRuns: number;
+    };
+    /**
+     * Initialize default sandboxes (A and B)
+     */
+    initializeSandboxes(): void;
+    /**
+     * Get a sandbox by ID
+     */
+    getSandbox(sandboxId: string): ABSandbox | null;
+    /**
+     * Get all sandboxes
+     */
+    getAllSandboxes(): ABSandbox[];
+    /**
+     * Update a sandbox
+     */
+    updateSandbox(sandboxId: string, updates: Partial<ABSandbox>): void;
+    /**
+     * Get a sandbox file
+     */
+    getSandboxFile(sandboxId: string, fileKey: string): ABSandboxFile | null;
+    /**
+     * Get all files for a sandbox
+     */
+    getSandboxFiles(sandboxId: string): ABSandboxFile[];
+    /**
+     * Save or update a sandbox file (creates new version)
+     */
+    saveSandboxFile(file: Omit<ABSandboxFile, 'id' | 'createdAt' | 'updatedAt'>): number;
+    /**
+     * Get sandbox file history
+     */
+    getSandboxFileHistory(sandboxId: string, fileKey: string, limit?: number): ABSandboxFileHistory[];
+    /**
+     * Rollback sandbox file to a specific version
+     */
+    rollbackSandboxFile(sandboxId: string, fileKey: string, version: number): void;
+    /**
+     * Delete all files for a sandbox (for reset)
+     */
+    clearSandboxFiles(sandboxId: string): void;
+    /**
+     * Create a comparison run
+     */
+    createComparisonRun(run: Omit<ABSandboxComparisonRun, 'id' | 'createdAt'>): string;
+    /**
+     * Get a comparison run
+     */
+    getComparisonRun(comparisonId: string): ABSandboxComparisonRun | null;
+    /**
+     * Update a comparison run
+     */
+    updateComparisonRun(comparisonId: string, updates: Partial<ABSandboxComparisonRun>): void;
+    /**
+     * Get comparison run history
+     */
+    getComparisonRunHistory(limit?: number): ABSandboxComparisonRun[];
+    /**
+     * Create a new AI enhancement record
+     */
+    createEnhancement(enhancement: Omit<AIEnhancementHistory, 'id' | 'createdAt'>): string;
+    /**
+     * Update an enhancement record
+     */
+    updateEnhancement(enhancementId: string, updates: Partial<AIEnhancementHistory>): void;
+    /**
+     * Get enhancement by ID
+     */
+    getEnhancement(enhancementId: string): AIEnhancementHistory | null;
+    /**
+     * Get enhancement history for a file
+     */
+    getEnhancementHistory(fileKey: string, limit?: number): AIEnhancementHistory[];
+    /**
+     * Get all enhancement templates
+     */
+    getEnhancementTemplates(): AIEnhancementTemplate[];
+    /**
+     * Get a specific enhancement template
+     */
+    getEnhancementTemplate(templateId: string): AIEnhancementTemplate | null;
+    /**
+     * Increment template usage count
+     */
+    incrementTemplateUsage(templateId: string): void;
+    /**
+     * Create a custom enhancement template
+     */
+    createEnhancementTemplate(template: Omit<AIEnhancementTemplate, 'id' | 'createdAt' | 'usageCount' | 'isBuiltIn'>): string;
+    /**
+     * Helper to map enhancement row to interface
+     */
+    private mapEnhancementRow;
+    /**
      * Close database connection
      */
     close(): void;
+}
+export interface ABVariant {
+    variantId: string;
+    variantType: 'prompt' | 'tool' | 'config';
+    targetFile: string;
+    name: string;
+    description: string;
+    content: string;
+    contentHash: string;
+    baselineVariantId?: string;
+    sourceFixId?: string;
+    isBaseline: boolean;
+    createdAt: string;
+    createdBy: 'manual' | 'llm-analysis' | 'auto-generated';
+    metadata?: Record<string, any>;
+}
+export interface ABExperiment {
+    experimentId: string;
+    name: string;
+    description?: string;
+    hypothesis: string;
+    status: 'draft' | 'running' | 'paused' | 'completed' | 'aborted';
+    experimentType: 'prompt' | 'tool' | 'config' | 'multi';
+    variants: {
+        variantId: string;
+        role: 'control' | 'treatment';
+        weight: number;
+    }[];
+    testIds: string[];
+    trafficSplit: Record<string, number>;
+    minSampleSize: number;
+    maxSampleSize: number;
+    significanceThreshold: number;
+    createdAt: string;
+    startedAt?: string;
+    completedAt?: string;
+    winningVariantId?: string;
+    conclusion?: string;
+}
+export interface ABExperimentRun {
+    id?: number;
+    experimentId: string;
+    runId: string;
+    testId: string;
+    variantId: string;
+    variantRole: 'control' | 'treatment';
+    startedAt: string;
+    completedAt: string;
+    passed: boolean;
+    turnCount: number;
+    durationMs: number;
+    goalCompletionRate: number;
+    constraintViolations: number;
+    errorOccurred: boolean;
+    metrics?: Record<string, any>;
+}
+export interface ABExperimentTrigger {
+    triggerId: string;
+    experimentId: string;
+    triggerType: 'fix-applied' | 'scheduled' | 'pass-rate-drop' | 'manual';
+    condition?: Record<string, any>;
+    enabled: boolean;
+    lastTriggered?: string;
+}
+export interface ABSandbox {
+    id?: number;
+    sandboxId: string;
+    name: string;
+    description?: string;
+    flowiseEndpoint?: string;
+    flowiseApiKey?: string;
+    langfuseHost?: string;
+    langfusePublicKey?: string;
+    langfuseSecretKey?: string;
+    isActive: boolean;
+    createdAt: string;
+    updatedAt: string;
+}
+export interface ABSandboxFile {
+    id?: number;
+    sandboxId: string;
+    fileKey: string;
+    fileType: 'markdown' | 'json';
+    displayName: string;
+    content: string;
+    version: number;
+    baseVersion?: number;
+    changeDescription?: string;
+    createdAt: string;
+    updatedAt: string;
+}
+export interface ABSandboxFileHistory {
+    id?: number;
+    sandboxId: string;
+    fileKey: string;
+    version: number;
+    content: string;
+    changeDescription?: string;
+    createdAt: string;
+}
+export interface ABSandboxComparisonRun {
+    id?: number;
+    comparisonId: string;
+    name?: string;
+    status: 'pending' | 'running' | 'completed' | 'failed';
+    testIds?: string[];
+    productionResults?: Record<string, any>;
+    sandboxAResults?: Record<string, any>;
+    sandboxBResults?: Record<string, any>;
+    startedAt?: string;
+    completedAt?: string;
+    summary?: {
+        productionPassRate: number;
+        sandboxAPassRate: number;
+        sandboxBPassRate: number;
+        totalTests: number;
+        improvements: Array<{
+            testId: string;
+            from: string;
+            to: string;
+        }>;
+        regressions: Array<{
+            testId: string;
+            from: string;
+            to: string;
+        }>;
+    };
+    createdAt: string;
 }
 //# sourceMappingURL=database.d.ts.map

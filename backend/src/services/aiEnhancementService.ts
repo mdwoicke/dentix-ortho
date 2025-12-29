@@ -38,8 +38,77 @@ function escapeCurlyBrackets(content: string): string {
 }
 
 /**
+ * Extract a complete JSON object from text using brace-depth tracking
+ * Handles JSON embedded in prose or code fences, even when content contains nested code blocks
+ */
+function extractJsonObject(content: string): string | null {
+  // Find the start of JSON object - look for { that begins the response JSON
+  // Skip any prose/thinking text before the JSON
+  let jsonStart = -1;
+
+  // Try to find JSON after ```json marker first
+  const jsonMarker = content.indexOf('```json');
+  if (jsonMarker !== -1) {
+    // Find the first { after the marker
+    jsonStart = content.indexOf('{', jsonMarker);
+  }
+
+  // If no marker or no { found, look for {"enhancedContent" pattern
+  if (jsonStart === -1) {
+    jsonStart = content.indexOf('{"enhancedContent"');
+  }
+
+  // Last resort: find first { in the content
+  if (jsonStart === -1) {
+    jsonStart = content.indexOf('{');
+  }
+
+  if (jsonStart === -1) return null;
+
+  // Track brace depth to find the matching closing brace
+  // Must handle strings properly (don't count braces inside strings)
+  let depth = 0;
+  let inString = false;
+  let pos = jsonStart;
+
+  while (pos < content.length) {
+    const char = content[pos];
+
+    // Handle escape sequences in strings
+    if (inString && char === '\\' && pos + 1 < content.length) {
+      pos += 2; // Skip escaped character
+      continue;
+    }
+
+    // Track string boundaries
+    if (char === '"') {
+      inString = !inString;
+      pos++;
+      continue;
+    }
+
+    // Only count braces outside of strings
+    if (!inString) {
+      if (char === '{') {
+        depth++;
+      } else if (char === '}') {
+        depth--;
+        if (depth === 0) {
+          // Found the matching closing brace
+          return content.substring(jsonStart, pos + 1);
+        }
+      }
+    }
+
+    pos++;
+  }
+
+  return null; // Incomplete JSON
+}
+
+/**
  * Robust JSON parsing for LLM responses containing code
- * Handles common issues like unescaped characters in string values
+ * Handles: prose before JSON, nested code blocks in content, escape issues
  */
 function parseEnhancementResponse(content: string): {
   enhancedContent: string;
@@ -47,11 +116,17 @@ function parseEnhancementResponse(content: string): {
   reasoning: string;
   qualityImprovements: string[];
 } | null {
-  // Extract JSON block if wrapped in markdown code fence
-  const jsonMatch = content.match(/```json\s*([\s\S]*?)\s*```/);
-  let jsonContent = jsonMatch ? jsonMatch[1].trim() : content.trim();
+  // Step 1: Extract the complete JSON object using brace tracking
+  const jsonContent = extractJsonObject(content);
 
-  // Try standard JSON parse first
+  if (!jsonContent) {
+    console.error('[AIEnhancement] Could not extract JSON object from response');
+    return null;
+  }
+
+  console.log('[AIEnhancement] Extracted JSON length:', jsonContent.length);
+
+  // Step 2: Try standard JSON parse
   try {
     const parsed = JSON.parse(jsonContent);
     if (parsed.enhancedContent) {
@@ -62,60 +137,63 @@ function parseEnhancementResponse(content: string): {
         qualityImprovements: parsed.qualityImprovements || [],
       };
     }
-  } catch {
-    // Continue to fallback parsing
+  } catch (e) {
+    console.log('[AIEnhancement] Standard JSON parse failed, trying fallback extraction:', (e as Error).message);
   }
 
-  // Fallback: Extract fields individually using more robust patterns
+  // Step 3: Fallback - Extract fields individually
   let enhancedContent = '';
   let changes: Array<{ type: string; location: string; description: string }> = [];
   let reasoning = '';
   let qualityImprovements: string[] = [];
 
-  // Extract enhancedContent - find the value between "enhancedContent": " and the next top-level field
-  // This handles multi-line strings with proper escape handling
+  // Extract enhancedContent using escape-aware string extraction
   const enhancedContentStart = jsonContent.indexOf('"enhancedContent"');
   if (enhancedContentStart !== -1) {
-    // Find the opening quote of the value
-    const valueStart = jsonContent.indexOf(':"', enhancedContentStart) + 2;
-    if (valueStart > 1) {
-      // Find the closing quote by tracking escape sequences
-      let pos = valueStart;
-      let depth = 0;
-      while (pos < jsonContent.length) {
-        const char = jsonContent[pos];
-        if (char === '\\' && pos + 1 < jsonContent.length) {
-          // Skip escaped character
-          pos += 2;
-          continue;
-        }
-        if (char === '"' && depth === 0) {
-          // Found the closing quote
-          break;
-        }
-        pos++;
+    // Find the colon and opening quote
+    let colonPos = jsonContent.indexOf(':', enhancedContentStart);
+    if (colonPos !== -1) {
+      // Skip whitespace and find opening quote
+      let valueStart = colonPos + 1;
+      while (valueStart < jsonContent.length && /\s/.test(jsonContent[valueStart])) {
+        valueStart++;
       }
 
-      if (pos < jsonContent.length) {
-        const rawValue = jsonContent.substring(valueStart, pos);
-        // Unescape JSON string escapes
-        try {
-          enhancedContent = JSON.parse(`"${rawValue}"`);
-        } catch {
-          // Manual unescape for common patterns
-          enhancedContent = rawValue
-            .replace(/\\n/g, '\n')
-            .replace(/\\r/g, '\r')
-            .replace(/\\t/g, '\t')
-            .replace(/\\"/g, '"')
-            .replace(/\\\\/g, '\\');
+      if (jsonContent[valueStart] === '"') {
+        valueStart++; // Move past opening quote
+
+        // Find closing quote using escape tracking
+        let pos = valueStart;
+        while (pos < jsonContent.length) {
+          const char = jsonContent[pos];
+          if (char === '\\' && pos + 1 < jsonContent.length) {
+            pos += 2; // Skip escaped character
+            continue;
+          }
+          if (char === '"') {
+            // Found closing quote
+            const rawValue = jsonContent.substring(valueStart, pos);
+            try {
+              enhancedContent = JSON.parse(`"${rawValue}"`);
+            } catch {
+              // Manual unescape
+              enhancedContent = rawValue
+                .replace(/\\n/g, '\n')
+                .replace(/\\r/g, '\r')
+                .replace(/\\t/g, '\t')
+                .replace(/\\"/g, '"')
+                .replace(/\\\\/g, '\\');
+            }
+            break;
+          }
+          pos++;
         }
       }
     }
   }
 
-  // Extract reasoning
-  const reasoningMatch = jsonContent.match(/"reasoning"\s*:\s*"([^"]*(?:\\.[^"]*)*)"/);
+  // Extract reasoning (simpler field, less likely to have issues)
+  const reasoningMatch = jsonContent.match(/"reasoning"\s*:\s*"((?:[^"\\]|\\.)*)"/);
   if (reasoningMatch) {
     try {
       reasoning = JSON.parse(`"${reasoningMatch[1]}"`);
@@ -124,36 +202,57 @@ function parseEnhancementResponse(content: string): {
     }
   }
 
-  // Extract changes array
-  const changesMatch = jsonContent.match(/"changes"\s*:\s*\[([\s\S]*?)\](?=\s*[,}])/);
-  if (changesMatch) {
-    try {
-      changes = JSON.parse(`[${changesMatch[1]}]`);
-    } catch {
-      // Try to extract individual change objects
-      const changePattern = /\{\s*"type"\s*:\s*"([^"]+)"\s*,\s*"location"\s*:\s*"([^"]+)"\s*,\s*"description"\s*:\s*"([^"]+)"\s*\}/g;
-      let match;
-      while ((match = changePattern.exec(changesMatch[1])) !== null) {
-        changes.push({
-          type: match[1],
-          location: match[2],
-          description: match[3],
-        });
+  // Extract changes array - find the array bounds properly
+  const changesStart = jsonContent.indexOf('"changes"');
+  if (changesStart !== -1) {
+    const arrayStart = jsonContent.indexOf('[', changesStart);
+    if (arrayStart !== -1) {
+      // Find matching ] using depth tracking
+      let depth = 0;
+      let inStr = false;
+      for (let i = arrayStart; i < jsonContent.length; i++) {
+        const c = jsonContent[i];
+        if (inStr && c === '\\' && i + 1 < jsonContent.length) { i++; continue; }
+        if (c === '"') { inStr = !inStr; continue; }
+        if (!inStr) {
+          if (c === '[') depth++;
+          else if (c === ']') {
+            depth--;
+            if (depth === 0) {
+              try {
+                changes = JSON.parse(jsonContent.substring(arrayStart, i + 1));
+              } catch { /* ignore */ }
+              break;
+            }
+          }
+        }
       }
     }
   }
 
-  // Extract qualityImprovements array
-  const improvementsMatch = jsonContent.match(/"qualityImprovements"\s*:\s*\[([\s\S]*?)\](?=\s*[,}]|\s*$)/);
-  if (improvementsMatch) {
-    try {
-      qualityImprovements = JSON.parse(`[${improvementsMatch[1]}]`);
-    } catch {
-      // Extract individual strings
-      const stringPattern = /"([^"]+)"/g;
-      let match;
-      while ((match = stringPattern.exec(improvementsMatch[1])) !== null) {
-        qualityImprovements.push(match[1]);
+  // Extract qualityImprovements array similarly
+  const improvementsStart = jsonContent.indexOf('"qualityImprovements"');
+  if (improvementsStart !== -1) {
+    const arrayStart = jsonContent.indexOf('[', improvementsStart);
+    if (arrayStart !== -1) {
+      let depth = 0;
+      let inStr = false;
+      for (let i = arrayStart; i < jsonContent.length; i++) {
+        const c = jsonContent[i];
+        if (inStr && c === '\\' && i + 1 < jsonContent.length) { i++; continue; }
+        if (c === '"') { inStr = !inStr; continue; }
+        if (!inStr) {
+          if (c === '[') depth++;
+          else if (c === ']') {
+            depth--;
+            if (depth === 0) {
+              try {
+                qualityImprovements = JSON.parse(jsonContent.substring(arrayStart, i + 1));
+              } catch { /* ignore */ }
+              break;
+            }
+          }
+        }
       }
     }
   }
@@ -335,10 +434,27 @@ export class AIEnhancementService {
   }
 
   /**
-   * Preview an enhancement without saving
+   * Preview an enhancement and save to DB with status "preview"
+   * Returns enhancementId so it can be confirmed later without re-running LLM
    */
   async previewEnhancement(request: EnhanceRequest): Promise<EnhanceResult> {
-    const enhancementId = `preview-${Date.now()}`;
+    // Create DB record first to get a real enhancementId
+    const promptFile = promptService.getPromptContent(request.fileKey);
+    if (!promptFile) {
+      throw new Error(`Prompt file not found: ${request.fileKey}`);
+    }
+    const sourceVersion = request.sourceVersion || promptFile.version;
+
+    const enhancementId = this.db.createEnhancement({
+      enhancementId: '', // Will be generated
+      fileKey: request.fileKey,
+      sourceVersion,
+      command: request.command,
+      commandTemplate: request.templateId,
+      webSearchUsed: request.useWebSearch || false,
+      status: 'preview', // Mark as preview - can be confirmed later
+      createdBy: 'user',
+    });
 
     try {
       // Get current content
@@ -445,6 +561,23 @@ ${r.keyTakeaways.map(t => `- ${t}`).join('\n')}`).join('\n\n')}`;
       // Get quality score after enhancement
       const qualityAfter = await this.scorePromptQuality(parsed.enhancedContent, request.fileKey);
 
+      // Save preview result to DB (status remains "preview" until confirmed)
+      // Include original content for diff history - enables highlighted view in UI
+      this.db.updateEnhancement(enhancementId, {
+        aiResponseJson: JSON.stringify({
+          originalContent,                       // Save original for diff history
+          enhancedContent: parsed.enhancedContent,
+          reasoning: parsed.reasoning,
+          changes: parsed.changes,
+          qualityImprovements: parsed.qualityImprovements,
+          diff,                                  // Save diff for history
+        }),
+        webSearchResultsJson: webSearchResults ? JSON.stringify(webSearchResults) : undefined,
+        qualityScoreBefore: qualityBefore.overall,
+        qualityScoreAfter: qualityAfter.overall,
+        // Keep status as "preview" - will be changed to "completed" when confirmed
+      });
+
       return {
         enhancementId,
         fileKey: request.fileKey,
@@ -461,6 +594,13 @@ ${r.keyTakeaways.map(t => `- ${t}`).join('\n')}`).join('\n\n')}`;
         status: 'success',
       };
     } catch (error) {
+      // Update DB with failed status
+      this.db.updateEnhancement(enhancementId, {
+        status: 'failed',
+        errorMessage: (error as Error).message,
+        completedAt: new Date().toISOString(),
+      });
+
       return {
         enhancementId,
         fileKey: request.fileKey,
@@ -473,6 +613,54 @@ ${r.keyTakeaways.map(t => `- ${t}`).join('\n')}`).join('\n\n')}`;
         errorMessage: (error as Error).message,
       };
     }
+  }
+
+  /**
+   * Save a previewed enhancement (change status from "preview" to "completed")
+   * This avoids re-running the LLM - uses the cached preview result
+   */
+  async savePreviewedEnhancement(enhancementId: string): Promise<EnhanceResult> {
+    const enhancement = this.db.getEnhancement(enhancementId);
+    if (!enhancement) {
+      throw new Error(`Enhancement not found: ${enhancementId}`);
+    }
+
+    if (enhancement.status !== 'preview') {
+      throw new Error(`Enhancement is not in preview status: ${enhancement.status}`);
+    }
+
+    const aiResponse = enhancement.aiResponseJson ? JSON.parse(enhancement.aiResponseJson) : null;
+    if (!aiResponse?.enhancedContent) {
+      throw new Error('Preview has no enhanced content');
+    }
+
+    // Update status to completed
+    this.db.updateEnhancement(enhancementId, {
+      status: 'completed',
+      completedAt: new Date().toISOString(),
+    });
+
+    // Get original content for the response
+    const promptFile = promptService.getPromptContent(enhancement.fileKey);
+    const originalContent = promptFile?.content || '';
+
+    // Calculate diff
+    const diff = this.calculateDiff(originalContent, aiResponse.enhancedContent);
+
+    return {
+      enhancementId,
+      fileKey: enhancement.fileKey,
+      originalContent,
+      enhancedContent: aiResponse.enhancedContent,
+      diff,
+      qualityScores: {
+        before: enhancement.qualityScoreBefore || 0,
+        after: enhancement.qualityScoreAfter || 0,
+        improvement: (enhancement.qualityScoreAfter || 0) - (enhancement.qualityScoreBefore || 0),
+      },
+      reasoning: aiResponse.reasoning || '',
+      status: 'success',
+    };
   }
 
   /**
@@ -522,12 +710,14 @@ ${r.keyTakeaways.map(t => `- ${t}`).join('\n')}`).join('\n\n')}`;
         return { ...result, enhancementId };
       }
 
-      // Save successful result
+      // Save successful result with original content for diff history
       this.db.updateEnhancement(enhancementId, {
         status: 'completed',
         aiResponseJson: JSON.stringify({
+          originalContent: result.originalContent, // Save original for diff history
           enhancedContent: result.enhancedContent,
           reasoning: result.reasoning,
+          diff: result.diff,                       // Save diff for history
         }),
         webSearchResultsJson: result.webSearchResults ? JSON.stringify(result.webSearchResults) : undefined,
         qualityScoreBefore: result.qualityScores.before,

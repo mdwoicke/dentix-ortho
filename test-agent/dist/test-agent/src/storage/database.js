@@ -43,13 +43,14 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.Database = void 0;
 const better_sqlite3_1 = __importDefault(require("better-sqlite3"));
 const uuid_1 = require("uuid");
-const config_1 = require("../config/config");
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 class Database {
     constructor() {
         this.db = null;
-        this.dbPath = path.resolve(process.cwd(), config_1.config.database.path);
+        // Use __dirname to ensure consistent path regardless of where the process runs from
+        // This ensures backend and test-agent use the same database file
+        this.dbPath = path.resolve(__dirname, '../../data/test-results.db');
     }
     /**
      * Initialize database and create tables
@@ -319,6 +320,219 @@ class Database {
       CREATE INDEX IF NOT EXISTS idx_goal_test_results_test_id ON goal_test_results(test_id);
       CREATE INDEX IF NOT EXISTS idx_goal_progress_snapshots_run_id ON goal_progress_snapshots(run_id);
       CREATE INDEX IF NOT EXISTS idx_goal_progress_snapshots_test_id ON goal_progress_snapshots(test_id);
+
+      -- ========================================================================
+      -- A/B TESTING FRAMEWORK TABLES
+      -- ========================================================================
+
+      -- Variants: Store versioned copies of prompts/tools/configs
+      CREATE TABLE IF NOT EXISTS ab_variants (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        variant_id TEXT UNIQUE NOT NULL,
+        variant_type TEXT CHECK(variant_type IN ('prompt', 'tool', 'config')) NOT NULL,
+        target_file TEXT NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        content TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        baseline_variant_id TEXT,
+        source_fix_id TEXT,
+        is_baseline INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        created_by TEXT CHECK(created_by IN ('manual', 'llm-analysis', 'auto-generated')) DEFAULT 'manual',
+        metadata_json TEXT,
+        FOREIGN KEY (baseline_variant_id) REFERENCES ab_variants(variant_id),
+        FOREIGN KEY (source_fix_id) REFERENCES generated_fixes(fix_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_ab_variants_type ON ab_variants(variant_type);
+      CREATE INDEX IF NOT EXISTS idx_ab_variants_target ON ab_variants(target_file);
+      CREATE INDEX IF NOT EXISTS idx_ab_variants_hash ON ab_variants(content_hash);
+      CREATE INDEX IF NOT EXISTS idx_ab_variants_baseline ON ab_variants(is_baseline);
+
+      -- Experiments: Define A/B test experiments
+      CREATE TABLE IF NOT EXISTS ab_experiments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        experiment_id TEXT UNIQUE NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        hypothesis TEXT,
+        status TEXT CHECK(status IN ('draft', 'running', 'paused', 'completed', 'aborted')) DEFAULT 'draft',
+        experiment_type TEXT CHECK(experiment_type IN ('prompt', 'tool', 'config', 'multi')) NOT NULL,
+        variants_json TEXT NOT NULL,
+        test_ids_json TEXT NOT NULL,
+        traffic_split_json TEXT,
+        min_sample_size INTEGER DEFAULT 10,
+        max_sample_size INTEGER DEFAULT 100,
+        significance_threshold REAL DEFAULT 0.05,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        started_at TEXT,
+        completed_at TEXT,
+        winning_variant_id TEXT,
+        conclusion TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_ab_experiments_status ON ab_experiments(status);
+      CREATE INDEX IF NOT EXISTS idx_ab_experiments_type ON ab_experiments(experiment_type);
+
+      -- Experiment Runs: Track each test execution with variant info
+      CREATE TABLE IF NOT EXISTS ab_experiment_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        experiment_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        test_id TEXT NOT NULL,
+        variant_id TEXT NOT NULL,
+        variant_role TEXT CHECK(variant_role IN ('control', 'treatment')) NOT NULL,
+        started_at TEXT NOT NULL,
+        completed_at TEXT NOT NULL,
+        passed INTEGER DEFAULT 0,
+        turn_count INTEGER DEFAULT 0,
+        duration_ms INTEGER DEFAULT 0,
+        goal_completion_rate REAL DEFAULT 0,
+        constraint_violations INTEGER DEFAULT 0,
+        error_occurred INTEGER DEFAULT 0,
+        metrics_json TEXT,
+        FOREIGN KEY (experiment_id) REFERENCES ab_experiments(experiment_id),
+        FOREIGN KEY (variant_id) REFERENCES ab_variants(variant_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_ab_runs_experiment ON ab_experiment_runs(experiment_id);
+      CREATE INDEX IF NOT EXISTS idx_ab_runs_variant ON ab_experiment_runs(variant_id);
+      CREATE INDEX IF NOT EXISTS idx_ab_runs_test ON ab_experiment_runs(test_id);
+
+      -- Experiment Triggers: Define when to suggest/run experiments
+      CREATE TABLE IF NOT EXISTS ab_experiment_triggers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        trigger_id TEXT UNIQUE NOT NULL,
+        experiment_id TEXT NOT NULL,
+        trigger_type TEXT CHECK(trigger_type IN ('fix-applied', 'scheduled', 'pass-rate-drop', 'manual')) NOT NULL,
+        condition_json TEXT,
+        enabled INTEGER DEFAULT 1,
+        last_triggered TEXT,
+        FOREIGN KEY (experiment_id) REFERENCES ab_experiments(experiment_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_ab_triggers_experiment ON ab_experiment_triggers(experiment_id);
+      CREATE INDEX IF NOT EXISTS idx_ab_triggers_enabled ON ab_experiment_triggers(enabled);
+
+      -- ========================================================================
+      -- A/B TESTING SANDBOX TABLES
+      -- ========================================================================
+
+      -- Sandboxes: Persistent A and B sandbox configurations
+      CREATE TABLE IF NOT EXISTS ab_sandboxes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sandbox_id TEXT UNIQUE NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        flowise_endpoint TEXT,
+        flowise_api_key TEXT,
+        is_active INTEGER DEFAULT 1,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+      );
+
+      -- Sandbox Files: Copy of each of the 3 files per sandbox
+      CREATE TABLE IF NOT EXISTS ab_sandbox_files (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sandbox_id TEXT NOT NULL,
+        file_key TEXT NOT NULL,
+        file_type TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        content TEXT NOT NULL,
+        version INTEGER DEFAULT 1,
+        base_version INTEGER,
+        change_description TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(sandbox_id, file_key),
+        FOREIGN KEY (sandbox_id) REFERENCES ab_sandboxes(sandbox_id)
+      );
+
+      -- Sandbox File History: Version history for sandbox file edits
+      CREATE TABLE IF NOT EXISTS ab_sandbox_file_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sandbox_id TEXT NOT NULL,
+        file_key TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        content TEXT NOT NULL,
+        change_description TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (sandbox_id) REFERENCES ab_sandboxes(sandbox_id)
+      );
+
+      -- Sandbox Comparison Runs: Track three-way comparison test runs
+      CREATE TABLE IF NOT EXISTS ab_sandbox_comparison_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        comparison_id TEXT UNIQUE NOT NULL,
+        name TEXT,
+        status TEXT CHECK(status IN ('pending', 'running', 'completed', 'failed')) DEFAULT 'pending',
+        test_ids_json TEXT,
+        production_results_json TEXT,
+        sandbox_a_results_json TEXT,
+        sandbox_b_results_json TEXT,
+        started_at TEXT,
+        completed_at TEXT,
+        summary_json TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      );
+
+      -- Indexes for sandbox tables
+      CREATE INDEX IF NOT EXISTS idx_sandbox_files_sandbox ON ab_sandbox_files(sandbox_id);
+      CREATE INDEX IF NOT EXISTS idx_sandbox_history_sandbox ON ab_sandbox_file_history(sandbox_id);
+      CREATE INDEX IF NOT EXISTS idx_sandbox_history_file ON ab_sandbox_file_history(file_key);
+      CREATE INDEX IF NOT EXISTS idx_comparison_runs_status ON ab_sandbox_comparison_runs(status);
+
+      -- ========================================================================
+      -- AI ENHANCEMENT TABLES
+      -- ========================================================================
+
+      -- AI Enhancement History: Track all AI prompt enhancement operations
+      CREATE TABLE IF NOT EXISTS ai_enhancement_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        enhancement_id TEXT UNIQUE NOT NULL,
+        file_key TEXT NOT NULL,
+        source_version INTEGER NOT NULL,
+        result_version INTEGER,
+        command TEXT NOT NULL,
+        command_template TEXT,
+        web_search_used INTEGER DEFAULT 0,
+        web_search_queries TEXT,
+        web_search_results_json TEXT,
+        enhancement_prompt TEXT,
+        ai_response_json TEXT,
+        quality_score_before REAL,
+        quality_score_after REAL,
+        status TEXT CHECK(status IN ('pending', 'preview', 'processing', 'completed', 'failed', 'cancelled', 'applied', 'promoted')) DEFAULT 'pending',
+        error_message TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        completed_at TEXT,
+        created_by TEXT DEFAULT 'user',
+        metadata_json TEXT,
+        FOREIGN KEY (file_key) REFERENCES prompt_working_copies(file_key)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_ai_enhancement_file_key ON ai_enhancement_history(file_key);
+      CREATE INDEX IF NOT EXISTS idx_ai_enhancement_status ON ai_enhancement_history(status);
+      CREATE INDEX IF NOT EXISTS idx_ai_enhancement_created ON ai_enhancement_history(created_at);
+
+      -- AI Enhancement Templates: Pre-built and custom enhancement templates
+      CREATE TABLE IF NOT EXISTS ai_enhancement_templates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        template_id TEXT UNIQUE NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        command_template TEXT NOT NULL,
+        category TEXT CHECK(category IN ('clarity', 'examples', 'edge-cases', 'format', 'validation', 'custom')) NOT NULL,
+        use_web_search INTEGER DEFAULT 0,
+        default_search_queries TEXT,
+        is_built_in INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        usage_count INTEGER DEFAULT 0
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_ai_templates_category ON ai_enhancement_templates(category);
+      CREATE INDEX IF NOT EXISTS idx_ai_templates_built_in ON ai_enhancement_templates(is_built_in);
     `);
         // Migration: Add agent_question column if it doesn't exist
         this.addColumnIfNotExists('findings', 'agent_question', 'TEXT');
@@ -329,6 +543,24 @@ class Database {
         this.addColumnIfNotExists('goal_test_results', 'generation_seed', 'INTEGER');
         // Migration: Add classification_json column to generated_fixes
         this.addColumnIfNotExists('generated_fixes', 'classification_json', 'TEXT');
+        // Migration: Add flowise_api_key column to ab_sandboxes
+        this.addColumnIfNotExists('ab_sandboxes', 'flowise_api_key', 'TEXT');
+        // Migration: Add LangFuse credential columns to ab_sandboxes
+        this.addColumnIfNotExists('ab_sandboxes', 'langfuse_host', 'TEXT');
+        this.addColumnIfNotExists('ab_sandboxes', 'langfuse_public_key', 'TEXT');
+        this.addColumnIfNotExists('ab_sandboxes', 'langfuse_secret_key', 'TEXT');
+        // Migration: Add AI enhancement tracking columns to prompt_version_history
+        this.addColumnIfNotExists('prompt_version_history', 'enhancement_id', 'TEXT');
+        this.addColumnIfNotExists('prompt_version_history', 'is_experimental', 'INTEGER DEFAULT 0');
+        this.addColumnIfNotExists('prompt_version_history', 'ai_generated', 'INTEGER DEFAULT 0');
+        // Migration: Add applied/promoted tracking columns to ai_enhancement_history
+        this.addColumnIfNotExists('ai_enhancement_history', 'applied_at', 'TEXT');
+        this.addColumnIfNotExists('ai_enhancement_history', 'promoted_at', 'TEXT');
+        this.addColumnIfNotExists('ai_enhancement_history', 'applied_content', 'TEXT');
+        // Migration: Update CHECK constraint to include 'applied' and 'promoted' statuses
+        this.migrateEnhancementHistoryCheckConstraint();
+        // Initialize built-in enhancement templates
+        this.initializeBuiltInTemplates();
     }
     /**
      * Add a column to a table if it doesn't exist (migration helper)
@@ -340,6 +572,135 @@ class Database {
         const columnExists = tableInfo.some((col) => col.name === column);
         if (!columnExists) {
             db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+        }
+    }
+    /**
+     * Migrate ai_enhancement_history table to add 'preview', 'applied' and 'promoted' to CHECK constraint
+     * SQLite requires recreating the table to modify CHECK constraints
+     */
+    migrateEnhancementHistoryCheckConstraint() {
+        const db = this.getDb();
+        // Check if migration is needed by looking at the table SQL
+        const tableInfo = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='ai_enhancement_history'").get();
+        if (!tableInfo || !tableInfo.sql) {
+            return; // Table doesn't exist yet, will be created with correct constraint
+        }
+        // Check if the CHECK constraint already includes 'preview', 'applied' and 'promoted'
+        if (tableInfo.sql.includes("'preview'") && tableInfo.sql.includes("'applied'") && tableInfo.sql.includes("'promoted'")) {
+            return; // Already migrated
+        }
+        // Need to recreate the table with the new CHECK constraint
+        db.exec(`
+      -- Create temporary table with new CHECK constraint
+      CREATE TABLE ai_enhancement_history_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        enhancement_id TEXT UNIQUE NOT NULL,
+        file_key TEXT NOT NULL,
+        source_version INTEGER NOT NULL,
+        result_version INTEGER,
+        command TEXT NOT NULL,
+        command_template TEXT,
+        web_search_used INTEGER DEFAULT 0,
+        web_search_queries TEXT,
+        web_search_results_json TEXT,
+        enhancement_prompt TEXT,
+        ai_response_json TEXT,
+        quality_score_before REAL,
+        quality_score_after REAL,
+        status TEXT CHECK(status IN ('pending', 'preview', 'processing', 'completed', 'failed', 'cancelled', 'applied', 'promoted')) DEFAULT 'pending',
+        error_message TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        completed_at TEXT,
+        created_by TEXT DEFAULT 'user',
+        metadata_json TEXT,
+        applied_at TEXT,
+        promoted_at TEXT,
+        applied_content TEXT,
+        FOREIGN KEY (file_key) REFERENCES prompt_working_copies(file_key)
+      );
+
+      -- Copy data from old table
+      INSERT INTO ai_enhancement_history_new
+      SELECT id, enhancement_id, file_key, source_version, result_version, command, command_template,
+             web_search_used, web_search_queries, web_search_results_json, enhancement_prompt,
+             ai_response_json, quality_score_before, quality_score_after, status, error_message,
+             created_at, completed_at, created_by, metadata_json, applied_at, promoted_at, applied_content
+      FROM ai_enhancement_history;
+
+      -- Drop old table
+      DROP TABLE ai_enhancement_history;
+
+      -- Rename new table
+      ALTER TABLE ai_enhancement_history_new RENAME TO ai_enhancement_history;
+
+      -- Recreate indexes
+      CREATE INDEX IF NOT EXISTS idx_ai_enhancement_file_key ON ai_enhancement_history(file_key);
+      CREATE INDEX IF NOT EXISTS idx_ai_enhancement_status ON ai_enhancement_history(status);
+      CREATE INDEX IF NOT EXISTS idx_ai_enhancement_created ON ai_enhancement_history(created_at);
+    `);
+    }
+    /**
+     * Initialize built-in enhancement templates (runs once on first setup)
+     */
+    initializeBuiltInTemplates() {
+        const db = this.getDb();
+        const builtInTemplates = [
+            {
+                template_id: 'add-examples',
+                name: 'Add Examples',
+                description: 'Add 2-3 clear, concrete examples for key scenarios',
+                command_template: 'Add 2-3 clear examples showing how to handle {{topic}}',
+                category: 'examples',
+                use_web_search: 1,
+            },
+            {
+                template_id: 'improve-clarity',
+                name: 'Improve Clarity',
+                description: 'Rewrite unclear sections to be more specific and actionable',
+                command_template: 'Rewrite unclear sections to be more specific and actionable. Focus on removing ambiguity.',
+                category: 'clarity',
+                use_web_search: 0,
+            },
+            {
+                template_id: 'add-edge-cases',
+                name: 'Add Edge Case Handling',
+                description: 'Add explicit handling for edge cases and error scenarios',
+                command_template: 'Add explicit handling for edge cases including: {{scenarios}}',
+                category: 'edge-cases',
+                use_web_search: 1,
+            },
+            {
+                template_id: 'improve-format',
+                name: 'Improve Formatting',
+                description: 'Reorganize content with clear sections, headers, and consistent formatting',
+                command_template: 'Reorganize content with clear sections, headers, and consistent formatting throughout.',
+                category: 'format',
+                use_web_search: 0,
+            },
+            {
+                template_id: 'add-validation',
+                name: 'Add Input Validation',
+                description: 'Add validation rules and helpful error messages for user inputs',
+                command_template: 'Add input validation and helpful error messages for: {{fields}}',
+                category: 'validation',
+                use_web_search: 1,
+            },
+            {
+                template_id: 'best-practices',
+                name: 'Apply Best Practices',
+                description: 'Apply prompt engineering best practices: clear structure, explicit constraints, chain-of-thought',
+                command_template: 'Apply prompt engineering best practices: clear structure, explicit constraints, chain-of-thought reasoning where applicable.',
+                category: 'custom',
+                use_web_search: 1,
+            },
+        ];
+        const stmt = db.prepare(`
+      INSERT OR IGNORE INTO ai_enhancement_templates
+      (template_id, name, description, command_template, category, use_web_search, is_built_in)
+      VALUES (?, ?, ?, ?, ?, ?, 1)
+    `);
+        for (const template of builtInTemplates) {
+            stmt.run(template.template_id, template.name, template.description, template.command_template, template.category, template.use_web_search);
         }
     }
     /**
@@ -370,6 +731,87 @@ class Database {
           summary = ?
       WHERE run_id = ?
     `).run(new Date().toISOString(), summary.totalTests, summary.passed, summary.failed, summary.skipped, JSON.stringify(summary), runId);
+    }
+    /**
+     * Mark a test run as failed (for error cases)
+     */
+    failTestRun(runId, errorMessage) {
+        const db = this.getDb();
+        // Get current counts from existing results
+        const stats = db.prepare(`
+      SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN status = 'passed' THEN 1 ELSE 0 END) as passed,
+        SUM(CASE WHEN status IN ('failed', 'error') THEN 1 ELSE 0 END) as failed,
+        SUM(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END) as skipped
+      FROM test_results WHERE run_id = ?
+    `).get(runId);
+        const summary = {
+            totalTests: stats?.total || 0,
+            passed: stats?.passed || 0,
+            failed: stats?.failed || 0,
+            skipped: stats?.skipped || 0,
+            error: errorMessage || 'Test run failed unexpectedly',
+        };
+        db.prepare(`
+      UPDATE test_runs
+      SET completed_at = ?,
+          status = 'failed',
+          total_tests = ?,
+          passed = ?,
+          failed = ?,
+          skipped = ?,
+          summary = ?
+      WHERE run_id = ?
+    `).run(new Date().toISOString(), summary.totalTests, summary.passed, summary.failed, summary.skipped, JSON.stringify(summary), runId);
+    }
+    /**
+     * Mark a test run as aborted (for user cancellation)
+     */
+    abortTestRun(runId) {
+        const db = this.getDb();
+        // Get current counts from existing results
+        const stats = db.prepare(`
+      SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN status = 'passed' THEN 1 ELSE 0 END) as passed,
+        SUM(CASE WHEN status IN ('failed', 'error') THEN 1 ELSE 0 END) as failed,
+        SUM(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END) as skipped
+      FROM test_results WHERE run_id = ?
+    `).get(runId);
+        const summary = {
+            totalTests: stats?.total || 0,
+            passed: stats?.passed || 0,
+            failed: stats?.failed || 0,
+            skipped: stats?.skipped || 0,
+            aborted: true,
+        };
+        db.prepare(`
+      UPDATE test_runs
+      SET completed_at = ?,
+          status = 'aborted',
+          total_tests = ?,
+          passed = ?,
+          failed = ?,
+          skipped = ?,
+          summary = ?
+      WHERE run_id = ?
+    `).run(new Date().toISOString(), summary.totalTests, summary.passed, summary.failed, summary.skipped, JSON.stringify(summary), runId);
+    }
+    /**
+     * Clean up stale running test runs (runs started more than X hours ago still showing as running)
+     */
+    cleanupStaleRuns(maxAgeHours = 2) {
+        const db = this.getDb();
+        const cutoffTime = new Date(Date.now() - maxAgeHours * 60 * 60 * 1000).toISOString();
+        const result = db.prepare(`
+      UPDATE test_runs
+      SET completed_at = ?,
+          status = 'aborted',
+          summary = ?
+      WHERE status = 'running' AND started_at < ?
+    `).run(new Date().toISOString(), JSON.stringify({ aborted: true, reason: 'Stale run cleanup - exceeded maximum age' }), cutoffTime);
+        return result.changes;
     }
     /**
      * Save a test result
@@ -928,6 +1370,10 @@ class Database {
     clear() {
         const db = this.getDb();
         db.exec(`
+      DELETE FROM ab_experiment_triggers;
+      DELETE FROM ab_experiment_runs;
+      DELETE FROM ab_experiments;
+      DELETE FROM ab_variants;
       DELETE FROM fix_outcomes;
       DELETE FROM generated_fixes;
       DELETE FROM prompt_versions;
@@ -1299,6 +1745,1024 @@ class Database {
         const db = this.getDb();
         db.prepare('DELETE FROM goal_progress_snapshots WHERE run_id = ?').run(runId);
         db.prepare('DELETE FROM goal_test_results WHERE run_id = ?').run(runId);
+    }
+    // ============================================================================
+    // A/B TESTING FRAMEWORK METHODS
+    // ============================================================================
+    // ----- VARIANT METHODS -----
+    /**
+     * Save a variant
+     */
+    saveVariant(variant) {
+        const db = this.getDb();
+        db.prepare(`
+      INSERT OR REPLACE INTO ab_variants
+      (variant_id, variant_type, target_file, name, description, content, content_hash,
+       baseline_variant_id, source_fix_id, is_baseline, created_at, created_by, metadata_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(variant.variantId, variant.variantType, variant.targetFile, variant.name, variant.description, variant.content, variant.contentHash, variant.baselineVariantId, variant.sourceFixId, variant.isBaseline ? 1 : 0, variant.createdAt || new Date().toISOString(), variant.createdBy, variant.metadata ? JSON.stringify(variant.metadata) : null);
+    }
+    /**
+     * Get a variant by ID
+     */
+    getVariant(variantId) {
+        const db = this.getDb();
+        const row = db.prepare(`
+      SELECT variant_id, variant_type, target_file, name, description, content, content_hash,
+             baseline_variant_id, source_fix_id, is_baseline, created_at, created_by, metadata_json
+      FROM ab_variants
+      WHERE variant_id = ?
+    `).get(variantId);
+        if (!row)
+            return null;
+        return this.mapRowToVariant(row);
+    }
+    /**
+     * Get variants by target file
+     */
+    getVariantsByFile(targetFile) {
+        const db = this.getDb();
+        const rows = db.prepare(`
+      SELECT variant_id, variant_type, target_file, name, description, content, content_hash,
+             baseline_variant_id, source_fix_id, is_baseline, created_at, created_by, metadata_json
+      FROM ab_variants
+      WHERE target_file = ?
+      ORDER BY created_at DESC
+    `).all(targetFile);
+        return rows.map(row => this.mapRowToVariant(row));
+    }
+    /**
+     * Get baseline variant for a file
+     */
+    getBaselineVariant(targetFile) {
+        const db = this.getDb();
+        const row = db.prepare(`
+      SELECT variant_id, variant_type, target_file, name, description, content, content_hash,
+             baseline_variant_id, source_fix_id, is_baseline, created_at, created_by, metadata_json
+      FROM ab_variants
+      WHERE target_file = ? AND is_baseline = 1
+    `).get(targetFile);
+        if (!row)
+            return null;
+        return this.mapRowToVariant(row);
+    }
+    /**
+     * Set a variant as baseline (unsets others for same file)
+     */
+    setVariantAsBaseline(variantId) {
+        const db = this.getDb();
+        // Get the variant's target file
+        const variant = this.getVariant(variantId);
+        if (!variant)
+            return;
+        // Unset other baselines for the same file
+        db.prepare(`
+      UPDATE ab_variants SET is_baseline = 0 WHERE target_file = ?
+    `).run(variant.targetFile);
+        // Set this one as baseline
+        db.prepare(`
+      UPDATE ab_variants SET is_baseline = 1 WHERE variant_id = ?
+    `).run(variantId);
+    }
+    /**
+     * Find variant by content hash
+     */
+    findVariantByHash(contentHash, targetFile) {
+        const db = this.getDb();
+        const row = db.prepare(`
+      SELECT variant_id, variant_type, target_file, name, description, content, content_hash,
+             baseline_variant_id, source_fix_id, is_baseline, created_at, created_by, metadata_json
+      FROM ab_variants
+      WHERE content_hash = ? AND target_file = ?
+    `).get(contentHash, targetFile);
+        if (!row)
+            return null;
+        return this.mapRowToVariant(row);
+    }
+    /**
+     * Get all variants
+     */
+    getAllVariants(options) {
+        const db = this.getDb();
+        let query = `
+      SELECT variant_id, variant_type, target_file, name, description, content, content_hash,
+             baseline_variant_id, source_fix_id, is_baseline, created_at, created_by, metadata_json
+      FROM ab_variants
+    `;
+        const conditions = [];
+        const params = [];
+        if (options?.variantType) {
+            conditions.push('variant_type = ?');
+            params.push(options.variantType);
+        }
+        if (options?.isBaseline !== undefined) {
+            conditions.push('is_baseline = ?');
+            params.push(options.isBaseline ? 1 : 0);
+        }
+        if (conditions.length > 0) {
+            query += ' WHERE ' + conditions.join(' AND ');
+        }
+        query += ' ORDER BY created_at DESC';
+        const rows = db.prepare(query).all(...params);
+        return rows.map(row => this.mapRowToVariant(row));
+    }
+    mapRowToVariant(row) {
+        return {
+            variantId: row.variant_id,
+            variantType: row.variant_type,
+            targetFile: row.target_file,
+            name: row.name,
+            description: row.description,
+            content: row.content,
+            contentHash: row.content_hash,
+            baselineVariantId: row.baseline_variant_id,
+            sourceFixId: row.source_fix_id,
+            isBaseline: row.is_baseline === 1,
+            createdAt: row.created_at,
+            createdBy: row.created_by,
+            metadata: row.metadata_json ? JSON.parse(row.metadata_json) : undefined,
+        };
+    }
+    // ----- EXPERIMENT METHODS -----
+    /**
+     * Save an experiment
+     */
+    saveExperiment(experiment) {
+        const db = this.getDb();
+        db.prepare(`
+      INSERT OR REPLACE INTO ab_experiments
+      (experiment_id, name, description, hypothesis, status, experiment_type,
+       variants_json, test_ids_json, traffic_split_json,
+       min_sample_size, max_sample_size, significance_threshold,
+       created_at, started_at, completed_at, winning_variant_id, conclusion)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(experiment.experimentId, experiment.name, experiment.description, experiment.hypothesis, experiment.status, experiment.experimentType, JSON.stringify(experiment.variants), JSON.stringify(experiment.testIds), JSON.stringify(experiment.trafficSplit), experiment.minSampleSize, experiment.maxSampleSize, experiment.significanceThreshold, experiment.createdAt || new Date().toISOString(), experiment.startedAt, experiment.completedAt, experiment.winningVariantId, experiment.conclusion);
+    }
+    /**
+     * Get an experiment by ID
+     */
+    getExperiment(experimentId) {
+        const db = this.getDb();
+        const row = db.prepare(`
+      SELECT experiment_id, name, description, hypothesis, status, experiment_type,
+             variants_json, test_ids_json, traffic_split_json,
+             min_sample_size, max_sample_size, significance_threshold,
+             created_at, started_at, completed_at, winning_variant_id, conclusion
+      FROM ab_experiments
+      WHERE experiment_id = ?
+    `).get(experimentId);
+        if (!row)
+            return null;
+        return this.mapRowToExperiment(row);
+    }
+    /**
+     * Get experiments by status
+     */
+    getExperimentsByStatus(status) {
+        const db = this.getDb();
+        const rows = db.prepare(`
+      SELECT experiment_id, name, description, hypothesis, status, experiment_type,
+             variants_json, test_ids_json, traffic_split_json,
+             min_sample_size, max_sample_size, significance_threshold,
+             created_at, started_at, completed_at, winning_variant_id, conclusion
+      FROM ab_experiments
+      WHERE status = ?
+      ORDER BY created_at DESC
+    `).all(status);
+        return rows.map(row => this.mapRowToExperiment(row));
+    }
+    /**
+     * Get all experiments
+     */
+    getAllExperiments(options) {
+        const db = this.getDb();
+        let query = `
+      SELECT experiment_id, name, description, hypothesis, status, experiment_type,
+             variants_json, test_ids_json, traffic_split_json,
+             min_sample_size, max_sample_size, significance_threshold,
+             created_at, started_at, completed_at, winning_variant_id, conclusion
+      FROM ab_experiments
+    `;
+        const params = [];
+        if (options?.status) {
+            query += ' WHERE status = ?';
+            params.push(options.status);
+        }
+        query += ' ORDER BY created_at DESC';
+        if (options?.limit) {
+            query += ' LIMIT ?';
+            params.push(options.limit);
+        }
+        const rows = db.prepare(query).all(...params);
+        return rows.map(row => this.mapRowToExperiment(row));
+    }
+    /**
+     * Update experiment status
+     */
+    updateExperimentStatus(experimentId, status, updates) {
+        const db = this.getDb();
+        let query = 'UPDATE ab_experiments SET status = ?';
+        const params = [status];
+        if (updates?.startedAt) {
+            query += ', started_at = ?';
+            params.push(updates.startedAt);
+        }
+        if (updates?.completedAt) {
+            query += ', completed_at = ?';
+            params.push(updates.completedAt);
+        }
+        if (updates?.winningVariantId) {
+            query += ', winning_variant_id = ?';
+            params.push(updates.winningVariantId);
+        }
+        if (updates?.conclusion) {
+            query += ', conclusion = ?';
+            params.push(updates.conclusion);
+        }
+        query += ' WHERE experiment_id = ?';
+        params.push(experimentId);
+        db.prepare(query).run(...params);
+    }
+    mapRowToExperiment(row) {
+        return {
+            experimentId: row.experiment_id,
+            name: row.name,
+            description: row.description,
+            hypothesis: row.hypothesis,
+            status: row.status,
+            experimentType: row.experiment_type,
+            variants: JSON.parse(row.variants_json),
+            testIds: JSON.parse(row.test_ids_json),
+            trafficSplit: JSON.parse(row.traffic_split_json || '{}'),
+            minSampleSize: row.min_sample_size,
+            maxSampleSize: row.max_sample_size,
+            significanceThreshold: row.significance_threshold,
+            createdAt: row.created_at,
+            startedAt: row.started_at,
+            completedAt: row.completed_at,
+            winningVariantId: row.winning_variant_id,
+            conclusion: row.conclusion,
+        };
+    }
+    // ----- EXPERIMENT RUN METHODS -----
+    /**
+     * Save an experiment run
+     */
+    saveExperimentRun(run) {
+        const db = this.getDb();
+        const info = db.prepare(`
+      INSERT INTO ab_experiment_runs
+      (experiment_id, run_id, test_id, variant_id, variant_role,
+       started_at, completed_at, passed, turn_count, duration_ms,
+       goal_completion_rate, constraint_violations, error_occurred, metrics_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(run.experimentId, run.runId, run.testId, run.variantId, run.variantRole, run.startedAt, run.completedAt, run.passed ? 1 : 0, run.turnCount, run.durationMs, run.goalCompletionRate, run.constraintViolations, run.errorOccurred ? 1 : 0, run.metrics ? JSON.stringify(run.metrics) : null);
+        return info.lastInsertRowid;
+    }
+    /**
+     * Get experiment runs for an experiment
+     */
+    getExperimentRuns(experimentId) {
+        const db = this.getDb();
+        const rows = db.prepare(`
+      SELECT id, experiment_id, run_id, test_id, variant_id, variant_role,
+             started_at, completed_at, passed, turn_count, duration_ms,
+             goal_completion_rate, constraint_violations, error_occurred, metrics_json
+      FROM ab_experiment_runs
+      WHERE experiment_id = ?
+      ORDER BY started_at ASC
+    `).all(experimentId);
+        return rows.map(row => this.mapRowToExperimentRun(row));
+    }
+    /**
+     * Get experiment runs for a specific variant
+     */
+    getExperimentRunsByVariant(experimentId, variantId) {
+        const db = this.getDb();
+        const rows = db.prepare(`
+      SELECT id, experiment_id, run_id, test_id, variant_id, variant_role,
+             started_at, completed_at, passed, turn_count, duration_ms,
+             goal_completion_rate, constraint_violations, error_occurred, metrics_json
+      FROM ab_experiment_runs
+      WHERE experiment_id = ? AND variant_id = ?
+      ORDER BY started_at ASC
+    `).all(experimentId, variantId);
+        return rows.map(row => this.mapRowToExperimentRun(row));
+    }
+    /**
+     * Count runs per variant for an experiment
+     */
+    countExperimentRuns(experimentId) {
+        const db = this.getDb();
+        const rows = db.prepare(`
+      SELECT variant_id, COUNT(*) as count, SUM(passed) as pass_count
+      FROM ab_experiment_runs
+      WHERE experiment_id = ?
+      GROUP BY variant_id
+    `).all(experimentId);
+        return rows.map(row => ({
+            variantId: row.variant_id,
+            count: row.count,
+            passCount: row.pass_count || 0,
+        }));
+    }
+    mapRowToExperimentRun(row) {
+        return {
+            id: row.id,
+            experimentId: row.experiment_id,
+            runId: row.run_id,
+            testId: row.test_id,
+            variantId: row.variant_id,
+            variantRole: row.variant_role,
+            startedAt: row.started_at,
+            completedAt: row.completed_at,
+            passed: row.passed === 1,
+            turnCount: row.turn_count,
+            durationMs: row.duration_ms,
+            goalCompletionRate: row.goal_completion_rate,
+            constraintViolations: row.constraint_violations,
+            errorOccurred: row.error_occurred === 1,
+            metrics: row.metrics_json ? JSON.parse(row.metrics_json) : undefined,
+        };
+    }
+    // ----- EXPERIMENT TRIGGER METHODS -----
+    /**
+     * Save an experiment trigger
+     */
+    saveExperimentTrigger(trigger) {
+        const db = this.getDb();
+        db.prepare(`
+      INSERT OR REPLACE INTO ab_experiment_triggers
+      (trigger_id, experiment_id, trigger_type, condition_json, enabled, last_triggered)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(trigger.triggerId, trigger.experimentId, trigger.triggerType, trigger.condition ? JSON.stringify(trigger.condition) : null, trigger.enabled ? 1 : 0, trigger.lastTriggered);
+    }
+    /**
+     * Get triggers for an experiment
+     */
+    getExperimentTriggers(experimentId) {
+        const db = this.getDb();
+        const rows = db.prepare(`
+      SELECT trigger_id, experiment_id, trigger_type, condition_json, enabled, last_triggered
+      FROM ab_experiment_triggers
+      WHERE experiment_id = ?
+    `).all(experimentId);
+        return rows.map(row => ({
+            triggerId: row.trigger_id,
+            experimentId: row.experiment_id,
+            triggerType: row.trigger_type,
+            condition: row.condition_json ? JSON.parse(row.condition_json) : undefined,
+            enabled: row.enabled === 1,
+            lastTriggered: row.last_triggered,
+        }));
+    }
+    /**
+     * Get enabled triggers
+     */
+    getEnabledTriggers() {
+        const db = this.getDb();
+        const rows = db.prepare(`
+      SELECT trigger_id, experiment_id, trigger_type, condition_json, enabled, last_triggered
+      FROM ab_experiment_triggers
+      WHERE enabled = 1
+    `).all();
+        return rows.map(row => ({
+            triggerId: row.trigger_id,
+            experimentId: row.experiment_id,
+            triggerType: row.trigger_type,
+            condition: row.condition_json ? JSON.parse(row.condition_json) : undefined,
+            enabled: true,
+            lastTriggered: row.last_triggered,
+        }));
+    }
+    /**
+     * Update trigger last triggered time
+     */
+    updateTriggerLastTriggered(triggerId) {
+        const db = this.getDb();
+        db.prepare(`
+      UPDATE ab_experiment_triggers SET last_triggered = ? WHERE trigger_id = ?
+    `).run(new Date().toISOString(), triggerId);
+    }
+    // ----- A/B TESTING STATISTICS -----
+    /**
+     * Get A/B testing statistics
+     */
+    getABTestingStats() {
+        const db = this.getDb();
+        const expStats = db.prepare(`
+      SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) as running,
+        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed
+      FROM ab_experiments
+    `).get();
+        const variantCount = db.prepare('SELECT COUNT(*) as count FROM ab_variants').get()?.count || 0;
+        const runCount = db.prepare('SELECT COUNT(*) as count FROM ab_experiment_runs').get()?.count || 0;
+        return {
+            totalExperiments: expStats?.total || 0,
+            runningExperiments: expStats?.running || 0,
+            completedExperiments: expStats?.completed || 0,
+            totalVariants: variantCount,
+            totalRuns: runCount,
+        };
+    }
+    // ============================================================================
+    // A/B TESTING SANDBOX METHODS
+    // ============================================================================
+    // ----- SANDBOX METHODS -----
+    /**
+     * Initialize default sandboxes (A and B)
+     */
+    initializeSandboxes() {
+        const db = this.getDb();
+        const now = new Date().toISOString();
+        // Check if sandboxes already exist
+        const existingA = db.prepare('SELECT 1 FROM ab_sandboxes WHERE sandbox_id = ?').get('sandbox_a');
+        const existingB = db.prepare('SELECT 1 FROM ab_sandboxes WHERE sandbox_id = ?').get('sandbox_b');
+        if (!existingA) {
+            db.prepare(`
+        INSERT INTO ab_sandboxes (sandbox_id, name, description, is_active, created_at, updated_at)
+        VALUES (?, ?, ?, 1, ?, ?)
+      `).run('sandbox_a', 'Sandbox A', 'First sandbox for A/B testing', now, now);
+        }
+        if (!existingB) {
+            db.prepare(`
+        INSERT INTO ab_sandboxes (sandbox_id, name, description, is_active, created_at, updated_at)
+        VALUES (?, ?, ?, 1, ?, ?)
+      `).run('sandbox_b', 'Sandbox B', 'Second sandbox for A/B testing', now, now);
+        }
+    }
+    /**
+     * Get a sandbox by ID
+     */
+    getSandbox(sandboxId) {
+        const db = this.getDb();
+        const row = db.prepare(`
+      SELECT id, sandbox_id, name, description, flowise_endpoint, flowise_api_key,
+             langfuse_host, langfuse_public_key, langfuse_secret_key,
+             is_active, created_at, updated_at
+      FROM ab_sandboxes
+      WHERE sandbox_id = ?
+    `).get(sandboxId);
+        if (!row)
+            return null;
+        return {
+            id: row.id,
+            sandboxId: row.sandbox_id,
+            name: row.name,
+            description: row.description,
+            flowiseEndpoint: row.flowise_endpoint,
+            flowiseApiKey: row.flowise_api_key,
+            langfuseHost: row.langfuse_host,
+            langfusePublicKey: row.langfuse_public_key,
+            langfuseSecretKey: row.langfuse_secret_key,
+            isActive: row.is_active === 1,
+            createdAt: row.created_at,
+            updatedAt: row.updated_at,
+        };
+    }
+    /**
+     * Get all sandboxes
+     */
+    getAllSandboxes() {
+        const db = this.getDb();
+        const rows = db.prepare(`
+      SELECT id, sandbox_id, name, description, flowise_endpoint, flowise_api_key,
+             langfuse_host, langfuse_public_key, langfuse_secret_key,
+             is_active, created_at, updated_at
+      FROM ab_sandboxes
+      ORDER BY sandbox_id
+    `).all();
+        return rows.map(row => ({
+            id: row.id,
+            sandboxId: row.sandbox_id,
+            name: row.name,
+            description: row.description,
+            flowiseEndpoint: row.flowise_endpoint,
+            flowiseApiKey: row.flowise_api_key,
+            langfuseHost: row.langfuse_host,
+            langfusePublicKey: row.langfuse_public_key,
+            langfuseSecretKey: row.langfuse_secret_key,
+            isActive: row.is_active === 1,
+            createdAt: row.created_at,
+            updatedAt: row.updated_at,
+        }));
+    }
+    /**
+     * Update a sandbox
+     */
+    updateSandbox(sandboxId, updates) {
+        const db = this.getDb();
+        const now = new Date().toISOString();
+        const setClauses = ['updated_at = ?'];
+        const params = [now];
+        if (updates.name !== undefined) {
+            setClauses.push('name = ?');
+            params.push(updates.name);
+        }
+        if (updates.description !== undefined) {
+            setClauses.push('description = ?');
+            params.push(updates.description);
+        }
+        if (updates.flowiseEndpoint !== undefined) {
+            setClauses.push('flowise_endpoint = ?');
+            params.push(updates.flowiseEndpoint);
+        }
+        if (updates.flowiseApiKey !== undefined) {
+            setClauses.push('flowise_api_key = ?');
+            params.push(updates.flowiseApiKey);
+        }
+        if (updates.langfuseHost !== undefined) {
+            setClauses.push('langfuse_host = ?');
+            params.push(updates.langfuseHost);
+        }
+        if (updates.langfusePublicKey !== undefined) {
+            setClauses.push('langfuse_public_key = ?');
+            params.push(updates.langfusePublicKey);
+        }
+        if (updates.langfuseSecretKey !== undefined) {
+            setClauses.push('langfuse_secret_key = ?');
+            params.push(updates.langfuseSecretKey);
+        }
+        if (updates.isActive !== undefined) {
+            setClauses.push('is_active = ?');
+            params.push(updates.isActive ? 1 : 0);
+        }
+        params.push(sandboxId);
+        db.prepare(`
+      UPDATE ab_sandboxes SET ${setClauses.join(', ')} WHERE sandbox_id = ?
+    `).run(...params);
+    }
+    // ----- SANDBOX FILE METHODS -----
+    /**
+     * Get a sandbox file
+     */
+    getSandboxFile(sandboxId, fileKey) {
+        const db = this.getDb();
+        const row = db.prepare(`
+      SELECT id, sandbox_id, file_key, file_type, display_name, content, version, base_version, change_description, created_at, updated_at
+      FROM ab_sandbox_files
+      WHERE sandbox_id = ? AND file_key = ?
+    `).get(sandboxId, fileKey);
+        if (!row)
+            return null;
+        return {
+            id: row.id,
+            sandboxId: row.sandbox_id,
+            fileKey: row.file_key,
+            fileType: row.file_type,
+            displayName: row.display_name,
+            content: row.content,
+            version: row.version,
+            baseVersion: row.base_version,
+            changeDescription: row.change_description,
+            createdAt: row.created_at,
+            updatedAt: row.updated_at,
+        };
+    }
+    /**
+     * Get all files for a sandbox
+     */
+    getSandboxFiles(sandboxId) {
+        const db = this.getDb();
+        const rows = db.prepare(`
+      SELECT id, sandbox_id, file_key, file_type, display_name, content, version, base_version, change_description, created_at, updated_at
+      FROM ab_sandbox_files
+      WHERE sandbox_id = ?
+      ORDER BY file_key
+    `).all(sandboxId);
+        return rows.map(row => ({
+            id: row.id,
+            sandboxId: row.sandbox_id,
+            fileKey: row.file_key,
+            fileType: row.file_type,
+            displayName: row.display_name,
+            content: row.content,
+            version: row.version,
+            baseVersion: row.base_version,
+            changeDescription: row.change_description,
+            createdAt: row.created_at,
+            updatedAt: row.updated_at,
+        }));
+    }
+    /**
+     * Save or update a sandbox file (creates new version)
+     */
+    saveSandboxFile(file) {
+        const db = this.getDb();
+        const now = new Date().toISOString();
+        // Check if file exists
+        const existing = this.getSandboxFile(file.sandboxId, file.fileKey);
+        if (existing) {
+            // Save current version to history
+            db.prepare(`
+        INSERT INTO ab_sandbox_file_history (sandbox_id, file_key, version, content, change_description, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(existing.sandboxId, existing.fileKey, existing.version, existing.content, existing.changeDescription, now);
+            // Update with new content
+            const newVersion = existing.version + 1;
+            db.prepare(`
+        UPDATE ab_sandbox_files
+        SET content = ?, version = ?, change_description = ?, updated_at = ?
+        WHERE sandbox_id = ? AND file_key = ?
+      `).run(file.content, newVersion, file.changeDescription, now, file.sandboxId, file.fileKey);
+            return newVersion;
+        }
+        else {
+            // Insert new file
+            db.prepare(`
+        INSERT INTO ab_sandbox_files (sandbox_id, file_key, file_type, display_name, content, version, base_version, change_description, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(file.sandboxId, file.fileKey, file.fileType, file.displayName, file.content, file.version, file.baseVersion, file.changeDescription, now, now);
+            return file.version;
+        }
+    }
+    /**
+     * Get sandbox file history
+     */
+    getSandboxFileHistory(sandboxId, fileKey, limit = 20) {
+        const db = this.getDb();
+        const rows = db.prepare(`
+      SELECT id, sandbox_id, file_key, version, content, change_description, created_at
+      FROM ab_sandbox_file_history
+      WHERE sandbox_id = ? AND file_key = ?
+      ORDER BY version DESC
+      LIMIT ?
+    `).all(sandboxId, fileKey, limit);
+        return rows.map(row => ({
+            id: row.id,
+            sandboxId: row.sandbox_id,
+            fileKey: row.file_key,
+            version: row.version,
+            content: row.content,
+            changeDescription: row.change_description,
+            createdAt: row.created_at,
+        }));
+    }
+    /**
+     * Rollback sandbox file to a specific version
+     */
+    rollbackSandboxFile(sandboxId, fileKey, version) {
+        const db = this.getDb();
+        // Get the version from history
+        const historyRow = db.prepare(`
+      SELECT content, change_description FROM ab_sandbox_file_history
+      WHERE sandbox_id = ? AND file_key = ? AND version = ?
+    `).get(sandboxId, fileKey, version);
+        if (!historyRow) {
+            throw new Error(`Version ${version} not found in history for ${fileKey}`);
+        }
+        // Get current file
+        const current = this.getSandboxFile(sandboxId, fileKey);
+        if (!current) {
+            throw new Error(`File ${fileKey} not found in sandbox ${sandboxId}`);
+        }
+        // Save current to history
+        const now = new Date().toISOString();
+        db.prepare(`
+      INSERT INTO ab_sandbox_file_history (sandbox_id, file_key, version, content, change_description, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(sandboxId, fileKey, current.version, current.content, current.changeDescription, now);
+        // Update with rolled back content
+        db.prepare(`
+      UPDATE ab_sandbox_files
+      SET content = ?, version = ?, change_description = ?, updated_at = ?
+      WHERE sandbox_id = ? AND file_key = ?
+    `).run(historyRow.content, current.version + 1, `Rolled back to version ${version}`, now, sandboxId, fileKey);
+    }
+    /**
+     * Delete all files for a sandbox (for reset)
+     */
+    clearSandboxFiles(sandboxId) {
+        const db = this.getDb();
+        db.prepare('DELETE FROM ab_sandbox_file_history WHERE sandbox_id = ?').run(sandboxId);
+        db.prepare('DELETE FROM ab_sandbox_files WHERE sandbox_id = ?').run(sandboxId);
+    }
+    // ----- COMPARISON RUN METHODS -----
+    /**
+     * Create a comparison run
+     */
+    createComparisonRun(run) {
+        const db = this.getDb();
+        const now = new Date().toISOString();
+        db.prepare(`
+      INSERT INTO ab_sandbox_comparison_runs
+      (comparison_id, name, status, test_ids_json, production_results_json, sandbox_a_results_json, sandbox_b_results_json, started_at, completed_at, summary_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(run.comparisonId, run.name, run.status, run.testIds ? JSON.stringify(run.testIds) : null, run.productionResults ? JSON.stringify(run.productionResults) : null, run.sandboxAResults ? JSON.stringify(run.sandboxAResults) : null, run.sandboxBResults ? JSON.stringify(run.sandboxBResults) : null, run.startedAt, run.completedAt, run.summary ? JSON.stringify(run.summary) : null, now);
+        return run.comparisonId;
+    }
+    /**
+     * Get a comparison run
+     */
+    getComparisonRun(comparisonId) {
+        const db = this.getDb();
+        const row = db.prepare(`
+      SELECT id, comparison_id, name, status, test_ids_json, production_results_json, sandbox_a_results_json, sandbox_b_results_json, started_at, completed_at, summary_json, created_at
+      FROM ab_sandbox_comparison_runs
+      WHERE comparison_id = ?
+    `).get(comparisonId);
+        if (!row)
+            return null;
+        return {
+            id: row.id,
+            comparisonId: row.comparison_id,
+            name: row.name,
+            status: row.status,
+            testIds: row.test_ids_json ? JSON.parse(row.test_ids_json) : undefined,
+            productionResults: row.production_results_json ? JSON.parse(row.production_results_json) : undefined,
+            sandboxAResults: row.sandbox_a_results_json ? JSON.parse(row.sandbox_a_results_json) : undefined,
+            sandboxBResults: row.sandbox_b_results_json ? JSON.parse(row.sandbox_b_results_json) : undefined,
+            startedAt: row.started_at,
+            completedAt: row.completed_at,
+            summary: row.summary_json ? JSON.parse(row.summary_json) : undefined,
+            createdAt: row.created_at,
+        };
+    }
+    /**
+     * Update a comparison run
+     */
+    updateComparisonRun(comparisonId, updates) {
+        const db = this.getDb();
+        const setClauses = [];
+        const params = [];
+        if (updates.status !== undefined) {
+            setClauses.push('status = ?');
+            params.push(updates.status);
+        }
+        if (updates.productionResults !== undefined) {
+            setClauses.push('production_results_json = ?');
+            params.push(JSON.stringify(updates.productionResults));
+        }
+        if (updates.sandboxAResults !== undefined) {
+            setClauses.push('sandbox_a_results_json = ?');
+            params.push(JSON.stringify(updates.sandboxAResults));
+        }
+        if (updates.sandboxBResults !== undefined) {
+            setClauses.push('sandbox_b_results_json = ?');
+            params.push(JSON.stringify(updates.sandboxBResults));
+        }
+        if (updates.startedAt !== undefined) {
+            setClauses.push('started_at = ?');
+            params.push(updates.startedAt);
+        }
+        if (updates.completedAt !== undefined) {
+            setClauses.push('completed_at = ?');
+            params.push(updates.completedAt);
+        }
+        if (updates.summary !== undefined) {
+            setClauses.push('summary_json = ?');
+            params.push(JSON.stringify(updates.summary));
+        }
+        if (setClauses.length === 0)
+            return;
+        params.push(comparisonId);
+        db.prepare(`
+      UPDATE ab_sandbox_comparison_runs SET ${setClauses.join(', ')} WHERE comparison_id = ?
+    `).run(...params);
+    }
+    /**
+     * Get comparison run history
+     */
+    getComparisonRunHistory(limit = 20) {
+        const db = this.getDb();
+        const rows = db.prepare(`
+      SELECT id, comparison_id, name, status, test_ids_json, production_results_json, sandbox_a_results_json, sandbox_b_results_json, started_at, completed_at, summary_json, created_at
+      FROM ab_sandbox_comparison_runs
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(limit);
+        return rows.map(row => ({
+            id: row.id,
+            comparisonId: row.comparison_id,
+            name: row.name,
+            status: row.status,
+            testIds: row.test_ids_json ? JSON.parse(row.test_ids_json) : undefined,
+            productionResults: row.production_results_json ? JSON.parse(row.production_results_json) : undefined,
+            sandboxAResults: row.sandbox_a_results_json ? JSON.parse(row.sandbox_a_results_json) : undefined,
+            sandboxBResults: row.sandbox_b_results_json ? JSON.parse(row.sandbox_b_results_json) : undefined,
+            startedAt: row.started_at,
+            completedAt: row.completed_at,
+            summary: row.summary_json ? JSON.parse(row.summary_json) : undefined,
+            createdAt: row.created_at,
+        }));
+    }
+    // ============================================================================
+    // AI ENHANCEMENT METHODS
+    // ============================================================================
+    /**
+     * Create a new AI enhancement record
+     */
+    createEnhancement(enhancement) {
+        const db = this.getDb();
+        const enhancementId = `enh-${new Date().toISOString().slice(0, 10)}-${(0, uuid_1.v4)().slice(0, 8)}`;
+        db.prepare(`
+      INSERT INTO ai_enhancement_history
+      (enhancement_id, file_key, source_version, command, command_template, web_search_used, status, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(enhancementId, enhancement.fileKey, enhancement.sourceVersion, enhancement.command, enhancement.commandTemplate || null, enhancement.webSearchUsed ? 1 : 0, enhancement.status, enhancement.createdBy);
+        return enhancementId;
+    }
+    /**
+     * Update an enhancement record
+     */
+    updateEnhancement(enhancementId, updates) {
+        const db = this.getDb();
+        const setClauses = [];
+        const values = [];
+        if (updates.status !== undefined) {
+            setClauses.push('status = ?');
+            values.push(updates.status);
+        }
+        if (updates.resultVersion !== undefined) {
+            setClauses.push('result_version = ?');
+            values.push(updates.resultVersion);
+        }
+        if (updates.webSearchQueries !== undefined) {
+            setClauses.push('web_search_queries = ?');
+            values.push(updates.webSearchQueries);
+        }
+        if (updates.webSearchResultsJson !== undefined) {
+            setClauses.push('web_search_results_json = ?');
+            values.push(updates.webSearchResultsJson);
+        }
+        if (updates.enhancementPrompt !== undefined) {
+            setClauses.push('enhancement_prompt = ?');
+            values.push(updates.enhancementPrompt);
+        }
+        if (updates.aiResponseJson !== undefined) {
+            setClauses.push('ai_response_json = ?');
+            values.push(updates.aiResponseJson);
+        }
+        if (updates.qualityScoreBefore !== undefined) {
+            setClauses.push('quality_score_before = ?');
+            values.push(updates.qualityScoreBefore);
+        }
+        if (updates.qualityScoreAfter !== undefined) {
+            setClauses.push('quality_score_after = ?');
+            values.push(updates.qualityScoreAfter);
+        }
+        if (updates.errorMessage !== undefined) {
+            setClauses.push('error_message = ?');
+            values.push(updates.errorMessage);
+        }
+        if (updates.completedAt !== undefined) {
+            setClauses.push('completed_at = ?');
+            values.push(updates.completedAt);
+        }
+        if (updates.metadataJson !== undefined) {
+            setClauses.push('metadata_json = ?');
+            values.push(updates.metadataJson);
+        }
+        // New applied/promoted fields
+        if (updates.appliedAt !== undefined) {
+            setClauses.push('applied_at = ?');
+            values.push(updates.appliedAt);
+        }
+        if (updates.promotedAt !== undefined) {
+            setClauses.push('promoted_at = ?');
+            values.push(updates.promotedAt);
+        }
+        if (updates.appliedContent !== undefined) {
+            setClauses.push('applied_content = ?');
+            values.push(updates.appliedContent);
+        }
+        if (setClauses.length === 0)
+            return;
+        values.push(enhancementId);
+        db.prepare(`
+      UPDATE ai_enhancement_history
+      SET ${setClauses.join(', ')}
+      WHERE enhancement_id = ?
+    `).run(...values);
+    }
+    /**
+     * Get enhancement by ID
+     */
+    getEnhancement(enhancementId) {
+        const db = this.getDb();
+        const row = db.prepare(`
+      SELECT * FROM ai_enhancement_history WHERE enhancement_id = ?
+    `).get(enhancementId);
+        if (!row)
+            return null;
+        return this.mapEnhancementRow(row);
+    }
+    /**
+     * Get enhancement history for a file
+     */
+    getEnhancementHistory(fileKey, limit = 20) {
+        const db = this.getDb();
+        const rows = db.prepare(`
+      SELECT * FROM ai_enhancement_history
+      WHERE file_key = ?
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(fileKey, limit);
+        return rows.map(row => this.mapEnhancementRow(row));
+    }
+    /**
+     * Get all enhancement templates
+     */
+    getEnhancementTemplates() {
+        const db = this.getDb();
+        const rows = db.prepare(`
+      SELECT * FROM ai_enhancement_templates
+      ORDER BY is_built_in DESC, usage_count DESC, name ASC
+    `).all();
+        return rows.map(row => ({
+            id: row.id,
+            templateId: row.template_id,
+            name: row.name,
+            description: row.description,
+            commandTemplate: row.command_template,
+            category: row.category,
+            useWebSearch: row.use_web_search === 1,
+            defaultSearchQueries: row.default_search_queries,
+            isBuiltIn: row.is_built_in === 1,
+            createdAt: row.created_at,
+            usageCount: row.usage_count,
+        }));
+    }
+    /**
+     * Get a specific enhancement template
+     */
+    getEnhancementTemplate(templateId) {
+        const db = this.getDb();
+        const row = db.prepare(`
+      SELECT * FROM ai_enhancement_templates WHERE template_id = ?
+    `).get(templateId);
+        if (!row)
+            return null;
+        return {
+            id: row.id,
+            templateId: row.template_id,
+            name: row.name,
+            description: row.description,
+            commandTemplate: row.command_template,
+            category: row.category,
+            useWebSearch: row.use_web_search === 1,
+            defaultSearchQueries: row.default_search_queries,
+            isBuiltIn: row.is_built_in === 1,
+            createdAt: row.created_at,
+            usageCount: row.usage_count,
+        };
+    }
+    /**
+     * Increment template usage count
+     */
+    incrementTemplateUsage(templateId) {
+        const db = this.getDb();
+        db.prepare(`
+      UPDATE ai_enhancement_templates
+      SET usage_count = usage_count + 1
+      WHERE template_id = ?
+    `).run(templateId);
+    }
+    /**
+     * Create a custom enhancement template
+     */
+    createEnhancementTemplate(template) {
+        const db = this.getDb();
+        const templateId = `tpl-${(0, uuid_1.v4)().slice(0, 8)}`;
+        db.prepare(`
+      INSERT INTO ai_enhancement_templates
+      (template_id, name, description, command_template, category, use_web_search, is_built_in)
+      VALUES (?, ?, ?, ?, ?, ?, 0)
+    `).run(templateId, template.name, template.description || null, template.commandTemplate, template.category, template.useWebSearch ? 1 : 0);
+        return templateId;
+    }
+    /**
+     * Helper to map enhancement row to interface
+     */
+    mapEnhancementRow(row) {
+        return {
+            id: row.id,
+            enhancementId: row.enhancement_id,
+            fileKey: row.file_key,
+            sourceVersion: row.source_version,
+            resultVersion: row.result_version,
+            command: row.command,
+            commandTemplate: row.command_template,
+            webSearchUsed: row.web_search_used === 1,
+            webSearchQueries: row.web_search_queries,
+            webSearchResultsJson: row.web_search_results_json,
+            enhancementPrompt: row.enhancement_prompt,
+            aiResponseJson: row.ai_response_json,
+            qualityScoreBefore: row.quality_score_before,
+            qualityScoreAfter: row.quality_score_after,
+            status: row.status,
+            errorMessage: row.error_message,
+            createdAt: row.created_at,
+            completedAt: row.completed_at,
+            createdBy: row.created_by,
+            metadataJson: row.metadata_json,
+            // New applied/promoted fields
+            appliedAt: row.applied_at,
+            promotedAt: row.promoted_at,
+            appliedContent: row.applied_content,
+        };
     }
     /**
      * Close database connection
