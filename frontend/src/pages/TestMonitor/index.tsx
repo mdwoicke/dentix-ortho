@@ -10,11 +10,11 @@ const tabs = [
   { name: 'Dashboard', path: ROUTES.TEST_MONITOR_DASHBOARD, exact: true },
   { name: 'Test Cases', path: ROUTES.TEST_MONITOR_CASES },
   { name: 'Goal Tests', path: ROUTES.TEST_MONITOR_GOAL_CASES },
-  { name: 'Create Test', path: ROUTES.TEST_MONITOR_CREATE },
+  { name: 'Goal Test Generator', path: ROUTES.TEST_MONITOR_CREATE },
   { name: 'History', path: ROUTES.TEST_MONITOR_HISTORY },
   { name: 'Tuning', path: ROUTES.TEST_MONITOR_TUNING },
-  { name: 'Sandbox', path: ROUTES.TEST_MONITOR_SANDBOX },
-  { name: 'A/B Testing', path: ROUTES.TEST_MONITOR_AB_TESTING },
+  { name: 'A/B Testing Sandbox', path: ROUTES.TEST_MONITOR_SANDBOX },
+  { name: 'Advanced', path: ROUTES.TEST_MONITOR_AB_TESTING },
 ];
 
 export function TestMonitorLayout() {

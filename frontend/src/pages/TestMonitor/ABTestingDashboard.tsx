@@ -188,8 +188,8 @@ export function ABTestingDashboard() {
   return (
     <div className="h-full overflow-auto p-6">
       <PageHeader
-        title="A/B Testing"
-        subtitle="Monitor and manage prompt/tool experiments"
+        title="Advanced"
+        subtitle="Statistical experiments and CLI-driven testing"
       />
 
       {error && (
