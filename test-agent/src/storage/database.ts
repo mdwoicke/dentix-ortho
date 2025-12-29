@@ -469,6 +469,168 @@ export class Database {
       CREATE INDEX IF NOT EXISTS idx_goal_test_results_test_id ON goal_test_results(test_id);
       CREATE INDEX IF NOT EXISTS idx_goal_progress_snapshots_run_id ON goal_progress_snapshots(run_id);
       CREATE INDEX IF NOT EXISTS idx_goal_progress_snapshots_test_id ON goal_progress_snapshots(test_id);
+
+      -- ========================================================================
+      -- A/B TESTING FRAMEWORK TABLES
+      -- ========================================================================
+
+      -- Variants: Store versioned copies of prompts/tools/configs
+      CREATE TABLE IF NOT EXISTS ab_variants (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        variant_id TEXT UNIQUE NOT NULL,
+        variant_type TEXT CHECK(variant_type IN ('prompt', 'tool', 'config')) NOT NULL,
+        target_file TEXT NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        content TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        baseline_variant_id TEXT,
+        source_fix_id TEXT,
+        is_baseline INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        created_by TEXT CHECK(created_by IN ('manual', 'llm-analysis', 'auto-generated')) DEFAULT 'manual',
+        metadata_json TEXT,
+        FOREIGN KEY (baseline_variant_id) REFERENCES ab_variants(variant_id),
+        FOREIGN KEY (source_fix_id) REFERENCES generated_fixes(fix_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_ab_variants_type ON ab_variants(variant_type);
+      CREATE INDEX IF NOT EXISTS idx_ab_variants_target ON ab_variants(target_file);
+      CREATE INDEX IF NOT EXISTS idx_ab_variants_hash ON ab_variants(content_hash);
+      CREATE INDEX IF NOT EXISTS idx_ab_variants_baseline ON ab_variants(is_baseline);
+
+      -- Experiments: Define A/B test experiments
+      CREATE TABLE IF NOT EXISTS ab_experiments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        experiment_id TEXT UNIQUE NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        hypothesis TEXT,
+        status TEXT CHECK(status IN ('draft', 'running', 'paused', 'completed', 'aborted')) DEFAULT 'draft',
+        experiment_type TEXT CHECK(experiment_type IN ('prompt', 'tool', 'config', 'multi')) NOT NULL,
+        variants_json TEXT NOT NULL,
+        test_ids_json TEXT NOT NULL,
+        traffic_split_json TEXT,
+        min_sample_size INTEGER DEFAULT 10,
+        max_sample_size INTEGER DEFAULT 100,
+        significance_threshold REAL DEFAULT 0.05,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        started_at TEXT,
+        completed_at TEXT,
+        winning_variant_id TEXT,
+        conclusion TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_ab_experiments_status ON ab_experiments(status);
+      CREATE INDEX IF NOT EXISTS idx_ab_experiments_type ON ab_experiments(experiment_type);
+
+      -- Experiment Runs: Track each test execution with variant info
+      CREATE TABLE IF NOT EXISTS ab_experiment_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        experiment_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        test_id TEXT NOT NULL,
+        variant_id TEXT NOT NULL,
+        variant_role TEXT CHECK(variant_role IN ('control', 'treatment')) NOT NULL,
+        started_at TEXT NOT NULL,
+        completed_at TEXT NOT NULL,
+        passed INTEGER DEFAULT 0,
+        turn_count INTEGER DEFAULT 0,
+        duration_ms INTEGER DEFAULT 0,
+        goal_completion_rate REAL DEFAULT 0,
+        constraint_violations INTEGER DEFAULT 0,
+        error_occurred INTEGER DEFAULT 0,
+        metrics_json TEXT,
+        FOREIGN KEY (experiment_id) REFERENCES ab_experiments(experiment_id),
+        FOREIGN KEY (variant_id) REFERENCES ab_variants(variant_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_ab_runs_experiment ON ab_experiment_runs(experiment_id);
+      CREATE INDEX IF NOT EXISTS idx_ab_runs_variant ON ab_experiment_runs(variant_id);
+      CREATE INDEX IF NOT EXISTS idx_ab_runs_test ON ab_experiment_runs(test_id);
+
+      -- Experiment Triggers: Define when to suggest/run experiments
+      CREATE TABLE IF NOT EXISTS ab_experiment_triggers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        trigger_id TEXT UNIQUE NOT NULL,
+        experiment_id TEXT NOT NULL,
+        trigger_type TEXT CHECK(trigger_type IN ('fix-applied', 'scheduled', 'pass-rate-drop', 'manual')) NOT NULL,
+        condition_json TEXT,
+        enabled INTEGER DEFAULT 1,
+        last_triggered TEXT,
+        FOREIGN KEY (experiment_id) REFERENCES ab_experiments(experiment_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_ab_triggers_experiment ON ab_experiment_triggers(experiment_id);
+      CREATE INDEX IF NOT EXISTS idx_ab_triggers_enabled ON ab_experiment_triggers(enabled);
+
+      -- ========================================================================
+      -- A/B TESTING SANDBOX TABLES
+      -- ========================================================================
+
+      -- Sandboxes: Persistent A and B sandbox configurations
+      CREATE TABLE IF NOT EXISTS ab_sandboxes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sandbox_id TEXT UNIQUE NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        flowise_endpoint TEXT,
+        flowise_api_key TEXT,
+        is_active INTEGER DEFAULT 1,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+      );
+
+      -- Sandbox Files: Copy of each of the 3 files per sandbox
+      CREATE TABLE IF NOT EXISTS ab_sandbox_files (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sandbox_id TEXT NOT NULL,
+        file_key TEXT NOT NULL,
+        file_type TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        content TEXT NOT NULL,
+        version INTEGER DEFAULT 1,
+        base_version INTEGER,
+        change_description TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(sandbox_id, file_key),
+        FOREIGN KEY (sandbox_id) REFERENCES ab_sandboxes(sandbox_id)
+      );
+
+      -- Sandbox File History: Version history for sandbox file edits
+      CREATE TABLE IF NOT EXISTS ab_sandbox_file_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sandbox_id TEXT NOT NULL,
+        file_key TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        content TEXT NOT NULL,
+        change_description TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (sandbox_id) REFERENCES ab_sandboxes(sandbox_id)
+      );
+
+      -- Sandbox Comparison Runs: Track three-way comparison test runs
+      CREATE TABLE IF NOT EXISTS ab_sandbox_comparison_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        comparison_id TEXT UNIQUE NOT NULL,
+        name TEXT,
+        status TEXT CHECK(status IN ('pending', 'running', 'completed', 'failed')) DEFAULT 'pending',
+        test_ids_json TEXT,
+        production_results_json TEXT,
+        sandbox_a_results_json TEXT,
+        sandbox_b_results_json TEXT,
+        started_at TEXT,
+        completed_at TEXT,
+        summary_json TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      );
+
+      -- Indexes for sandbox tables
+      CREATE INDEX IF NOT EXISTS idx_sandbox_files_sandbox ON ab_sandbox_files(sandbox_id);
+      CREATE INDEX IF NOT EXISTS idx_sandbox_history_sandbox ON ab_sandbox_file_history(sandbox_id);
+      CREATE INDEX IF NOT EXISTS idx_sandbox_history_file ON ab_sandbox_file_history(file_key);
+      CREATE INDEX IF NOT EXISTS idx_comparison_runs_status ON ab_sandbox_comparison_runs(status);
     `);
 
     // Migration: Add agent_question column if it doesn't exist
@@ -483,6 +645,14 @@ export class Database {
 
     // Migration: Add classification_json column to generated_fixes
     this.addColumnIfNotExists('generated_fixes', 'classification_json', 'TEXT');
+
+    // Migration: Add flowise_api_key column to ab_sandboxes
+    this.addColumnIfNotExists('ab_sandboxes', 'flowise_api_key', 'TEXT');
+
+    // Migration: Add LangFuse credential columns to ab_sandboxes
+    this.addColumnIfNotExists('ab_sandboxes', 'langfuse_host', 'TEXT');
+    this.addColumnIfNotExists('ab_sandboxes', 'langfuse_public_key', 'TEXT');
+    this.addColumnIfNotExists('ab_sandboxes', 'langfuse_secret_key', 'TEXT');
   }
 
   /**
@@ -1264,6 +1434,10 @@ export class Database {
     const db = this.getDb();
 
     db.exec(`
+      DELETE FROM ab_experiment_triggers;
+      DELETE FROM ab_experiment_runs;
+      DELETE FROM ab_experiments;
+      DELETE FROM ab_variants;
       DELETE FROM fix_outcomes;
       DELETE FROM generated_fixes;
       DELETE FROM prompt_versions;
@@ -1740,6 +1914,1013 @@ export class Database {
     db.prepare('DELETE FROM goal_test_results WHERE run_id = ?').run(runId);
   }
 
+  // ============================================================================
+  // A/B TESTING FRAMEWORK METHODS
+  // ============================================================================
+
+  // ----- VARIANT METHODS -----
+
+  /**
+   * Save a variant
+   */
+  saveVariant(variant: ABVariant): void {
+    const db = this.getDb();
+
+    db.prepare(`
+      INSERT OR REPLACE INTO ab_variants
+      (variant_id, variant_type, target_file, name, description, content, content_hash,
+       baseline_variant_id, source_fix_id, is_baseline, created_at, created_by, metadata_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      variant.variantId,
+      variant.variantType,
+      variant.targetFile,
+      variant.name,
+      variant.description,
+      variant.content,
+      variant.contentHash,
+      variant.baselineVariantId,
+      variant.sourceFixId,
+      variant.isBaseline ? 1 : 0,
+      variant.createdAt || new Date().toISOString(),
+      variant.createdBy,
+      variant.metadata ? JSON.stringify(variant.metadata) : null
+    );
+  }
+
+  /**
+   * Get a variant by ID
+   */
+  getVariant(variantId: string): ABVariant | null {
+    const db = this.getDb();
+
+    const row = db.prepare(`
+      SELECT variant_id, variant_type, target_file, name, description, content, content_hash,
+             baseline_variant_id, source_fix_id, is_baseline, created_at, created_by, metadata_json
+      FROM ab_variants
+      WHERE variant_id = ?
+    `).get(variantId) as any;
+
+    if (!row) return null;
+
+    return this.mapRowToVariant(row);
+  }
+
+  /**
+   * Get variants by target file
+   */
+  getVariantsByFile(targetFile: string): ABVariant[] {
+    const db = this.getDb();
+
+    const rows = db.prepare(`
+      SELECT variant_id, variant_type, target_file, name, description, content, content_hash,
+             baseline_variant_id, source_fix_id, is_baseline, created_at, created_by, metadata_json
+      FROM ab_variants
+      WHERE target_file = ?
+      ORDER BY created_at DESC
+    `).all(targetFile) as any[];
+
+    return rows.map(row => this.mapRowToVariant(row));
+  }
+
+  /**
+   * Get baseline variant for a file
+   */
+  getBaselineVariant(targetFile: string): ABVariant | null {
+    const db = this.getDb();
+
+    const row = db.prepare(`
+      SELECT variant_id, variant_type, target_file, name, description, content, content_hash,
+             baseline_variant_id, source_fix_id, is_baseline, created_at, created_by, metadata_json
+      FROM ab_variants
+      WHERE target_file = ? AND is_baseline = 1
+    `).get(targetFile) as any;
+
+    if (!row) return null;
+
+    return this.mapRowToVariant(row);
+  }
+
+  /**
+   * Set a variant as baseline (unsets others for same file)
+   */
+  setVariantAsBaseline(variantId: string): void {
+    const db = this.getDb();
+
+    // Get the variant's target file
+    const variant = this.getVariant(variantId);
+    if (!variant) return;
+
+    // Unset other baselines for the same file
+    db.prepare(`
+      UPDATE ab_variants SET is_baseline = 0 WHERE target_file = ?
+    `).run(variant.targetFile);
+
+    // Set this one as baseline
+    db.prepare(`
+      UPDATE ab_variants SET is_baseline = 1 WHERE variant_id = ?
+    `).run(variantId);
+  }
+
+  /**
+   * Find variant by content hash
+   */
+  findVariantByHash(contentHash: string, targetFile: string): ABVariant | null {
+    const db = this.getDb();
+
+    const row = db.prepare(`
+      SELECT variant_id, variant_type, target_file, name, description, content, content_hash,
+             baseline_variant_id, source_fix_id, is_baseline, created_at, created_by, metadata_json
+      FROM ab_variants
+      WHERE content_hash = ? AND target_file = ?
+    `).get(contentHash, targetFile) as any;
+
+    if (!row) return null;
+
+    return this.mapRowToVariant(row);
+  }
+
+  /**
+   * Get all variants
+   */
+  getAllVariants(options?: { variantType?: string; isBaseline?: boolean }): ABVariant[] {
+    const db = this.getDb();
+
+    let query = `
+      SELECT variant_id, variant_type, target_file, name, description, content, content_hash,
+             baseline_variant_id, source_fix_id, is_baseline, created_at, created_by, metadata_json
+      FROM ab_variants
+    `;
+    const conditions: string[] = [];
+    const params: any[] = [];
+
+    if (options?.variantType) {
+      conditions.push('variant_type = ?');
+      params.push(options.variantType);
+    }
+    if (options?.isBaseline !== undefined) {
+      conditions.push('is_baseline = ?');
+      params.push(options.isBaseline ? 1 : 0);
+    }
+
+    if (conditions.length > 0) {
+      query += ' WHERE ' + conditions.join(' AND ');
+    }
+    query += ' ORDER BY created_at DESC';
+
+    const rows = db.prepare(query).all(...params) as any[];
+
+    return rows.map(row => this.mapRowToVariant(row));
+  }
+
+  private mapRowToVariant(row: any): ABVariant {
+    return {
+      variantId: row.variant_id,
+      variantType: row.variant_type,
+      targetFile: row.target_file,
+      name: row.name,
+      description: row.description,
+      content: row.content,
+      contentHash: row.content_hash,
+      baselineVariantId: row.baseline_variant_id,
+      sourceFixId: row.source_fix_id,
+      isBaseline: row.is_baseline === 1,
+      createdAt: row.created_at,
+      createdBy: row.created_by,
+      metadata: row.metadata_json ? JSON.parse(row.metadata_json) : undefined,
+    };
+  }
+
+  // ----- EXPERIMENT METHODS -----
+
+  /**
+   * Save an experiment
+   */
+  saveExperiment(experiment: ABExperiment): void {
+    const db = this.getDb();
+
+    db.prepare(`
+      INSERT OR REPLACE INTO ab_experiments
+      (experiment_id, name, description, hypothesis, status, experiment_type,
+       variants_json, test_ids_json, traffic_split_json,
+       min_sample_size, max_sample_size, significance_threshold,
+       created_at, started_at, completed_at, winning_variant_id, conclusion)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      experiment.experimentId,
+      experiment.name,
+      experiment.description,
+      experiment.hypothesis,
+      experiment.status,
+      experiment.experimentType,
+      JSON.stringify(experiment.variants),
+      JSON.stringify(experiment.testIds),
+      JSON.stringify(experiment.trafficSplit),
+      experiment.minSampleSize,
+      experiment.maxSampleSize,
+      experiment.significanceThreshold,
+      experiment.createdAt || new Date().toISOString(),
+      experiment.startedAt,
+      experiment.completedAt,
+      experiment.winningVariantId,
+      experiment.conclusion
+    );
+  }
+
+  /**
+   * Get an experiment by ID
+   */
+  getExperiment(experimentId: string): ABExperiment | null {
+    const db = this.getDb();
+
+    const row = db.prepare(`
+      SELECT experiment_id, name, description, hypothesis, status, experiment_type,
+             variants_json, test_ids_json, traffic_split_json,
+             min_sample_size, max_sample_size, significance_threshold,
+             created_at, started_at, completed_at, winning_variant_id, conclusion
+      FROM ab_experiments
+      WHERE experiment_id = ?
+    `).get(experimentId) as any;
+
+    if (!row) return null;
+
+    return this.mapRowToExperiment(row);
+  }
+
+  /**
+   * Get experiments by status
+   */
+  getExperimentsByStatus(status: string): ABExperiment[] {
+    const db = this.getDb();
+
+    const rows = db.prepare(`
+      SELECT experiment_id, name, description, hypothesis, status, experiment_type,
+             variants_json, test_ids_json, traffic_split_json,
+             min_sample_size, max_sample_size, significance_threshold,
+             created_at, started_at, completed_at, winning_variant_id, conclusion
+      FROM ab_experiments
+      WHERE status = ?
+      ORDER BY created_at DESC
+    `).all(status) as any[];
+
+    return rows.map(row => this.mapRowToExperiment(row));
+  }
+
+  /**
+   * Get all experiments
+   */
+  getAllExperiments(options?: { status?: string; limit?: number }): ABExperiment[] {
+    const db = this.getDb();
+
+    let query = `
+      SELECT experiment_id, name, description, hypothesis, status, experiment_type,
+             variants_json, test_ids_json, traffic_split_json,
+             min_sample_size, max_sample_size, significance_threshold,
+             created_at, started_at, completed_at, winning_variant_id, conclusion
+      FROM ab_experiments
+    `;
+    const params: any[] = [];
+
+    if (options?.status) {
+      query += ' WHERE status = ?';
+      params.push(options.status);
+    }
+
+    query += ' ORDER BY created_at DESC';
+
+    if (options?.limit) {
+      query += ' LIMIT ?';
+      params.push(options.limit);
+    }
+
+    const rows = db.prepare(query).all(...params) as any[];
+
+    return rows.map(row => this.mapRowToExperiment(row));
+  }
+
+  /**
+   * Update experiment status
+   */
+  updateExperimentStatus(experimentId: string, status: string, updates?: { startedAt?: string; completedAt?: string; winningVariantId?: string; conclusion?: string }): void {
+    const db = this.getDb();
+
+    let query = 'UPDATE ab_experiments SET status = ?';
+    const params: any[] = [status];
+
+    if (updates?.startedAt) {
+      query += ', started_at = ?';
+      params.push(updates.startedAt);
+    }
+    if (updates?.completedAt) {
+      query += ', completed_at = ?';
+      params.push(updates.completedAt);
+    }
+    if (updates?.winningVariantId) {
+      query += ', winning_variant_id = ?';
+      params.push(updates.winningVariantId);
+    }
+    if (updates?.conclusion) {
+      query += ', conclusion = ?';
+      params.push(updates.conclusion);
+    }
+
+    query += ' WHERE experiment_id = ?';
+    params.push(experimentId);
+
+    db.prepare(query).run(...params);
+  }
+
+  private mapRowToExperiment(row: any): ABExperiment {
+    return {
+      experimentId: row.experiment_id,
+      name: row.name,
+      description: row.description,
+      hypothesis: row.hypothesis,
+      status: row.status,
+      experimentType: row.experiment_type,
+      variants: JSON.parse(row.variants_json),
+      testIds: JSON.parse(row.test_ids_json),
+      trafficSplit: JSON.parse(row.traffic_split_json || '{}'),
+      minSampleSize: row.min_sample_size,
+      maxSampleSize: row.max_sample_size,
+      significanceThreshold: row.significance_threshold,
+      createdAt: row.created_at,
+      startedAt: row.started_at,
+      completedAt: row.completed_at,
+      winningVariantId: row.winning_variant_id,
+      conclusion: row.conclusion,
+    };
+  }
+
+  // ----- EXPERIMENT RUN METHODS -----
+
+  /**
+   * Save an experiment run
+   */
+  saveExperimentRun(run: ABExperimentRun): number {
+    const db = this.getDb();
+
+    const info = db.prepare(`
+      INSERT INTO ab_experiment_runs
+      (experiment_id, run_id, test_id, variant_id, variant_role,
+       started_at, completed_at, passed, turn_count, duration_ms,
+       goal_completion_rate, constraint_violations, error_occurred, metrics_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      run.experimentId,
+      run.runId,
+      run.testId,
+      run.variantId,
+      run.variantRole,
+      run.startedAt,
+      run.completedAt,
+      run.passed ? 1 : 0,
+      run.turnCount,
+      run.durationMs,
+      run.goalCompletionRate,
+      run.constraintViolations,
+      run.errorOccurred ? 1 : 0,
+      run.metrics ? JSON.stringify(run.metrics) : null
+    );
+
+    return info.lastInsertRowid as number;
+  }
+
+  /**
+   * Get experiment runs for an experiment
+   */
+  getExperimentRuns(experimentId: string): ABExperimentRun[] {
+    const db = this.getDb();
+
+    const rows = db.prepare(`
+      SELECT id, experiment_id, run_id, test_id, variant_id, variant_role,
+             started_at, completed_at, passed, turn_count, duration_ms,
+             goal_completion_rate, constraint_violations, error_occurred, metrics_json
+      FROM ab_experiment_runs
+      WHERE experiment_id = ?
+      ORDER BY started_at ASC
+    `).all(experimentId) as any[];
+
+    return rows.map(row => this.mapRowToExperimentRun(row));
+  }
+
+  /**
+   * Get experiment runs for a specific variant
+   */
+  getExperimentRunsByVariant(experimentId: string, variantId: string): ABExperimentRun[] {
+    const db = this.getDb();
+
+    const rows = db.prepare(`
+      SELECT id, experiment_id, run_id, test_id, variant_id, variant_role,
+             started_at, completed_at, passed, turn_count, duration_ms,
+             goal_completion_rate, constraint_violations, error_occurred, metrics_json
+      FROM ab_experiment_runs
+      WHERE experiment_id = ? AND variant_id = ?
+      ORDER BY started_at ASC
+    `).all(experimentId, variantId) as any[];
+
+    return rows.map(row => this.mapRowToExperimentRun(row));
+  }
+
+  /**
+   * Count runs per variant for an experiment
+   */
+  countExperimentRuns(experimentId: string): { variantId: string; count: number; passCount: number }[] {
+    const db = this.getDb();
+
+    const rows = db.prepare(`
+      SELECT variant_id, COUNT(*) as count, SUM(passed) as pass_count
+      FROM ab_experiment_runs
+      WHERE experiment_id = ?
+      GROUP BY variant_id
+    `).all(experimentId) as any[];
+
+    return rows.map(row => ({
+      variantId: row.variant_id,
+      count: row.count,
+      passCount: row.pass_count || 0,
+    }));
+  }
+
+  private mapRowToExperimentRun(row: any): ABExperimentRun {
+    return {
+      id: row.id,
+      experimentId: row.experiment_id,
+      runId: row.run_id,
+      testId: row.test_id,
+      variantId: row.variant_id,
+      variantRole: row.variant_role,
+      startedAt: row.started_at,
+      completedAt: row.completed_at,
+      passed: row.passed === 1,
+      turnCount: row.turn_count,
+      durationMs: row.duration_ms,
+      goalCompletionRate: row.goal_completion_rate,
+      constraintViolations: row.constraint_violations,
+      errorOccurred: row.error_occurred === 1,
+      metrics: row.metrics_json ? JSON.parse(row.metrics_json) : undefined,
+    };
+  }
+
+  // ----- EXPERIMENT TRIGGER METHODS -----
+
+  /**
+   * Save an experiment trigger
+   */
+  saveExperimentTrigger(trigger: ABExperimentTrigger): void {
+    const db = this.getDb();
+
+    db.prepare(`
+      INSERT OR REPLACE INTO ab_experiment_triggers
+      (trigger_id, experiment_id, trigger_type, condition_json, enabled, last_triggered)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      trigger.triggerId,
+      trigger.experimentId,
+      trigger.triggerType,
+      trigger.condition ? JSON.stringify(trigger.condition) : null,
+      trigger.enabled ? 1 : 0,
+      trigger.lastTriggered
+    );
+  }
+
+  /**
+   * Get triggers for an experiment
+   */
+  getExperimentTriggers(experimentId: string): ABExperimentTrigger[] {
+    const db = this.getDb();
+
+    const rows = db.prepare(`
+      SELECT trigger_id, experiment_id, trigger_type, condition_json, enabled, last_triggered
+      FROM ab_experiment_triggers
+      WHERE experiment_id = ?
+    `).all(experimentId) as any[];
+
+    return rows.map(row => ({
+      triggerId: row.trigger_id,
+      experimentId: row.experiment_id,
+      triggerType: row.trigger_type,
+      condition: row.condition_json ? JSON.parse(row.condition_json) : undefined,
+      enabled: row.enabled === 1,
+      lastTriggered: row.last_triggered,
+    }));
+  }
+
+  /**
+   * Get enabled triggers
+   */
+  getEnabledTriggers(): ABExperimentTrigger[] {
+    const db = this.getDb();
+
+    const rows = db.prepare(`
+      SELECT trigger_id, experiment_id, trigger_type, condition_json, enabled, last_triggered
+      FROM ab_experiment_triggers
+      WHERE enabled = 1
+    `).all() as any[];
+
+    return rows.map(row => ({
+      triggerId: row.trigger_id,
+      experimentId: row.experiment_id,
+      triggerType: row.trigger_type,
+      condition: row.condition_json ? JSON.parse(row.condition_json) : undefined,
+      enabled: true,
+      lastTriggered: row.last_triggered,
+    }));
+  }
+
+  /**
+   * Update trigger last triggered time
+   */
+  updateTriggerLastTriggered(triggerId: string): void {
+    const db = this.getDb();
+
+    db.prepare(`
+      UPDATE ab_experiment_triggers SET last_triggered = ? WHERE trigger_id = ?
+    `).run(new Date().toISOString(), triggerId);
+  }
+
+  // ----- A/B TESTING STATISTICS -----
+
+  /**
+   * Get A/B testing statistics
+   */
+  getABTestingStats(): {
+    totalExperiments: number;
+    runningExperiments: number;
+    completedExperiments: number;
+    totalVariants: number;
+    totalRuns: number;
+  } {
+    const db = this.getDb();
+
+    const expStats = db.prepare(`
+      SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) as running,
+        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed
+      FROM ab_experiments
+    `).get() as any;
+
+    const variantCount = (db.prepare('SELECT COUNT(*) as count FROM ab_variants').get() as any)?.count || 0;
+    const runCount = (db.prepare('SELECT COUNT(*) as count FROM ab_experiment_runs').get() as any)?.count || 0;
+
+    return {
+      totalExperiments: expStats?.total || 0,
+      runningExperiments: expStats?.running || 0,
+      completedExperiments: expStats?.completed || 0,
+      totalVariants: variantCount,
+      totalRuns: runCount,
+    };
+  }
+
+  // ============================================================================
+  // A/B TESTING SANDBOX METHODS
+  // ============================================================================
+
+  // ----- SANDBOX METHODS -----
+
+  /**
+   * Initialize default sandboxes (A and B)
+   */
+  initializeSandboxes(): void {
+    const db = this.getDb();
+    const now = new Date().toISOString();
+
+    // Check if sandboxes already exist
+    const existingA = db.prepare('SELECT 1 FROM ab_sandboxes WHERE sandbox_id = ?').get('sandbox_a');
+    const existingB = db.prepare('SELECT 1 FROM ab_sandboxes WHERE sandbox_id = ?').get('sandbox_b');
+
+    if (!existingA) {
+      db.prepare(`
+        INSERT INTO ab_sandboxes (sandbox_id, name, description, is_active, created_at, updated_at)
+        VALUES (?, ?, ?, 1, ?, ?)
+      `).run('sandbox_a', 'Sandbox A', 'First sandbox for A/B testing', now, now);
+    }
+
+    if (!existingB) {
+      db.prepare(`
+        INSERT INTO ab_sandboxes (sandbox_id, name, description, is_active, created_at, updated_at)
+        VALUES (?, ?, ?, 1, ?, ?)
+      `).run('sandbox_b', 'Sandbox B', 'Second sandbox for A/B testing', now, now);
+    }
+  }
+
+  /**
+   * Get a sandbox by ID
+   */
+  getSandbox(sandboxId: string): ABSandbox | null {
+    const db = this.getDb();
+
+    const row = db.prepare(`
+      SELECT id, sandbox_id, name, description, flowise_endpoint, flowise_api_key,
+             langfuse_host, langfuse_public_key, langfuse_secret_key,
+             is_active, created_at, updated_at
+      FROM ab_sandboxes
+      WHERE sandbox_id = ?
+    `).get(sandboxId) as any;
+
+    if (!row) return null;
+
+    return {
+      id: row.id,
+      sandboxId: row.sandbox_id,
+      name: row.name,
+      description: row.description,
+      flowiseEndpoint: row.flowise_endpoint,
+      flowiseApiKey: row.flowise_api_key,
+      langfuseHost: row.langfuse_host,
+      langfusePublicKey: row.langfuse_public_key,
+      langfuseSecretKey: row.langfuse_secret_key,
+      isActive: row.is_active === 1,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  /**
+   * Get all sandboxes
+   */
+  getAllSandboxes(): ABSandbox[] {
+    const db = this.getDb();
+
+    const rows = db.prepare(`
+      SELECT id, sandbox_id, name, description, flowise_endpoint, flowise_api_key,
+             langfuse_host, langfuse_public_key, langfuse_secret_key,
+             is_active, created_at, updated_at
+      FROM ab_sandboxes
+      ORDER BY sandbox_id
+    `).all() as any[];
+
+    return rows.map(row => ({
+      id: row.id,
+      sandboxId: row.sandbox_id,
+      name: row.name,
+      description: row.description,
+      flowiseEndpoint: row.flowise_endpoint,
+      flowiseApiKey: row.flowise_api_key,
+      langfuseHost: row.langfuse_host,
+      langfusePublicKey: row.langfuse_public_key,
+      langfuseSecretKey: row.langfuse_secret_key,
+      isActive: row.is_active === 1,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
+  }
+
+  /**
+   * Update a sandbox
+   */
+  updateSandbox(sandboxId: string, updates: Partial<ABSandbox>): void {
+    const db = this.getDb();
+    const now = new Date().toISOString();
+
+    const setClauses: string[] = ['updated_at = ?'];
+    const params: any[] = [now];
+
+    if (updates.name !== undefined) {
+      setClauses.push('name = ?');
+      params.push(updates.name);
+    }
+    if (updates.description !== undefined) {
+      setClauses.push('description = ?');
+      params.push(updates.description);
+    }
+    if (updates.flowiseEndpoint !== undefined) {
+      setClauses.push('flowise_endpoint = ?');
+      params.push(updates.flowiseEndpoint);
+    }
+    if (updates.flowiseApiKey !== undefined) {
+      setClauses.push('flowise_api_key = ?');
+      params.push(updates.flowiseApiKey);
+    }
+    if (updates.langfuseHost !== undefined) {
+      setClauses.push('langfuse_host = ?');
+      params.push(updates.langfuseHost);
+    }
+    if (updates.langfusePublicKey !== undefined) {
+      setClauses.push('langfuse_public_key = ?');
+      params.push(updates.langfusePublicKey);
+    }
+    if (updates.langfuseSecretKey !== undefined) {
+      setClauses.push('langfuse_secret_key = ?');
+      params.push(updates.langfuseSecretKey);
+    }
+    if (updates.isActive !== undefined) {
+      setClauses.push('is_active = ?');
+      params.push(updates.isActive ? 1 : 0);
+    }
+
+    params.push(sandboxId);
+
+    db.prepare(`
+      UPDATE ab_sandboxes SET ${setClauses.join(', ')} WHERE sandbox_id = ?
+    `).run(...params);
+  }
+
+  // ----- SANDBOX FILE METHODS -----
+
+  /**
+   * Get a sandbox file
+   */
+  getSandboxFile(sandboxId: string, fileKey: string): ABSandboxFile | null {
+    const db = this.getDb();
+
+    const row = db.prepare(`
+      SELECT id, sandbox_id, file_key, file_type, display_name, content, version, base_version, change_description, created_at, updated_at
+      FROM ab_sandbox_files
+      WHERE sandbox_id = ? AND file_key = ?
+    `).get(sandboxId, fileKey) as any;
+
+    if (!row) return null;
+
+    return {
+      id: row.id,
+      sandboxId: row.sandbox_id,
+      fileKey: row.file_key,
+      fileType: row.file_type,
+      displayName: row.display_name,
+      content: row.content,
+      version: row.version,
+      baseVersion: row.base_version,
+      changeDescription: row.change_description,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  /**
+   * Get all files for a sandbox
+   */
+  getSandboxFiles(sandboxId: string): ABSandboxFile[] {
+    const db = this.getDb();
+
+    const rows = db.prepare(`
+      SELECT id, sandbox_id, file_key, file_type, display_name, content, version, base_version, change_description, created_at, updated_at
+      FROM ab_sandbox_files
+      WHERE sandbox_id = ?
+      ORDER BY file_key
+    `).all(sandboxId) as any[];
+
+    return rows.map(row => ({
+      id: row.id,
+      sandboxId: row.sandbox_id,
+      fileKey: row.file_key,
+      fileType: row.file_type,
+      displayName: row.display_name,
+      content: row.content,
+      version: row.version,
+      baseVersion: row.base_version,
+      changeDescription: row.change_description,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
+  }
+
+  /**
+   * Save or update a sandbox file (creates new version)
+   */
+  saveSandboxFile(file: Omit<ABSandboxFile, 'id' | 'createdAt' | 'updatedAt'>): number {
+    const db = this.getDb();
+    const now = new Date().toISOString();
+
+    // Check if file exists
+    const existing = this.getSandboxFile(file.sandboxId, file.fileKey);
+
+    if (existing) {
+      // Save current version to history
+      db.prepare(`
+        INSERT INTO ab_sandbox_file_history (sandbox_id, file_key, version, content, change_description, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(existing.sandboxId, existing.fileKey, existing.version, existing.content, existing.changeDescription, now);
+
+      // Update with new content
+      const newVersion = existing.version + 1;
+      db.prepare(`
+        UPDATE ab_sandbox_files
+        SET content = ?, version = ?, change_description = ?, updated_at = ?
+        WHERE sandbox_id = ? AND file_key = ?
+      `).run(file.content, newVersion, file.changeDescription, now, file.sandboxId, file.fileKey);
+
+      return newVersion;
+    } else {
+      // Insert new file
+      db.prepare(`
+        INSERT INTO ab_sandbox_files (sandbox_id, file_key, file_type, display_name, content, version, base_version, change_description, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(file.sandboxId, file.fileKey, file.fileType, file.displayName, file.content, file.version, file.baseVersion, file.changeDescription, now, now);
+
+      return file.version;
+    }
+  }
+
+  /**
+   * Get sandbox file history
+   */
+  getSandboxFileHistory(sandboxId: string, fileKey: string, limit: number = 20): ABSandboxFileHistory[] {
+    const db = this.getDb();
+
+    const rows = db.prepare(`
+      SELECT id, sandbox_id, file_key, version, content, change_description, created_at
+      FROM ab_sandbox_file_history
+      WHERE sandbox_id = ? AND file_key = ?
+      ORDER BY version DESC
+      LIMIT ?
+    `).all(sandboxId, fileKey, limit) as any[];
+
+    return rows.map(row => ({
+      id: row.id,
+      sandboxId: row.sandbox_id,
+      fileKey: row.file_key,
+      version: row.version,
+      content: row.content,
+      changeDescription: row.change_description,
+      createdAt: row.created_at,
+    }));
+  }
+
+  /**
+   * Rollback sandbox file to a specific version
+   */
+  rollbackSandboxFile(sandboxId: string, fileKey: string, version: number): void {
+    const db = this.getDb();
+
+    // Get the version from history
+    const historyRow = db.prepare(`
+      SELECT content, change_description FROM ab_sandbox_file_history
+      WHERE sandbox_id = ? AND file_key = ? AND version = ?
+    `).get(sandboxId, fileKey, version) as any;
+
+    if (!historyRow) {
+      throw new Error(`Version ${version} not found in history for ${fileKey}`);
+    }
+
+    // Get current file
+    const current = this.getSandboxFile(sandboxId, fileKey);
+    if (!current) {
+      throw new Error(`File ${fileKey} not found in sandbox ${sandboxId}`);
+    }
+
+    // Save current to history
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO ab_sandbox_file_history (sandbox_id, file_key, version, content, change_description, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(sandboxId, fileKey, current.version, current.content, current.changeDescription, now);
+
+    // Update with rolled back content
+    db.prepare(`
+      UPDATE ab_sandbox_files
+      SET content = ?, version = ?, change_description = ?, updated_at = ?
+      WHERE sandbox_id = ? AND file_key = ?
+    `).run(historyRow.content, current.version + 1, `Rolled back to version ${version}`, now, sandboxId, fileKey);
+  }
+
+  /**
+   * Delete all files for a sandbox (for reset)
+   */
+  clearSandboxFiles(sandboxId: string): void {
+    const db = this.getDb();
+
+    db.prepare('DELETE FROM ab_sandbox_file_history WHERE sandbox_id = ?').run(sandboxId);
+    db.prepare('DELETE FROM ab_sandbox_files WHERE sandbox_id = ?').run(sandboxId);
+  }
+
+  // ----- COMPARISON RUN METHODS -----
+
+  /**
+   * Create a comparison run
+   */
+  createComparisonRun(run: Omit<ABSandboxComparisonRun, 'id' | 'createdAt'>): string {
+    const db = this.getDb();
+    const now = new Date().toISOString();
+
+    db.prepare(`
+      INSERT INTO ab_sandbox_comparison_runs
+      (comparison_id, name, status, test_ids_json, production_results_json, sandbox_a_results_json, sandbox_b_results_json, started_at, completed_at, summary_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      run.comparisonId,
+      run.name,
+      run.status,
+      run.testIds ? JSON.stringify(run.testIds) : null,
+      run.productionResults ? JSON.stringify(run.productionResults) : null,
+      run.sandboxAResults ? JSON.stringify(run.sandboxAResults) : null,
+      run.sandboxBResults ? JSON.stringify(run.sandboxBResults) : null,
+      run.startedAt,
+      run.completedAt,
+      run.summary ? JSON.stringify(run.summary) : null,
+      now
+    );
+
+    return run.comparisonId;
+  }
+
+  /**
+   * Get a comparison run
+   */
+  getComparisonRun(comparisonId: string): ABSandboxComparisonRun | null {
+    const db = this.getDb();
+
+    const row = db.prepare(`
+      SELECT id, comparison_id, name, status, test_ids_json, production_results_json, sandbox_a_results_json, sandbox_b_results_json, started_at, completed_at, summary_json, created_at
+      FROM ab_sandbox_comparison_runs
+      WHERE comparison_id = ?
+    `).get(comparisonId) as any;
+
+    if (!row) return null;
+
+    return {
+      id: row.id,
+      comparisonId: row.comparison_id,
+      name: row.name,
+      status: row.status,
+      testIds: row.test_ids_json ? JSON.parse(row.test_ids_json) : undefined,
+      productionResults: row.production_results_json ? JSON.parse(row.production_results_json) : undefined,
+      sandboxAResults: row.sandbox_a_results_json ? JSON.parse(row.sandbox_a_results_json) : undefined,
+      sandboxBResults: row.sandbox_b_results_json ? JSON.parse(row.sandbox_b_results_json) : undefined,
+      startedAt: row.started_at,
+      completedAt: row.completed_at,
+      summary: row.summary_json ? JSON.parse(row.summary_json) : undefined,
+      createdAt: row.created_at,
+    };
+  }
+
+  /**
+   * Update a comparison run
+   */
+  updateComparisonRun(comparisonId: string, updates: Partial<ABSandboxComparisonRun>): void {
+    const db = this.getDb();
+
+    const setClauses: string[] = [];
+    const params: any[] = [];
+
+    if (updates.status !== undefined) {
+      setClauses.push('status = ?');
+      params.push(updates.status);
+    }
+    if (updates.productionResults !== undefined) {
+      setClauses.push('production_results_json = ?');
+      params.push(JSON.stringify(updates.productionResults));
+    }
+    if (updates.sandboxAResults !== undefined) {
+      setClauses.push('sandbox_a_results_json = ?');
+      params.push(JSON.stringify(updates.sandboxAResults));
+    }
+    if (updates.sandboxBResults !== undefined) {
+      setClauses.push('sandbox_b_results_json = ?');
+      params.push(JSON.stringify(updates.sandboxBResults));
+    }
+    if (updates.startedAt !== undefined) {
+      setClauses.push('started_at = ?');
+      params.push(updates.startedAt);
+    }
+    if (updates.completedAt !== undefined) {
+      setClauses.push('completed_at = ?');
+      params.push(updates.completedAt);
+    }
+    if (updates.summary !== undefined) {
+      setClauses.push('summary_json = ?');
+      params.push(JSON.stringify(updates.summary));
+    }
+
+    if (setClauses.length === 0) return;
+
+    params.push(comparisonId);
+
+    db.prepare(`
+      UPDATE ab_sandbox_comparison_runs SET ${setClauses.join(', ')} WHERE comparison_id = ?
+    `).run(...params);
+  }
+
+  /**
+   * Get comparison run history
+   */
+  getComparisonRunHistory(limit: number = 20): ABSandboxComparisonRun[] {
+    const db = this.getDb();
+
+    const rows = db.prepare(`
+      SELECT id, comparison_id, name, status, test_ids_json, production_results_json, sandbox_a_results_json, sandbox_b_results_json, started_at, completed_at, summary_json, created_at
+      FROM ab_sandbox_comparison_runs
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(limit) as any[];
+
+    return rows.map(row => ({
+      id: row.id,
+      comparisonId: row.comparison_id,
+      name: row.name,
+      status: row.status,
+      testIds: row.test_ids_json ? JSON.parse(row.test_ids_json) : undefined,
+      productionResults: row.production_results_json ? JSON.parse(row.production_results_json) : undefined,
+      sandboxAResults: row.sandbox_a_results_json ? JSON.parse(row.sandbox_a_results_json) : undefined,
+      sandboxBResults: row.sandbox_b_results_json ? JSON.parse(row.sandbox_b_results_json) : undefined,
+      startedAt: row.started_at,
+      completedAt: row.completed_at,
+      summary: row.summary_json ? JSON.parse(row.summary_json) : undefined,
+      createdAt: row.created_at,
+    }));
+  }
+
   /**
    * Close database connection
    */
@@ -1749,4 +2930,136 @@ export class Database {
       this.db = null;
     }
   }
+}
+
+// ============================================================================
+// A/B TESTING INTERFACES (for database layer)
+// ============================================================================
+
+export interface ABVariant {
+  variantId: string;
+  variantType: 'prompt' | 'tool' | 'config';
+  targetFile: string;
+  name: string;
+  description: string;
+  content: string;
+  contentHash: string;
+  baselineVariantId?: string;
+  sourceFixId?: string;
+  isBaseline: boolean;
+  createdAt: string;
+  createdBy: 'manual' | 'llm-analysis' | 'auto-generated';
+  metadata?: Record<string, any>;
+}
+
+export interface ABExperiment {
+  experimentId: string;
+  name: string;
+  description?: string;
+  hypothesis: string;
+  status: 'draft' | 'running' | 'paused' | 'completed' | 'aborted';
+  experimentType: 'prompt' | 'tool' | 'config' | 'multi';
+  variants: { variantId: string; role: 'control' | 'treatment'; weight: number }[];
+  testIds: string[];
+  trafficSplit: Record<string, number>;
+  minSampleSize: number;
+  maxSampleSize: number;
+  significanceThreshold: number;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  winningVariantId?: string;
+  conclusion?: string;
+}
+
+export interface ABExperimentRun {
+  id?: number;
+  experimentId: string;
+  runId: string;
+  testId: string;
+  variantId: string;
+  variantRole: 'control' | 'treatment';
+  startedAt: string;
+  completedAt: string;
+  passed: boolean;
+  turnCount: number;
+  durationMs: number;
+  goalCompletionRate: number;
+  constraintViolations: number;
+  errorOccurred: boolean;
+  metrics?: Record<string, any>;
+}
+
+export interface ABExperimentTrigger {
+  triggerId: string;
+  experimentId: string;
+  triggerType: 'fix-applied' | 'scheduled' | 'pass-rate-drop' | 'manual';
+  condition?: Record<string, any>;
+  enabled: boolean;
+  lastTriggered?: string;
+}
+
+// ============================================================================
+// A/B TESTING SANDBOX INTERFACES
+// ============================================================================
+
+export interface ABSandbox {
+  id?: number;
+  sandboxId: string;
+  name: string;
+  description?: string;
+  flowiseEndpoint?: string;
+  flowiseApiKey?: string;
+  langfuseHost?: string;
+  langfusePublicKey?: string;
+  langfuseSecretKey?: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ABSandboxFile {
+  id?: number;
+  sandboxId: string;
+  fileKey: string;
+  fileType: 'markdown' | 'json';
+  displayName: string;
+  content: string;
+  version: number;
+  baseVersion?: number;
+  changeDescription?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ABSandboxFileHistory {
+  id?: number;
+  sandboxId: string;
+  fileKey: string;
+  version: number;
+  content: string;
+  changeDescription?: string;
+  createdAt: string;
+}
+
+export interface ABSandboxComparisonRun {
+  id?: number;
+  comparisonId: string;
+  name?: string;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  testIds?: string[];
+  productionResults?: Record<string, any>;
+  sandboxAResults?: Record<string, any>;
+  sandboxBResults?: Record<string, any>;
+  startedAt?: string;
+  completedAt?: string;
+  summary?: {
+    productionPassRate: number;
+    sandboxAPassRate: number;
+    sandboxBPassRate: number;
+    totalTests: number;
+    improvements: Array<{ testId: string; from: string; to: string }>;
+    regressions: Array<{ testId: string; from: string; to: string }>;
+  };
+  createdAt: string;
 }

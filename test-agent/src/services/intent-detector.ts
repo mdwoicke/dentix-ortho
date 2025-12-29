@@ -184,15 +184,26 @@ Return ONLY a JSON object (no markdown, no explanation):
 - asking_child_count, asking_child_name, asking_child_dob, asking_child_age
 - asking_new_patient, asking_previous_visit, asking_previous_ortho
 - asking_insurance, asking_special_needs, asking_time_preference, asking_location_preference
-- confirming_information, confirming_spelling, asking_proceed_confirmation
+- confirming_information, confirming_spelling, asking_proceed_confirmation, reminding_bring_card
 - searching_availability, offering_time_slots, confirming_booking
+- offering_address, providing_address, providing_parking_info
 - initiating_transfer, handling_error, asking_clarification
 - unknown
 
-CRITICAL DISTINCTIONS:
-- searching_availability: Agent says "Let me check", "One moment", "Checking availability" - NO specific time is mentioned
-- offering_time_slots: Agent offers a SPECIFIC time like "I have 9:30 AM available on Monday"
-- asking_time_preference: Agent asks "Do you prefer morning or afternoon?"
+CRITICAL DISTINCTIONS (in priority order):
+1. confirming_booking: HIGHEST PRIORITY. Use when agent explicitly confirms booking is COMPLETE with phrases like:
+   - "Your appointment has been successfully scheduled"
+   - "I have booked [name]"
+   - "Your appointment is confirmed"
+   IMPORTANT: Even if the message ALSO asks about address/directions, use confirming_booking if a booking confirmation is present.
+
+2. offering_address: Use ONLY when agent asks if caller wants the address AND no booking confirmation is present.
+
+3. searching_availability: Agent says "Let me check", "One moment", "Checking availability" - NO specific time is mentioned.
+
+4. offering_time_slots: Agent offers a SPECIFIC time like "I have 9:30 AM available on Monday".
+
+5. asking_time_preference: Agent asks "Do you prefer morning or afternoon?"
 
 Use searching_availability when the agent is actively looking up times but has NOT yet offered a specific slot.
 Use offering_time_slots ONLY when the agent mentions a specific day/time (e.g., "Monday at 2:00 PM").
@@ -262,9 +273,14 @@ Note: Use asking_proceed_confirmation when agent asks "Would you like to proceed
     const terminalIntents: AgentIntent[] = ['saying_goodbye', 'confirming_booking', 'initiating_transfer'];
     const requiresUserResponse = !terminalIntents.includes(primaryIntent);
 
+    // Terminal intents get high confidence (0.9) to ensure they pass the isTerminalIntent check
+    // which requires confidence >= 0.8 for confirming_booking
+    const confidence = primaryIntent === 'unknown' ? 0.3 :
+      terminalIntents.includes(primaryIntent) ? 0.9 : 0.7;
+
     return {
       primaryIntent,
-      confidence: primaryIntent === 'unknown' ? 0.3 : 0.7,
+      confidence,
       isQuestion,
       requiresUserResponse,
       reasoning: `Keyword match for '${primaryIntent}'`,

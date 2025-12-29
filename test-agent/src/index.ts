@@ -996,5 +996,453 @@ program
     }
   });
 
+// ============================================================================
+// A/B TESTING COMMANDS
+// ============================================================================
+
+import { getABTestingServices } from './services/ab-testing';
+
+// AB Create command - Create an experiment from a fix
+program
+  .command('ab-create')
+  .description('Create an A/B experiment from a pending fix')
+  .requiredOption('-f, --fix <fixId>', 'Fix ID to test')
+  .option('-n, --name <name>', 'Experiment name')
+  .option('-t, --tests <ids>', 'Test IDs (comma-separated)')
+  .option('--min-samples <n>', 'Minimum sample size per variant', '10')
+  .action(async (options) => {
+    try {
+      const db = new Database();
+      db.initialize();
+
+      const { variantService, triggerService, experimentService } = getABTestingServices(db);
+
+      // Get the fix
+      const fix = db.getGeneratedFix(options.fix);
+      if (!fix) {
+        console.log(`\n Fix not found: ${options.fix}\n`);
+        process.exit(1);
+      }
+
+      console.log('\n A/B EXPERIMENT CREATION\n');
+      console.log('═'.repeat(60));
+
+      // Assess impact
+      const impact = triggerService.assessFixImpact(fix);
+      console.log(`\n Impact Assessment:`);
+      console.log(`   Level: ${impact.impactLevel.toUpperCase()}`);
+      console.log(`   Should Test: ${impact.shouldTest ? 'YES' : 'NO'}`);
+      console.log(`   Reason: ${impact.reason}`);
+
+      if (!impact.shouldTest) {
+        console.log(`\n This fix has minimal impact and may not warrant A/B testing.`);
+        console.log(` Proceeding anyway as requested...\n`);
+      }
+
+      // Capture baseline if needed
+      console.log(`\n Capturing baseline for ${fix.targetFile}...`);
+      await variantService.captureCurrentBaselines();
+
+      // Create variant from fix
+      console.log(` Creating treatment variant from fix...`);
+      const treatmentVariant = await variantService.createVariantFromFix(fix);
+      console.log(`   Variant ID: ${treatmentVariant.variantId}`);
+
+      // Get control (baseline) variant
+      const controlVariant = variantService.getBaselineVariant(fix.targetFile);
+      if (!controlVariant) {
+        console.log(`\n Error: No baseline found for ${fix.targetFile}\n`);
+        process.exit(1);
+      }
+
+      // Determine test IDs
+      const testIds = options.tests
+        ? options.tests.split(',').map((t: string) => t.trim())
+        : impact.affectedTests.length > 0
+          ? impact.affectedTests
+          : ['GOAL-HAPPY-001'];
+
+      // Create experiment
+      const experiment = experimentService.createExperiment({
+        name: options.name || `Test: ${fix.changeDescription.substring(0, 40)}`,
+        hypothesis: `Applying this fix will improve pass rate for ${testIds.join(', ')}`,
+        experimentType: fix.type,
+        controlVariantId: controlVariant.variantId,
+        treatmentVariantIds: [treatmentVariant.variantId],
+        testIds,
+        minSampleSize: parseInt(options.minSamples, 10) || 10,
+      });
+
+      console.log(`\n Experiment Created!`);
+      console.log('─'.repeat(60));
+      console.log(`   ID: ${experiment.experimentId}`);
+      console.log(`   Name: ${experiment.name}`);
+      console.log(`   Status: ${experiment.status}`);
+      console.log(`   Control: ${controlVariant.variantId}`);
+      console.log(`   Treatment: ${treatmentVariant.variantId}`);
+      console.log(`   Tests: ${testIds.join(', ')}`);
+      console.log(`   Min Samples: ${experiment.minSampleSize} per variant`);
+
+      console.log(`\n Next steps:`);
+      console.log(`   1. Start experiment: npm run ab-run ${experiment.experimentId}`);
+      console.log(`   2. View status: npm run ab-status ${experiment.experimentId}`);
+      console.log(`   3. Conclude: npm run ab-conclude ${experiment.experimentId}\n`);
+
+    } catch (error: any) {
+      reporter.printError(error.message);
+      process.exit(1);
+    }
+  });
+
+// AB Run command - Run an experiment
+program
+  .command('ab-run <experimentId>')
+  .description('Run an A/B experiment')
+  .option('-n, --iterations <n>', 'Number of iterations per variant', '10')
+  .action(async (experimentId, options) => {
+    try {
+      const db = new Database();
+      db.initialize();
+
+      const { experimentService, variantService } = getABTestingServices(db);
+
+      // Get experiment
+      const experiment = experimentService.getExperiment(experimentId);
+      if (!experiment) {
+        console.log(`\n Experiment not found: ${experimentId}\n`);
+        process.exit(1);
+      }
+
+      console.log('\n A/B EXPERIMENT RUNNER\n');
+      console.log('═'.repeat(60));
+      console.log(`   Experiment: ${experiment.name}`);
+      console.log(`   ID: ${experimentId}`);
+      console.log(`   Status: ${experiment.status}`);
+
+      // Start experiment if in draft
+      if (experiment.status === 'draft') {
+        experimentService.startExperiment(experimentId);
+        console.log(`   Status updated to: running`);
+      } else if (experiment.status !== 'running') {
+        console.log(`\n Experiment is ${experiment.status}, cannot run.\n`);
+        process.exit(1);
+      }
+
+      const iterations = parseInt(options.iterations, 10) || 10;
+      const totalRuns = iterations * 2; // Control + treatment
+      console.log(`\n Running ${totalRuns} test iterations (${iterations} per variant)...\n`);
+
+      // Get goal test scenarios
+      const dbScenarios = loadGoalTestsFromDatabase();
+      const allGoalScenarios = [...goalHappyPathScenarios, ...dbScenarios];
+
+      let controlRuns = 0;
+      let treatmentRuns = 0;
+      let controlPassed = 0;
+      let treatmentPassed = 0;
+
+      // Run iterations
+      for (let i = 0; i < totalRuns; i++) {
+        // Select variant
+        const selection = experimentService.selectVariant(experimentId, experiment.testIds[0]);
+        const isControl = selection.role === 'control';
+
+        console.log(`[${i + 1}/${totalRuns}] Running with ${isControl ? 'CONTROL' : 'TREATMENT'} variant...`);
+
+        // Apply variant
+        await variantService.applyVariant(selection.variantId);
+
+        try {
+          // Run a random test from the experiment's test IDs
+          const testId = experiment.testIds[Math.floor(Math.random() * experiment.testIds.length)];
+          const scenario = allGoalScenarios.find(s => s.id === testId);
+
+          if (!scenario) {
+            console.log(`   Skipping: Test ${testId} not found`);
+            continue;
+          }
+
+          // Create runner
+          const flowiseClient = new FlowiseClient();
+          const intentDetector = new IntentDetector();
+          const runner = new GoalTestRunner(flowiseClient, db, intentDetector);
+
+          const runId = db.createTestRun();
+          const result = await runner.runTest(scenario, runId);
+
+          // Record experiment run
+          experimentService.recordTestResult(experimentId, runId, testId, selection, {
+            passed: result.passed,
+            turnCount: result.turnCount,
+            durationMs: result.durationMs,
+            goalCompletionRate: result.goalResults.filter(g => g.passed).length / Math.max(result.goalResults.length, 1),
+            constraintViolations: result.constraintViolations.length,
+            errorOccurred: !!result.issues.find(i => i.type === 'error'),
+            goalsCompleted: result.goalResults.filter(g => g.passed).length,
+            goalsTotal: result.goalResults.length,
+            issuesDetected: result.issues.length,
+          });
+
+          // Track stats
+          if (isControl) {
+            controlRuns++;
+            if (result.passed) controlPassed++;
+          } else {
+            treatmentRuns++;
+            if (result.passed) treatmentPassed++;
+          }
+
+          const status = result.passed ? '✓' : '✗';
+          console.log(`   ${status} ${testId} (${result.turnCount} turns, ${result.durationMs}ms)`);
+
+        } finally {
+          // Always rollback
+          await variantService.rollback(selection.targetFile);
+        }
+      }
+
+      // Print summary
+      console.log('\n');
+      console.log('═'.repeat(60));
+      console.log(' EXPERIMENT PROGRESS');
+      console.log('═'.repeat(60));
+      console.log(`\n Control:   ${controlPassed}/${controlRuns} passed (${controlRuns > 0 ? ((controlPassed / controlRuns) * 100).toFixed(1) : 0}%)`);
+      console.log(` Treatment: ${treatmentPassed}/${treatmentRuns} passed (${treatmentRuns > 0 ? ((treatmentPassed / treatmentRuns) * 100).toFixed(1) : 0}%)`);
+
+      // Check if should conclude
+      const conclusion = experimentService.shouldConcludeExperiment(experimentId);
+      console.log(`\n ${conclusion.message}`);
+
+      if (conclusion.shouldConclude) {
+        console.log(`\n Ready to conclude. Run: npm run ab-conclude ${experimentId}\n`);
+      } else {
+        console.log(`\n Continue running: npm run ab-run ${experimentId} -n ${iterations}\n`);
+      }
+
+    } catch (error: any) {
+      reporter.printError(error.message);
+      process.exit(1);
+    }
+  });
+
+// AB Status command - View experiment status
+program
+  .command('ab-status [experimentId]')
+  .description('View A/B experiment status and results')
+  .option('-a, --all', 'Show all experiments')
+  .action((experimentId, options) => {
+    try {
+      const db = new Database();
+      db.initialize();
+
+      const { experimentService } = getABTestingServices(db);
+
+      if (options.all || !experimentId) {
+        // List all experiments
+        const experiments = experimentService.getAllExperiments({ limit: 20 });
+
+        if (experiments.length === 0) {
+          console.log('\n No experiments found.');
+          console.log(' Create one with: npm run ab-create --fix <fixId>\n');
+          return;
+        }
+
+        console.log('\n A/B EXPERIMENTS\n');
+        console.log('═'.repeat(70));
+
+        for (const exp of experiments) {
+          const summary = experimentService.getExperimentSummary(exp.experimentId);
+          const statusIcon = exp.status === 'running' ? '▶' :
+                            exp.status === 'completed' ? '✓' :
+                            exp.status === 'aborted' ? '✗' : '○';
+
+          console.log(`\n${statusIcon} ${exp.experimentId}`);
+          console.log(`  Name: ${exp.name}`);
+          console.log(`  Status: ${exp.status}`);
+          console.log(`  Samples: Control ${summary.controlSamples}/${exp.minSampleSize}, Treatment ${summary.treatmentSamples}/${exp.minSampleSize}`);
+
+          if (summary.controlPassRate !== undefined) {
+            console.log(`  Pass Rates: Control ${(summary.controlPassRate * 100).toFixed(1)}%, Treatment ${(summary.treatmentPassRate! * 100).toFixed(1)}%`);
+          }
+
+          if (summary.isSignificant !== undefined) {
+            console.log(`  Significant: ${summary.isSignificant ? 'YES' : 'NO'} (p=${summary.pValue?.toFixed(4)})`);
+          }
+
+          if (summary.conclusion) {
+            console.log(`  Conclusion: ${summary.conclusion}`);
+          }
+        }
+
+        console.log('\n' + '═'.repeat(70) + '\n');
+        return;
+      }
+
+      // Show specific experiment
+      const experiment = experimentService.getExperiment(experimentId);
+      if (!experiment) {
+        console.log(`\n Experiment not found: ${experimentId}\n`);
+        process.exit(1);
+      }
+
+      const summary = experimentService.getExperimentSummary(experimentId);
+      const analysis = experiment.status === 'running' || experiment.status === 'completed'
+        ? experimentService.getExperimentStats(experimentId)
+        : null;
+
+      console.log('\n A/B EXPERIMENT DETAILS\n');
+      console.log('═'.repeat(70));
+
+      console.log(`\n Experiment: ${experiment.name}`);
+      console.log(` ID: ${experimentId}`);
+      console.log(` Status: ${experiment.status}`);
+      console.log(` Hypothesis: ${experiment.hypothesis}`);
+      console.log(` Tests: ${experiment.testIds.join(', ')}`);
+      console.log(` Created: ${experiment.createdAt}`);
+      if (experiment.startedAt) console.log(` Started: ${experiment.startedAt}`);
+      if (experiment.completedAt) console.log(` Completed: ${experiment.completedAt}`);
+
+      console.log('\n VARIANTS');
+      console.log('─'.repeat(70));
+      for (const v of experiment.variants) {
+        console.log(`   ${v.role.toUpperCase()}: ${v.variantId} (${v.weight}% traffic)`);
+      }
+
+      console.log('\n SAMPLE SIZES');
+      console.log('─'.repeat(70));
+      console.log(`   Control: ${summary.controlSamples}/${experiment.minSampleSize} (min required)`);
+      console.log(`   Treatment: ${summary.treatmentSamples}/${experiment.minSampleSize} (min required)`);
+
+      if (analysis) {
+        console.log('\n RESULTS');
+        console.log('─'.repeat(70));
+        console.log(`   Control Pass Rate: ${(analysis.controlPassRate * 100).toFixed(1)}%`);
+        console.log(`   Treatment Pass Rate: ${(analysis.treatmentPassRate * 100).toFixed(1)}%`);
+        console.log(`   Difference: ${analysis.passRateDifference >= 0 ? '+' : ''}${(analysis.passRateDifference * 100).toFixed(1)}%`);
+        console.log(`   Lift: ${analysis.passRateLift >= 0 ? '+' : ''}${analysis.passRateLift.toFixed(1)}%`);
+
+        console.log('\n STATISTICAL SIGNIFICANCE');
+        console.log('─'.repeat(70));
+        console.log(`   Pass Rate p-value: ${analysis.passRatePValue.toFixed(4)}`);
+        console.log(`   Significant (p < 0.05): ${analysis.passRateSignificant ? 'YES' : 'NO'}`);
+        console.log(`   Confidence Level: ${(analysis.confidenceLevel * 100).toFixed(1)}%`);
+
+        console.log('\n RECOMMENDATION');
+        console.log('─'.repeat(70));
+        console.log(`   ${analysis.recommendationReason}`);
+        console.log(`   Action: ${analysis.recommendation.toUpperCase()}`);
+      }
+
+      if (experiment.conclusion) {
+        console.log('\n CONCLUSION');
+        console.log('─'.repeat(70));
+        console.log(`   ${experiment.conclusion}`);
+        if (experiment.winningVariantId) {
+          console.log(`   Winner: ${experiment.winningVariantId}`);
+        }
+      }
+
+      console.log('\n' + '═'.repeat(70) + '\n');
+
+    } catch (error: any) {
+      reporter.printError(error.message);
+      process.exit(1);
+    }
+  });
+
+// AB Conclude command - Conclude an experiment
+program
+  .command('ab-conclude <experimentId>')
+  .description('Conclude an experiment and optionally adopt winner')
+  .option('--adopt', 'Adopt winning variant as new baseline')
+  .action(async (experimentId, options) => {
+    try {
+      const db = new Database();
+      db.initialize();
+
+      const { experimentService } = getABTestingServices(db);
+
+      const experiment = experimentService.getExperiment(experimentId);
+      if (!experiment) {
+        console.log(`\n Experiment not found: ${experimentId}\n`);
+        process.exit(1);
+      }
+
+      if (experiment.status === 'completed') {
+        console.log(`\n Experiment already completed.\n`);
+
+        if (options.adopt && experiment.winningVariantId) {
+          console.log(` Adopting winner...`);
+          await experimentService.adoptWinner(experimentId);
+          console.log(` Winner ${experiment.winningVariantId} adopted as new baseline.\n`);
+        }
+        return;
+      }
+
+      console.log('\n CONCLUDING EXPERIMENT\n');
+      console.log('═'.repeat(60));
+
+      // Get final analysis
+      const analysis = experimentService.getExperimentStats(experimentId);
+
+      console.log(`\n Final Results:`);
+      console.log(`   Control: ${(analysis.controlPassRate * 100).toFixed(1)}% pass rate (n=${analysis.controlSampleSize})`);
+      console.log(`   Treatment: ${(analysis.treatmentPassRate * 100).toFixed(1)}% pass rate (n=${analysis.treatmentSampleSize})`);
+      console.log(`   p-value: ${analysis.passRatePValue.toFixed(4)}`);
+      console.log(`   Significant: ${analysis.isSignificant ? 'YES' : 'NO'}`);
+
+      // Conclude
+      experimentService.completeExperiment(experimentId);
+
+      const updatedExp = experimentService.getExperiment(experimentId);
+      console.log(`\n Conclusion: ${updatedExp?.conclusion}`);
+
+      if (updatedExp?.winningVariantId) {
+        console.log(` Winner: ${updatedExp.winningVariantId}`);
+
+        if (options.adopt) {
+          console.log(`\n Adopting winner as new baseline...`);
+          await experimentService.adoptWinner(experimentId);
+          console.log(` Done! The winning variant is now the baseline.\n`);
+        } else {
+          console.log(`\n To adopt the winner: npm run ab-conclude ${experimentId} --adopt\n`);
+        }
+      } else {
+        console.log(`\n No clear winner. Consider keeping the control variant.\n`);
+      }
+
+    } catch (error: any) {
+      reporter.printError(error.message);
+      process.exit(1);
+    }
+  });
+
+// AB Stats command - View A/B testing statistics
+program
+  .command('ab-stats')
+  .description('View A/B testing framework statistics')
+  .action(() => {
+    try {
+      const db = new Database();
+      db.initialize();
+
+      const stats = db.getABTestingStats();
+
+      console.log('\n A/B TESTING STATISTICS\n');
+      console.log('═'.repeat(50));
+      console.log(`\n Experiments:`);
+      console.log(`   Total: ${stats.totalExperiments}`);
+      console.log(`   Running: ${stats.runningExperiments}`);
+      console.log(`   Completed: ${stats.completedExperiments}`);
+      console.log(`\n Variants: ${stats.totalVariants}`);
+      console.log(` Experiment Runs: ${stats.totalRuns}`);
+      console.log('\n' + '═'.repeat(50) + '\n');
+
+    } catch (error: any) {
+      reporter.printError(error.message);
+      process.exit(1);
+    }
+  });
+
 // Parse and run
 program.parse();

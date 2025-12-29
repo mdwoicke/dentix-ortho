@@ -32,16 +32,44 @@ export interface FlowiseError {
 export class FlowiseClient {
   private client: AxiosInstance;
   private sessionId: string;
+  private endpoint: string;
 
-  constructor(sessionId?: string) {
+  /**
+   * Create a new FlowiseClient
+   * @param sessionId - Optional session ID (generates UUID if not provided)
+   * @param endpoint - Optional endpoint URL override (uses config default if not provided)
+   */
+  constructor(sessionId?: string, endpoint?: string) {
     this.sessionId = sessionId || uuidv4();
+    this.endpoint = endpoint || config.flowise.endpoint;
     this.client = axios.create({
-      baseURL: config.flowise.endpoint,
+      baseURL: this.endpoint,
       timeout: config.flowise.timeout,
       headers: {
         'Content-Type': 'application/json',
       },
     });
+  }
+
+  /**
+   * Get the current endpoint URL
+   */
+  getEndpoint(): string {
+    return this.endpoint;
+  }
+
+  /**
+   * Create a FlowiseClient for a specific sandbox endpoint
+   */
+  static forSandbox(endpoint: string, sessionId?: string): FlowiseClient {
+    return new FlowiseClient(sessionId, endpoint);
+  }
+
+  /**
+   * Create a FlowiseClient using the default production endpoint
+   */
+  static forProduction(sessionId?: string): FlowiseClient {
+    return new FlowiseClient(sessionId, config.flowise.endpoint);
   }
 
   /**

@@ -7,9 +7,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { config } from '../config/config';
 import { ConversationTurn, Finding } from '../tests/test-case';
-import { ApiCall } from '../storage/database';
+import { ApiCall, Database, GeneratedFix } from '../storage/database';
 import { getLLMProvider, LLMProvider } from '../../../shared/services/llm-provider';
 import { isClaudeCliEnabled } from '../../../shared/config/llm-config';
+import { TriggerService, type ABRecommendation } from './ab-testing';
 
 // ============================================================================
 // Types
@@ -95,6 +96,16 @@ export interface AnalysisResult {
   classification?: FixClassification;
 }
 
+/**
+ * Analysis result extended with A/B testing recommendations
+ */
+export interface AnalysisResultWithABRecommendations extends AnalysisResult {
+  /** A/B testing recommendations for high-impact fixes */
+  abRecommendations: ABRecommendation[];
+  /** Fixes that warrant A/B testing */
+  testableFixIds: string[];
+}
+
 // ============================================================================
 // LLM Analysis Service
 // ============================================================================
@@ -104,11 +115,27 @@ export class LLMAnalysisService {
   private systemPromptContent: string = '';
   private schedulingToolContent: string = '';
   private patientToolContent: string = '';
+  private triggerService: TriggerService | null = null;
+  private database: Database | null = null;
 
-  constructor() {
+  constructor(database?: Database) {
     this.llmProvider = getLLMProvider();
     this.loadSourceFiles();
     this.logInitialization();
+
+    // Initialize TriggerService if database is provided
+    if (database) {
+      this.database = database;
+      this.triggerService = new TriggerService(database);
+    }
+  }
+
+  /**
+   * Set the database and initialize A/B testing capabilities
+   */
+  setDatabase(database: Database): void {
+    this.database = database;
+    this.triggerService = new TriggerService(database);
   }
 
   private async logInitialization(): Promise<void> {
@@ -228,6 +255,145 @@ export class LLMAnalysisService {
     const deduplicatedFixes = this.deduplicateFixes(allFixes);
 
     return { analyses, deduplicatedFixes };
+  }
+
+  /**
+   * Analyze a test failure and generate fix recommendations with A/B testing suggestions
+   * This method extends analyzeFailure to include A/B testing recommendations
+   * for high-impact fixes.
+   */
+  async analyzeFailureWithABRecommendation(
+    context: FailureContext
+  ): Promise<AnalysisResultWithABRecommendations> {
+    // First, get the standard analysis
+    const result = await this.analyzeFailure(context);
+
+    // If no trigger service, return without A/B recommendations
+    if (!this.triggerService || !this.database) {
+      return {
+        ...result,
+        abRecommendations: [],
+        testableFixIds: [],
+      };
+    }
+
+    // Convert fixes to GeneratedFix format for A/B assessment
+    const generatedFixes = this.convertToGeneratedFixes(result.fixes, context, result.rootCause);
+
+    // Save generated fixes to database
+    for (const fix of generatedFixes) {
+      this.database.saveGeneratedFix(fix);
+    }
+
+    // Generate A/B recommendations using TriggerService
+    const abRecommendations = this.triggerService.generateABRecommendations(generatedFixes);
+    const testableFixIds = abRecommendations.map(r => r.fix.fixId);
+
+    // Log A/B recommendations if any
+    if (abRecommendations.length > 0) {
+      console.log(`[LLMAnalysisService] Found ${abRecommendations.length} fixes warranting A/B testing:`);
+      for (const rec of abRecommendations) {
+        console.log(`  - [${rec.impactLevel.toUpperCase()}] ${rec.fix.changeDescription.substring(0, 50)}`);
+      }
+    }
+
+    return {
+      ...result,
+      abRecommendations,
+      testableFixIds,
+    };
+  }
+
+  /**
+   * Analyze multiple failures with A/B recommendations
+   */
+  async analyzeMultipleFailuresWithABRecommendations(contexts: FailureContext[]): Promise<{
+    analyses: Map<string, AnalysisResultWithABRecommendations>;
+    deduplicatedFixes: (PromptFix | ToolFix)[];
+    abRecommendations: ABRecommendation[];
+  }> {
+    const analyses = new Map<string, AnalysisResultWithABRecommendations>();
+    const allFixes: (PromptFix | ToolFix)[] = [];
+    const allABRecommendations: ABRecommendation[] = [];
+
+    for (const context of contexts) {
+      try {
+        const result = await this.analyzeFailureWithABRecommendation(context);
+        analyses.set(context.testId, result);
+        allFixes.push(...result.fixes);
+        allABRecommendations.push(...result.abRecommendations);
+      } catch (error) {
+        console.error(`Failed to analyze ${context.testId}:`, error);
+      }
+    }
+
+    // Deduplicate fixes
+    const deduplicatedFixes = this.deduplicateFixes(allFixes);
+
+    // Deduplicate A/B recommendations by fix ID
+    const seenFixIds = new Set<string>();
+    const uniqueABRecommendations = allABRecommendations.filter(rec => {
+      if (seenFixIds.has(rec.fix.fixId)) {
+        return false;
+      }
+      seenFixIds.add(rec.fix.fixId);
+      return true;
+    });
+
+    return {
+      analyses,
+      deduplicatedFixes,
+      abRecommendations: uniqueABRecommendations,
+    };
+  }
+
+  /**
+   * Convert PromptFix/ToolFix to GeneratedFix format for A/B testing
+   */
+  private convertToGeneratedFixes(
+    fixes: (PromptFix | ToolFix)[],
+    context: FailureContext,
+    rootCause: RootCause
+  ): GeneratedFix[] {
+    const generatedFixes: GeneratedFix[] = [];
+    const now = new Date().toISOString();
+
+    for (let i = 0; i < fixes.length; i++) {
+      const fix = fixes[i];
+      const fixId = `FIX-${Date.now().toString(36)}-${i}`;
+
+      const generatedFix: GeneratedFix = {
+        fixId,
+        runId: '', // Will be set by caller if needed
+        affectedTests: [context.testId],
+        type: fix.type,
+        targetFile: fix.targetFile,
+        location: fix.type === 'prompt'
+          ? {
+              section: (fix as PromptFix).location.section,
+              afterLine: (fix as PromptFix).location.afterLine,
+            }
+          : {
+              function: (fix as ToolFix).location.function,
+              lineNumber: (fix as ToolFix).location.lineNumber,
+              afterLine: (fix as ToolFix).location.afterLine,
+            },
+        changeDescription: fix.changeDescription,
+        changeCode: fix.changeCode,
+        rootCause: {
+          type: rootCause.type,
+          evidence: rootCause.evidence,
+        },
+        priority: fix.priority,
+        confidence: fix.confidence,
+        status: 'pending',
+        createdAt: now,
+      };
+
+      generatedFixes.push(generatedFix);
+    }
+
+    return generatedFixes;
   }
 
   private buildAnalysisPrompt(context: FailureContext): string {

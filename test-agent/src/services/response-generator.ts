@@ -217,6 +217,9 @@ export class ResponseGenerator {
   ): Promise<string> {
     this.context.conversationHistory = conversationHistory;
 
+    // Check if bot is asking about next/second/third child and advance index
+    this.checkAndAdvanceChildIndex(intent, conversationHistory);
+
     // Get data for this intent
     const data = this.getDataForIntent(intent.primaryIntent);
 
@@ -229,6 +232,61 @@ export class ResponseGenerator {
 
     // Use LLM when enabled via config
     return this.generateLlmResponse(intent, data, conversationHistory);
+  }
+
+  /**
+   * Check if the agent is asking about a different child and advance the index
+   * This handles multi-child scenarios where the bot asks for "next child", "second child", etc.
+   */
+  private checkAndAdvanceChildIndex(
+    intent: IntentDetectionResult,
+    conversationHistory: ConversationTurn[]
+  ): void {
+    // Only check when asking about child-related info
+    const childIntents: AgentIntent[] = [
+      'asking_child_name',
+      'asking_child_dob',
+      'asking_child_age',
+    ];
+
+    if (!childIntents.includes(intent.primaryIntent)) {
+      return;
+    }
+
+    // Get the last agent message
+    const lastAgentTurn = [...conversationHistory].reverse().find(t => t.role === 'assistant');
+    if (!lastAgentTurn) return;
+
+    const agentMessage = lastAgentTurn.content.toLowerCase();
+
+    // Patterns indicating we should advance to next child
+    const nextChildPatterns = [
+      /next child/i,
+      /second child/i,
+      /third child/i,
+      /fourth child/i,
+      /your other child/i,
+      /another child/i,
+      /what is the name of your (?:next|second|third|fourth|other)/i,
+      /now.*(?:next|second|third|fourth|other) child/i,
+    ];
+
+    // Check for patterns suggesting next child
+    const shouldAdvance = nextChildPatterns.some(pattern => pattern.test(agentMessage));
+
+    // Also check if we've already provided info for current child and bot is asking again
+    const hasProvidedCurrentChildName = this.context.providedData.has('child_names');
+    const isAskingName = intent.primaryIntent === 'asking_child_name';
+
+    // If we've provided a name and bot confirms and asks for next name, advance
+    if (shouldAdvance && hasProvidedCurrentChildName && isAskingName) {
+      this.nextChild();
+      // Reset the child_names tracking so we can provide the new child's name
+      this.context.providedData.delete('child_names');
+    } else if (shouldAdvance && isAskingName) {
+      // Even if we haven't tracked providing a name, if bot explicitly asks for next child, advance
+      this.nextChild();
+    }
   }
 
   /**
