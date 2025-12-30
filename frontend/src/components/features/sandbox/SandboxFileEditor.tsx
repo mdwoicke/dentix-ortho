@@ -3,7 +3,7 @@
  * Editor panel for viewing and editing sandbox file content with version history
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Spinner } from '../../ui';
 import { cn } from '../../../utils/cn';
 import type { SandboxFile, SandboxFileHistory, SandboxFileKey, SelectedSandbox } from '../../../types/sandbox.types';
@@ -52,6 +52,8 @@ export function SandboxFileEditor({
   const [error, setError] = useState<string | null>(null);
   const [viewingVersion, setViewingVersion] = useState<SandboxFileHistory | null>(null);
   const [copiedContent, setCopiedContent] = useState(false);
+  const [copyError, setCopyError] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
 
   const config = SANDBOX_FILE_CONFIG[fileKey];
   const sandboxColor = selectedSandbox === 'sandbox_a' ? 'blue' : 'purple';
@@ -84,10 +86,45 @@ export function SandboxFileEditor({
 
   const handleCopyContent = async () => {
     const contentToCopy = viewingVersion?.content || file?.content || editedContent;
-    await navigator.clipboard.writeText(contentToCopy);
-    setCopiedContent(true);
-    setTimeout(() => setCopiedContent(false), 2000);
+    if (!contentToCopy) {
+      setCopyError(true);
+      setTimeout(() => setCopyError(false), 3000);
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(contentToCopy);
+      setCopiedContent(true);
+      setTimeout(() => setCopiedContent(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy content:', err);
+      setCopyError(true);
+      setTimeout(() => setCopyError(false), 3000);
+    }
   };
+
+  const handleToggleExpand = () => {
+    setIsExpanded(!isExpanded);
+  };
+
+  // Handle Escape key to close expanded view
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isExpanded) {
+        setIsExpanded(false);
+      }
+    };
+
+    if (isExpanded) {
+      document.addEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = 'hidden';
+    }
+
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = '';
+    };
+  }, [isExpanded]);
 
   const formatTimeAgo = (dateStr: string) => {
     const date = new Date(dateStr);
@@ -183,10 +220,12 @@ export function SandboxFileEditor({
                   'px-3 py-1.5 text-xs font-medium rounded-lg transition-colors',
                   copiedContent
                     ? 'bg-green-500 text-white'
+                    : copyError
+                    ? 'bg-red-500 text-white'
                     : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
                 )}
               >
-                {copiedContent ? 'Copied!' : 'Copy'}
+                {copiedContent ? 'Copied!' : copyError ? 'Failed!' : 'Copy'}
               </button>
               <button
                 onClick={onCopyFromProduction}
@@ -205,6 +244,16 @@ export function SandboxFileEditor({
                 )}
               >
                 Edit
+              </button>
+              <div className="w-px h-6 bg-gray-300 dark:bg-gray-600 mx-1" />
+              <button
+                onClick={handleToggleExpand}
+                className="p-1.5 rounded-lg transition-colors bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600"
+                title="Expand view"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                </svg>
               </button>
             </>
           ) : (
@@ -378,6 +427,115 @@ export function SandboxFileEditor({
           {config.type === 'json' ? 'JSON Tool Definition' : 'Markdown Prompt'}
         </span>
       </div>
+
+      {/* Expanded View Overlay */}
+      {isExpanded && (
+        <div
+          className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={handleToggleExpand}
+        >
+          <div
+            className="bg-white dark:bg-gray-800 rounded-lg shadow-2xl w-full max-w-6xl max-h-[90vh] flex flex-col overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Expanded Header */}
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 flex-shrink-0">
+              <div className="flex items-center gap-3">
+                <h3 className="text-sm font-medium text-gray-900 dark:text-white">
+                  {config.label}
+                </h3>
+                <span className={cn(
+                  'px-1.5 py-0.5 text-xs font-medium rounded',
+                  sandboxColor === 'blue'
+                    ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300'
+                    : 'bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300'
+                )}>
+                  v{file.version}
+                </span>
+                <span className={cn(
+                  'px-2 py-0.5 text-xs font-medium rounded',
+                  sandboxColor === 'blue'
+                    ? 'bg-blue-500 text-white'
+                    : 'bg-purple-500 text-white'
+                )}>
+                  {selectedSandbox === 'sandbox_a' ? 'Sandbox A' : 'Sandbox B'}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleToggleHistory}
+                  className="px-3 py-1.5 text-xs font-medium rounded-lg transition-colors bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600"
+                >
+                  {showHistory ? 'Hide History' : 'History'}
+                </button>
+                <button
+                  onClick={handleCopyContent}
+                  className={cn(
+                    'px-3 py-1.5 text-xs font-medium rounded-lg transition-colors',
+                    copiedContent
+                      ? 'bg-green-500 text-white'
+                      : copyError
+                      ? 'bg-red-500 text-white'
+                      : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
+                  )}
+                >
+                  {copiedContent ? 'Copied!' : copyError ? 'Failed!' : 'Copy'}
+                </button>
+                <button
+                  onClick={onCopyFromProduction}
+                  disabled={loading}
+                  className="px-3 py-1.5 text-xs font-medium rounded-lg transition-colors bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50"
+                >
+                  Refresh from Prod
+                </button>
+                <button
+                  onClick={() => {
+                    setIsExpanded(false);
+                    onStartEditing();
+                  }}
+                  className={cn(
+                    'px-3 py-1.5 text-xs font-medium rounded-lg transition-colors',
+                    sandboxColor === 'blue'
+                      ? 'bg-blue-600 text-white hover:bg-blue-700'
+                      : 'bg-purple-600 text-white hover:bg-purple-700'
+                  )}
+                >
+                  Edit
+                </button>
+                <div className="w-px h-6 bg-gray-300 dark:bg-gray-600 mx-1" />
+                <button
+                  onClick={handleToggleExpand}
+                  className="p-1.5 rounded-lg transition-colors bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600"
+                  title="Close expanded view"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            {/* Expanded Content */}
+            <div className="flex-1 overflow-auto">
+              <pre className={cn(
+                'px-6 py-4 font-mono text-sm',
+                'bg-gray-50 dark:bg-gray-900 text-gray-800 dark:text-gray-200',
+                'whitespace-pre-wrap break-words min-h-full'
+              )}>
+                {viewingVersion?.content || file.content}
+              </pre>
+            </div>
+
+            {/* Expanded Footer */}
+            <div className="px-4 py-2 border-t border-gray-200 dark:border-gray-700 text-xs text-gray-500 dark:text-gray-400 flex justify-between flex-shrink-0">
+              <span>Last updated: {formatTimeAgo(file.updatedAt)}</span>
+              <span className="text-gray-400">
+                {config.type === 'json' ? 'JSON Tool Definition' : 'Markdown Prompt'}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
