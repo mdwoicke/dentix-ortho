@@ -40,3 +40,6 @@ Thumbs.db
 *.tmp
 tmp/
 temp/
+
+# Playwright MCP screenshots
+.playwright-mcp/
