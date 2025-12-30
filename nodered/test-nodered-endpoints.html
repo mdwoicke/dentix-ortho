@@ -1,0 +1,708 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Node Red Cloud9 Ortho - Endpoint Test Suite</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 10px;
+            color: #00d9ff;
+        }
+        .subtitle {
+            text-align: center;
+            color: #888;
+            margin-bottom: 30px;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+        }
+        button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+        button:hover {
+            transform: translateY(-2px);
+        }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, #00d9ff, #0099cc);
+            color: #000;
+        }
+        .btn-success {
+            background: linear-gradient(135deg, #00ff88, #00cc66);
+            color: #000;
+        }
+        .btn-danger {
+            background: linear-gradient(135deg, #ff4444, #cc0000);
+            color: #fff;
+        }
+        .btn-secondary {
+            background: #444;
+            color: #fff;
+        }
+        .test-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 20px;
+        }
+        .test-card {
+            background: #16213e;
+            border-radius: 12px;
+            overflow: hidden;
+            border: 1px solid #0f3460;
+        }
+        .test-header {
+            padding: 15px 20px;
+            background: #0f3460;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .test-title {
+            font-weight: 600;
+            color: #00d9ff;
+        }
+        .test-endpoint {
+            font-size: 11px;
+            color: #888;
+            font-family: monospace;
+        }
+        .test-status {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .status-pending { background: #444; color: #888; }
+        .status-running { background: #ff9800; color: #000; }
+        .status-success { background: #00cc66; color: #000; }
+        .status-error { background: #ff4444; color: #fff; }
+        .test-body {
+            padding: 15px 20px;
+        }
+        .test-section {
+            margin-bottom: 15px;
+        }
+        .test-section:last-child {
+            margin-bottom: 0;
+        }
+        .section-label {
+            font-size: 11px;
+            color: #00d9ff;
+            text-transform: uppercase;
+            margin-bottom: 5px;
+            font-weight: 600;
+        }
+        .code-block {
+            background: #0d1b2a;
+            border-radius: 6px;
+            padding: 10px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 11px;
+            max-height: 200px;
+            overflow: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+            border: 1px solid #1a3a5c;
+        }
+        .code-block.request {
+            border-left: 3px solid #00d9ff;
+        }
+        .code-block.response {
+            border-left: 3px solid #00ff88;
+        }
+        .code-block.error {
+            border-left: 3px solid #ff4444;
+            color: #ff6666;
+        }
+        .test-actions {
+            padding: 15px 20px;
+            border-top: 1px solid #0f3460;
+            display: flex;
+            gap: 10px;
+        }
+        .test-actions button {
+            flex: 1;
+            padding: 8px 16px;
+            font-size: 12px;
+        }
+        .stats {
+            display: flex;
+            justify-content: center;
+            gap: 30px;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+        }
+        .stat {
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 32px;
+            font-weight: 700;
+        }
+        .stat-label {
+            font-size: 12px;
+            color: #888;
+            text-transform: uppercase;
+        }
+        .stat-success .stat-value { color: #00ff88; }
+        .stat-error .stat-value { color: #ff4444; }
+        .stat-pending .stat-value { color: #888; }
+        .stat-total .stat-value { color: #00d9ff; }
+        .duration {
+            font-size: 11px;
+            color: #888;
+            margin-top: 5px;
+        }
+        .config-section {
+            background: #16213e;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 30px;
+            border: 1px solid #0f3460;
+        }
+        .config-title {
+            font-weight: 600;
+            color: #00d9ff;
+            margin-bottom: 15px;
+        }
+        .config-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 15px;
+        }
+        .config-item {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        .config-item label {
+            font-size: 12px;
+            color: #888;
+        }
+        .config-item input {
+            padding: 10px;
+            border: 1px solid #0f3460;
+            border-radius: 6px;
+            background: #0d1b2a;
+            color: #eee;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .config-item input:focus {
+            outline: none;
+            border-color: #00d9ff;
+        }
+        .json-key { color: #ff79c6; }
+        .json-string { color: #f1fa8c; }
+        .json-number { color: #bd93f9; }
+        .json-boolean { color: #ff5555; }
+        .json-null { color: #6272a4; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Node Red Cloud9 Ortho - Test Suite</h1>
+        <p class="subtitle">Unit tests for all /chord/ortho/* endpoints</p>
+
+        <div class="stats">
+            <div class="stat stat-total">
+                <div class="stat-value" id="stat-total">11</div>
+                <div class="stat-label">Total Tests</div>
+            </div>
+            <div class="stat stat-success">
+                <div class="stat-value" id="stat-success">0</div>
+                <div class="stat-label">Passed</div>
+            </div>
+            <div class="stat stat-error">
+                <div class="stat-value" id="stat-error">0</div>
+                <div class="stat-label">Failed</div>
+            </div>
+            <div class="stat stat-pending">
+                <div class="stat-value" id="stat-pending">11</div>
+                <div class="stat-label">Pending</div>
+            </div>
+        </div>
+
+        <div class="config-section">
+            <div class="config-title">Configuration</div>
+            <div class="config-grid">
+                <div class="config-item">
+                    <label>Base URL</label>
+                    <input type="text" id="baseUrl" value="https://c1-aicoe-nodered-lb.prod.c1conversations.io/FabricWorkflow/api/chord">
+                </div>
+                <div class="config-item">
+                    <label>Auth Username</label>
+                    <input type="text" id="authUsername" value="workflowapi">
+                </div>
+                <div class="config-item">
+                    <label>Auth Password</label>
+                    <input type="password" id="authPassword" value="e^@V95&6sAJReTsb5!iq39mIC4HYIV">
+                </div>
+                <div class="config-item">
+                    <label>Location GUID (Test)</label>
+                    <input type="text" id="locationGUID" value="1070d281-0952-4f01-9a6e-1a2e6926a7db">
+                </div>
+                <div class="config-item">
+                    <label>Provider GUID (Test)</label>
+                    <input type="text" id="providerGUID" value="79ec29fe-c315-4982-845a-0005baefb5a8">
+                </div>
+                <div class="config-item">
+                    <label>UUI (Test)</label>
+                    <input type="text" id="uui" value="TEST-UUI-12345|unittest">
+                </div>
+            </div>
+        </div>
+
+        <div class="controls">
+            <button class="btn-success" onclick="runAllTests()">Run All Tests</button>
+            <button class="btn-primary" onclick="runPatientTests()">Run Patient Tests</button>
+            <button class="btn-primary" onclick="runSchedulingTests()">Run Scheduling Tests</button>
+            <button class="btn-secondary" onclick="resetAllTests()">Reset All</button>
+        </div>
+
+        <div class="test-grid" id="testGrid">
+            <!-- Tests will be rendered here -->
+        </div>
+    </div>
+
+    <script>
+        // Test configurations
+        const tests = [
+            // Patient Operations
+            {
+                id: 'getPatientByFilter',
+                name: 'Get Patient By Filter',
+                endpoint: '/ortho/getPatientByFilter',
+                category: 'patient',
+                description: 'Lookup patient by phone number or name filter',
+                getPayload: () => ({
+                    uui: getConfig('uui'),
+                    phoneNumber: '3035551234',
+                    locationGUID: getConfig('locationGUID')
+                })
+            },
+            {
+                id: 'getPatientByName',
+                name: 'Get Patient By Name',
+                endpoint: '/ortho/getPatientByFilter',
+                category: 'patient',
+                description: 'Lookup patient by last name, first name',
+                getPayload: () => ({
+                    uui: getConfig('uui'),
+                    filter: 'Doe, John',
+                    locationGUID: getConfig('locationGUID')
+                })
+            },
+            {
+                id: 'getPatient',
+                name: 'Get Patient Details',
+                endpoint: '/ortho/getPatient',
+                category: 'patient',
+                description: 'Get detailed patient information by GUID',
+                getPayload: () => ({
+                    uui: getConfig('uui'),
+                    patientGUID: testState.patientGUID || 'test-patient-guid'
+                }),
+                dependsOn: 'getPatientByFilter'
+            },
+            {
+                id: 'createPatient',
+                name: 'Create Patient',
+                endpoint: '/ortho/createPatient',
+                category: 'patient',
+                description: 'Create a new patient record',
+                getPayload: () => ({
+                    uui: getConfig('uui'),
+                    patientFirstName: 'TestJohn',
+                    patientLastName: 'TestDoe',
+                    birthdayDateTime: '01/15/2010',
+                    phoneNumber: '3035559999',
+                    gender: 'M',
+                    providerGUID: getConfig('providerGUID'),
+                    locationGUID: getConfig('locationGUID')
+                })
+            },
+            {
+                id: 'getPatientAppts',
+                name: 'Get Patient Appointments',
+                endpoint: '/ortho/getPatientAppts',
+                category: 'patient',
+                description: 'Get all appointments for a patient',
+                getPayload: () => ({
+                    uui: getConfig('uui'),
+                    patientGUID: testState.patientGUID || 'test-patient-guid'
+                }),
+                dependsOn: 'getPatientByFilter'
+            },
+            {
+                id: 'getLocation',
+                name: 'Get Location/Clinic Info',
+                endpoint: '/ortho/getLocation',
+                category: 'patient',
+                description: 'Get clinic location details',
+                getPayload: () => ({
+                    uui: getConfig('uui'),
+                    locationGUID: getConfig('locationGUID')
+                })
+            },
+            {
+                id: 'editInsurance',
+                name: 'Edit Insurance',
+                endpoint: '/ortho/editInsurance',
+                category: 'patient',
+                description: 'Update patient insurance information',
+                getPayload: () => ({
+                    uui: getConfig('uui'),
+                    patientGUID: testState.patientGUID || 'test-patient-guid',
+                    insuranceProvider: 'Test Insurance Co',
+                    insuranceGroupId: 'GRP-12345',
+                    insuranceMemberId: 'MEM-67890'
+                }),
+                dependsOn: 'getPatientByFilter'
+            },
+            // Scheduling Operations
+            {
+                id: 'getApptSlots',
+                name: 'Get Appointment Slots',
+                endpoint: '/ortho/getApptSlots',
+                category: 'scheduling',
+                description: 'Get available appointment slots',
+                getPayload: () => {
+                    const today = new Date();
+                    const startDate = formatDate(today);
+                    const endDate = formatDate(new Date(today.getTime() + 7 * 24 * 60 * 60 * 1000));
+                    return {
+                        uui: getConfig('uui'),
+                        startDate: startDate,
+                        endDate: endDate
+                    };
+                }
+            },
+            {
+                id: 'getGroupedApptSlots',
+                name: 'Get Grouped Slots (Siblings)',
+                endpoint: '/ortho/getGroupedApptSlots',
+                category: 'scheduling',
+                description: 'Get consecutive slots for multiple patients',
+                getPayload: () => {
+                    const today = new Date();
+                    const startDate = formatDate(today);
+                    const endDate = formatDate(new Date(today.getTime() + 14 * 24 * 60 * 60 * 1000));
+                    return {
+                        uui: getConfig('uui'),
+                        startDate: startDate,
+                        endDate: endDate,
+                        numberOfPatients: 2,
+                        timeWindowMinutes: 60
+                    };
+                }
+            },
+            {
+                id: 'createAppt',
+                name: 'Create Appointment',
+                endpoint: '/ortho/createAppt',
+                category: 'scheduling',
+                description: 'Book a new appointment',
+                getPayload: () => ({
+                    uui: getConfig('uui'),
+                    patientGUID: testState.patientGUID || 'test-patient-guid',
+                    startTime: testState.slotStartTime || '01/15/2025 10:00 AM',
+                    scheduleViewGUID: testState.scheduleViewGUID || 'test-schedule-view-guid',
+                    scheduleColumnGUID: testState.scheduleColumnGUID || 'test-schedule-column-guid',
+                    appointmentTypeGUID: testState.appointmentTypeGUID || '8fc9d063-ae46-4975-a5ae-734c6efe341a',
+                    minutes: 30
+                }),
+                dependsOn: 'getApptSlots'
+            },
+            {
+                id: 'confirmAppt',
+                name: 'Confirm Appointment',
+                endpoint: '/ortho/confirmAppt',
+                category: 'patient',
+                description: 'Confirm an existing appointment',
+                getPayload: () => ({
+                    uui: getConfig('uui'),
+                    appointmentId: testState.appointmentGUID || 'test-appointment-guid'
+                }),
+                dependsOn: 'createAppt'
+            },
+            {
+                id: 'cancelAppt',
+                name: 'Cancel Appointment',
+                endpoint: '/ortho/cancelAppt',
+                category: 'scheduling',
+                description: 'Cancel an existing appointment',
+                getPayload: () => ({
+                    uui: getConfig('uui'),
+                    appointmentGUID: testState.appointmentGUID || 'test-appointment-guid'
+                }),
+                dependsOn: 'createAppt'
+            }
+        ];
+
+        // Test state to store results between tests
+        let testState = {};
+        let testResults = {};
+
+        // Helper functions
+        function getConfig(key) {
+            const el = document.getElementById(key);
+            return el ? el.value : '';
+        }
+
+        function formatDate(date) {
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            const year = date.getFullYear();
+            return `${month}/${day}/${year}`;
+        }
+
+        function syntaxHighlight(json) {
+            if (typeof json !== 'string') {
+                json = JSON.stringify(json, null, 2);
+            }
+            json = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            return json.replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, function (match) {
+                let cls = 'json-number';
+                if (/^"/.test(match)) {
+                    if (/:$/.test(match)) {
+                        cls = 'json-key';
+                    } else {
+                        cls = 'json-string';
+                    }
+                } else if (/true|false/.test(match)) {
+                    cls = 'json-boolean';
+                } else if (/null/.test(match)) {
+                    cls = 'json-null';
+                }
+                return '<span class="' + cls + '">' + match + '</span>';
+            });
+        }
+
+        function getAuthHeader() {
+            const username = getConfig('authUsername');
+            const password = getConfig('authPassword');
+            return 'Basic ' + btoa(username + ':' + password);
+        }
+
+        // Render test cards
+        function renderTests() {
+            const grid = document.getElementById('testGrid');
+            grid.innerHTML = tests.map(test => `
+                <div class="test-card" id="card-${test.id}">
+                    <div class="test-header">
+                        <div>
+                            <div class="test-title">${test.name}</div>
+                            <div class="test-endpoint">POST ${test.endpoint}</div>
+                        </div>
+                        <span class="test-status status-pending" id="status-${test.id}">Pending</span>
+                    </div>
+                    <div class="test-body">
+                        <div class="test-section">
+                            <div class="section-label">Description</div>
+                            <div style="font-size: 12px; color: #aaa;">${test.description}</div>
+                        </div>
+                        <div class="test-section">
+                            <div class="section-label">Request Payload</div>
+                            <div class="code-block request" id="request-${test.id}">${syntaxHighlight(test.getPayload())}</div>
+                        </div>
+                        <div class="test-section">
+                            <div class="section-label">Response</div>
+                            <div class="code-block response" id="response-${test.id}">Waiting...</div>
+                            <div class="duration" id="duration-${test.id}"></div>
+                        </div>
+                    </div>
+                    <div class="test-actions">
+                        <button class="btn-primary" onclick="runTest('${test.id}')">Run Test</button>
+                        <button class="btn-secondary" onclick="resetTest('${test.id}')">Reset</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // Run a single test
+        async function runTest(testId) {
+            const test = tests.find(t => t.id === testId);
+            if (!test) return;
+
+            const statusEl = document.getElementById(`status-${testId}`);
+            const responseEl = document.getElementById(`response-${testId}`);
+            const requestEl = document.getElementById(`request-${testId}`);
+            const durationEl = document.getElementById(`duration-${testId}`);
+
+            // Update request display with current values
+            const payload = test.getPayload();
+            requestEl.innerHTML = syntaxHighlight(payload);
+
+            statusEl.className = 'test-status status-running';
+            statusEl.textContent = 'Running...';
+            responseEl.className = 'code-block response';
+            responseEl.textContent = 'Loading...';
+            durationEl.textContent = '';
+
+            const startTime = performance.now();
+            const baseUrl = getConfig('baseUrl');
+
+            try {
+                const response = await fetch(baseUrl + test.endpoint, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': getAuthHeader()
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                const endTime = performance.now();
+                const duration = (endTime - startTime).toFixed(0);
+
+                const data = await response.json();
+
+                // Store useful data for dependent tests
+                if (test.id === 'getPatientByFilter' && data.patients && data.patients.length > 0) {
+                    testState.patientGUID = data.patients[0].patientGUID || data.patients[0].PatientGUID;
+                }
+                if (test.id === 'getApptSlots' && data.slots && data.slots.length > 0) {
+                    testState.slotStartTime = data.slots[0].startTime;
+                    testState.scheduleViewGUID = data.slots[0].scheduleViewGUID;
+                    testState.scheduleColumnGUID = data.slots[0].scheduleColumnGUID;
+                    testState.appointmentTypeGUID = data.slots[0].appointmentTypeGUID;
+                }
+                if (test.id === 'createAppt' && data.appointmentGUID) {
+                    testState.appointmentGUID = data.appointmentGUID;
+                }
+
+                durationEl.textContent = `Duration: ${duration}ms | Status: ${response.status}`;
+
+                if (response.ok && !data.error) {
+                    statusEl.className = 'test-status status-success';
+                    statusEl.textContent = 'Passed';
+                    responseEl.innerHTML = syntaxHighlight(data);
+                    testResults[testId] = 'success';
+                } else {
+                    statusEl.className = 'test-status status-error';
+                    statusEl.textContent = 'Failed';
+                    responseEl.className = 'code-block error';
+                    responseEl.innerHTML = syntaxHighlight(data);
+                    testResults[testId] = 'error';
+                }
+            } catch (error) {
+                const endTime = performance.now();
+                const duration = (endTime - startTime).toFixed(0);
+
+                statusEl.className = 'test-status status-error';
+                statusEl.textContent = 'Error';
+                responseEl.className = 'code-block error';
+                responseEl.textContent = `Error: ${error.message}\n\nThis may be a CORS issue. Try running from a local server or check browser console.`;
+                durationEl.textContent = `Duration: ${duration}ms`;
+                testResults[testId] = 'error';
+            }
+
+            updateStats();
+        }
+
+        // Reset a single test
+        function resetTest(testId) {
+            const test = tests.find(t => t.id === testId);
+            if (!test) return;
+
+            const statusEl = document.getElementById(`status-${testId}`);
+            const responseEl = document.getElementById(`response-${testId}`);
+            const requestEl = document.getElementById(`request-${testId}`);
+            const durationEl = document.getElementById(`duration-${testId}`);
+
+            statusEl.className = 'test-status status-pending';
+            statusEl.textContent = 'Pending';
+            responseEl.className = 'code-block response';
+            responseEl.textContent = 'Waiting...';
+            requestEl.innerHTML = syntaxHighlight(test.getPayload());
+            durationEl.textContent = '';
+
+            delete testResults[testId];
+            updateStats();
+        }
+
+        // Run all tests
+        async function runAllTests() {
+            for (const test of tests) {
+                await runTest(test.id);
+                await new Promise(resolve => setTimeout(resolve, 500)); // Small delay between tests
+            }
+        }
+
+        // Run patient tests only
+        async function runPatientTests() {
+            const patientTests = tests.filter(t => t.category === 'patient');
+            for (const test of patientTests) {
+                await runTest(test.id);
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
+        }
+
+        // Run scheduling tests only
+        async function runSchedulingTests() {
+            const schedulingTests = tests.filter(t => t.category === 'scheduling');
+            for (const test of schedulingTests) {
+                await runTest(test.id);
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
+        }
+
+        // Reset all tests
+        function resetAllTests() {
+            testState = {};
+            testResults = {};
+            tests.forEach(test => resetTest(test.id));
+        }
+
+        // Update statistics
+        function updateStats() {
+            const total = tests.length;
+            const success = Object.values(testResults).filter(r => r === 'success').length;
+            const error = Object.values(testResults).filter(r => r === 'error').length;
+            const pending = total - success - error;
+
+            document.getElementById('stat-total').textContent = total;
+            document.getElementById('stat-success').textContent = success;
+            document.getElementById('stat-error').textContent = error;
+            document.getElementById('stat-pending').textContent = pending;
+        }
+
+        // Initialize
+        renderTests();
+        updateStats();
+    </script>
+</body>
+</html>

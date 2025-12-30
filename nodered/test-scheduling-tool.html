@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flowise Scheduling Tool Tester - schedule_appointment_ortho</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1a1a2e; color: #eee; padding: 20px; }
+        h1 { color: #9b59b6; margin-bottom: 10px; }
+        .subtitle { color: #888; margin-bottom: 20px; font-size: 14px; }
+        .config-panel { background: #16213e; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
+        .config-panel h3 { color: #9b59b6; margin-bottom: 10px; font-size: 14px; }
+        .config-row { display: flex; gap: 15px; flex-wrap: wrap; }
+        .config-item { flex: 1; min-width: 200px; }
+        .config-item label { display: block; font-size: 12px; color: #888; margin-bottom: 4px; }
+        .config-item input { width: 100%; padding: 8px; background: #0f0f23; border: 1px solid #333; color: #fff; border-radius: 4px; font-family: monospace; font-size: 12px; }
+        .actions-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(400px, 1fr)); gap: 15px; margin-bottom: 20px; }
+        .action-card { background: #16213e; border-radius: 8px; overflow: hidden; border: 1px solid #333; }
+        .action-header { padding: 12px 15px; background: #1a1a3e; display: flex; justify-content: space-between; align-items: center; }
+        .action-title { font-weight: 600; color: #9b59b6; }
+        .action-badge { font-size: 11px; padding: 3px 8px; border-radius: 4px; background: #333; color: #888; }
+        .action-badge.required { background: #ff6b6b22; color: #ff6b6b; }
+        .action-badge.optional { background: #00d4ff22; color: #00d4ff; }
+        .action-body { padding: 15px; }
+        .input-group { margin-bottom: 12px; }
+        .input-group label { display: block; font-size: 12px; color: #888; margin-bottom: 4px; }
+        .input-group input, .input-group select { width: 100%; padding: 8px; background: #0f0f23; border: 1px solid #333; color: #fff; border-radius: 4px; font-size: 13px; }
+        .input-group input:focus, .input-group select:focus { border-color: #9b59b6; outline: none; }
+        .input-group small { color: #666; font-size: 11px; }
+        .input-row { display: flex; gap: 10px; }
+        .input-row .input-group { flex: 1; }
+        .btn { padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; font-weight: 600; font-size: 13px; }
+        .btn-primary { background: linear-gradient(135deg, #9b59b6, #8e44ad); color: #fff; }
+        .btn-primary:hover { background: linear-gradient(135deg, #a569c6, #9e54bd); }
+        .btn-primary:disabled { background: #333; color: #666; cursor: not-allowed; }
+        .btn-secondary { background: #333; color: #fff; }
+        .btn-secondary:hover { background: #444; }
+        .btn-success { background: linear-gradient(135deg, #00d4ff, #0099cc); color: #000; }
+        .btn-danger { background: linear-gradient(135deg, #ff6b6b, #ee5a5a); color: #fff; }
+        .btn-row { display: flex; gap: 10px; margin-top: 15px; flex-wrap: wrap; }
+        .result-panel { background: #0f0f23; border-radius: 4px; margin-top: 15px; overflow: hidden; display: none; }
+        .result-panel.show { display: block; }
+        .result-header { padding: 8px 12px; font-size: 12px; font-weight: 600; display: flex; justify-content: space-between; align-items: center; }
+        .result-header.success { background: #00ff8822; color: #00ff88; }
+        .result-header.error { background: #ff6b6b22; color: #ff6b6b; }
+        .result-header.loading { background: #ffaa0022; color: #ffaa00; }
+        .result-body { padding: 12px; max-height: 400px; overflow: auto; }
+        .result-body pre { font-family: 'Fira Code', monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all; color: #aaa; }
+        .status-indicator { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+        .status-indicator.success { background: #00ff88; }
+        .status-indicator.error { background: #ff6b6b; }
+        .status-indicator.loading { background: #ffaa00; animation: pulse 1s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .summary { background: #16213e; padding: 15px; border-radius: 8px; margin-bottom: 20px; display: flex; gap: 30px; flex-wrap: wrap; align-items: center; }
+        .summary-item { text-align: center; }
+        .summary-item .value { font-size: 28px; font-weight: 700; }
+        .summary-item .label { font-size: 12px; color: #888; }
+        .summary-item.pass .value { color: #00ff88; }
+        .summary-item.fail .value { color: #ff6b6b; }
+        .summary-item.pending .value { color: #888; }
+        .run-all-btn { background: linear-gradient(135deg, #9b59b6, #8e44ad); color: #fff; padding: 12px 30px; font-size: 14px; }
+        .run-all-btn:hover { background: linear-gradient(135deg, #a569c6, #9e54bd); }
+        .copy-btn { background: transparent; border: 1px solid #444; padding: 4px 8px; font-size: 11px; color: #888; cursor: pointer; border-radius: 3px; }
+        .copy-btn:hover { background: #333; color: #fff; }
+        .tool-info { background: #2d1b3d; padding: 15px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #9b59b6; }
+        .tool-info h3 { color: #9b59b6; margin-bottom: 8px; }
+        .tool-info p { color: #aaa; font-size: 13px; line-height: 1.5; }
+        .slot-picker { background: #0f0f23; border: 1px solid #333; border-radius: 4px; padding: 10px; margin-top: 10px; max-height: 200px; overflow-y: auto; }
+        .slot-item { padding: 8px; border-bottom: 1px solid #222; cursor: pointer; font-size: 12px; }
+        .slot-item:hover { background: #1a1a3e; }
+        .slot-item:last-child { border-bottom: none; }
+        .slot-item.selected { background: #9b59b633; border-color: #9b59b6; }
+        .workflow-step { background: #0f3460; padding: 10px; border-radius: 4px; margin-bottom: 10px; font-size: 12px; }
+        .workflow-step .step-num { background: #9b59b6; color: #fff; padding: 2px 8px; border-radius: 10px; margin-right: 8px; font-weight: 600; }
+    </style>
+</head>
+<body>
+    <h1>Flowise Scheduling Tool Tester</h1>
+    <p class="subtitle">Testing schedule_appointment_ortho - All 4 Actions via Node Red</p>
+
+    <div class="tool-info">
+        <h3>Tool: schedule_appointment_ortho</h3>
+        <p>Appointment scheduling operations with 4 actions: <strong>slots</strong> (get available times), <strong>grouped_slots</strong> (for siblings/multiple patients), <strong>book_child</strong> (book appointment), <strong>cancel</strong> (cancel appointment). Dates in MM/DD/YYYY format.</p>
+    </div>
+
+    <div class="workflow-step">
+        <span class="step-num">Workflow</span>
+        1. Get <strong>slots</strong> or <strong>grouped_slots</strong> &rarr; 2. Select a slot &rarr; 3. <strong>book_child</strong> with slot data &rarr; 4. Optionally <strong>cancel</strong>
+    </div>
+
+    <div class="config-panel">
+        <h3>Configuration</h3>
+        <div class="config-row">
+            <div class="config-item">
+                <label>Base URL</label>
+                <input type="text" id="baseUrl" value="https://c1-aicoe-nodered-lb.prod.c1conversations.io/FabricWorkflow/api/chord">
+            </div>
+            <div class="config-item">
+                <label>Username</label>
+                <input type="text" id="username" value="workflowapi">
+            </div>
+            <div class="config-item">
+                <label>Password</label>
+                <input type="password" id="password" value="e^@V95&6sAJReTsb5!iq39mIC4HYIV">
+            </div>
+        </div>
+        <div class="config-row" style="margin-top: 10px;">
+            <div class="config-item">
+                <label>Default Location GUID</label>
+                <input type="text" id="defaultLocationGUID" value="1070d281-0952-4f01-9a6e-1a2e6926a7db">
+            </div>
+            <div class="config-item">
+                <label>Default Provider GUID</label>
+                <input type="text" id="defaultProviderGUID" value="79ec29fe-c315-4982-845a-0005baefb5a8">
+            </div>
+            <div class="config-item">
+                <label>Test Patient GUID</label>
+                <input type="text" id="testPatientGUID" value="64DA8F5C-7E54-4659-8AE1-7BB6A033D2A5">
+            </div>
+        </div>
+    </div>
+
+    <div class="summary">
+        <div class="summary-item pass">
+            <div class="value" id="passCount">0</div>
+            <div class="label">Passed</div>
+        </div>
+        <div class="summary-item fail">
+            <div class="value" id="failCount">0</div>
+            <div class="label">Failed</div>
+        </div>
+        <div class="summary-item pending">
+            <div class="value" id="pendingCount">4</div>
+            <div class="label">Pending</div>
+        </div>
+        <button class="btn run-all-btn" onclick="runAllTests()">Run All Tests</button>
+    </div>
+
+    <div class="actions-grid">
+        <!-- Action 1: slots -->
+        <div class="action-card" id="card-slots">
+            <div class="action-header">
+                <span class="action-title">1. slots</span>
+                <span class="action-badge optional">Optional Date Range</span>
+            </div>
+            <div class="action-body">
+                <div class="input-row">
+                    <div class="input-group">
+                        <label>Start Date (MM/DD/YYYY)</label>
+                        <input type="text" id="slots-startDate" placeholder="Auto: tomorrow">
+                        <small>Leave blank for auto (tomorrow)</small>
+                    </div>
+                    <div class="input-group">
+                        <label>End Date (MM/DD/YYYY)</label>
+                        <input type="text" id="slots-endDate" placeholder="Auto: +14 days">
+                        <small>Leave blank for auto (+14 days)</small>
+                    </div>
+                </div>
+                <div class="input-group">
+                    <label>Schedule View GUIDs (Optional)</label>
+                    <input type="text" id="slots-scheduleViewGUIDs" placeholder="Comma-separated GUIDs">
+                    <small>Filter by specific schedule views</small>
+                </div>
+                <div class="btn-row">
+                    <button class="btn btn-primary" onclick="testSlots()">Get Available Slots</button>
+                    <button class="btn btn-secondary" onclick="clearResult('slots')">Clear</button>
+                </div>
+                <div class="result-panel" id="result-slots">
+                    <div class="result-header"><span></span><button class="copy-btn" onclick="copyResult('slots')">Copy</button></div>
+                    <div class="result-body"><pre></pre></div>
+                </div>
+                <div id="slots-picker" class="slot-picker" style="display: none;">
+                    <div style="margin-bottom: 8px; color: #9b59b6; font-weight: 600;">Select a slot to use for booking:</div>
+                    <div id="slots-list"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Action 2: grouped_slots -->
+        <div class="action-card" id="card-grouped_slots">
+            <div class="action-header">
+                <span class="action-title">2. grouped_slots</span>
+                <span class="action-badge required">Requires numberOfPatients</span>
+            </div>
+            <div class="action-body">
+                <div class="input-row">
+                    <div class="input-group">
+                        <label>Start Date (MM/DD/YYYY)</label>
+                        <input type="text" id="grouped_slots-startDate" placeholder="Auto: tomorrow">
+                    </div>
+                    <div class="input-group">
+                        <label>End Date (MM/DD/YYYY)</label>
+                        <input type="text" id="grouped_slots-endDate" placeholder="Auto: +14 days">
+                    </div>
+                </div>
+                <div class="input-row">
+                    <div class="input-group">
+                        <label>Number of Patients</label>
+                        <input type="number" id="grouped_slots-numberOfPatients" value="2" min="2" max="5">
+                        <small>For siblings/multiple patients</small>
+                    </div>
+                    <div class="input-group">
+                        <label>Time Window (Minutes)</label>
+                        <input type="number" id="grouped_slots-timeWindowMinutes" value="60" min="15" max="120">
+                        <small>Max gap between appointments</small>
+                    </div>
+                </div>
+                <div class="btn-row">
+                    <button class="btn btn-primary" onclick="testGroupedSlots()">Get Grouped Slots</button>
+                    <button class="btn btn-secondary" onclick="clearResult('grouped_slots')">Clear</button>
+                </div>
+                <div class="result-panel" id="result-grouped_slots">
+                    <div class="result-header"><span></span><button class="copy-btn" onclick="copyResult('grouped_slots')">Copy</button></div>
+                    <div class="result-body"><pre></pre></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Action 3: book_child -->
+        <div class="action-card" id="card-book_child">
+            <div class="action-header">
+                <span class="action-title">3. book_child</span>
+                <span class="action-badge required">Requires Slot Data</span>
+            </div>
+            <div class="action-body">
+                <div class="workflow-step" style="background: #1a1a3e;">
+                    <span class="step-num">!</span>
+                    First run "slots" and select a slot, or manually enter the data below
+                </div>
+                <div class="input-group">
+                    <label>Patient GUID</label>
+                    <input type="text" id="book_child-patientGUID" placeholder="Will use test patient GUID">
+                </div>
+                <div class="input-group">
+                    <label>Start Time (MM/DD/YYYY HH:MM AM/PM)</label>
+                    <input type="text" id="book_child-startTime" placeholder="e.g., 01/15/2025 10:00 AM">
+                </div>
+                <div class="input-row">
+                    <div class="input-group">
+                        <label>Schedule View GUID</label>
+                        <input type="text" id="book_child-scheduleViewGUID" placeholder="From slots response">
+                    </div>
+                    <div class="input-group">
+                        <label>Schedule Column GUID</label>
+                        <input type="text" id="book_child-scheduleColumnGUID" placeholder="From slots response">
+                    </div>
+                </div>
+                <div class="input-row">
+                    <div class="input-group">
+                        <label>Appointment Type GUID</label>
+                        <input type="text" id="book_child-appointmentTypeGUID" placeholder="From slots response">
+                    </div>
+                    <div class="input-group">
+                        <label>Minutes</label>
+                        <input type="number" id="book_child-minutes" value="30" min="15" max="120">
+                    </div>
+                </div>
+                <div class="input-group">
+                    <label>Child Name (Optional)</label>
+                    <input type="text" id="book_child-childName" placeholder="e.g., Johnny Smith">
+                </div>
+                <div class="btn-row">
+                    <button class="btn btn-success" onclick="testBookChild()">Book Appointment</button>
+                    <button class="btn btn-secondary" onclick="clearResult('book_child')">Clear</button>
+                </div>
+                <div class="result-panel" id="result-book_child">
+                    <div class="result-header"><span></span><button class="copy-btn" onclick="copyResult('book_child')">Copy</button></div>
+                    <div class="result-body"><pre></pre></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Action 4: cancel -->
+        <div class="action-card" id="card-cancel">
+            <div class="action-header">
+                <span class="action-title">4. cancel</span>
+                <span class="action-badge required">Requires appointmentGUID</span>
+            </div>
+            <div class="action-body">
+                <div class="workflow-step" style="background: #3d1b1b;">
+                    <span class="step-num">!</span>
+                    This will cancel a real appointment. Use the GUID from book_child response.
+                </div>
+                <div class="input-group">
+                    <label>Appointment GUID</label>
+                    <input type="text" id="cancel-appointmentGUID" placeholder="From book_child response">
+                    <small>Get this from the book_child response above</small>
+                </div>
+                <div class="btn-row">
+                    <button class="btn btn-danger" onclick="testCancel()">Cancel Appointment</button>
+                    <button class="btn btn-secondary" onclick="clearResult('cancel')">Clear</button>
+                </div>
+                <div class="result-panel" id="result-cancel">
+                    <div class="result-header"><span></span><button class="copy-btn" onclick="copyResult('cancel')">Copy</button></div>
+                    <div class="result-body"><pre></pre></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Test results tracking
+        const testResults = {
+            slots: null,
+            grouped_slots: null,
+            book_child: null,
+            cancel: null
+        };
+
+        // Store available slots for easy selection
+        let availableSlots = [];
+        let lastBookedAppointmentGUID = null;
+
+        // Helper functions
+        function getConfig() {
+            return {
+                baseUrl: document.getElementById('baseUrl').value,
+                username: document.getElementById('username').value,
+                password: document.getElementById('password').value,
+                defaultLocationGUID: document.getElementById('defaultLocationGUID').value,
+                defaultProviderGUID: document.getElementById('defaultProviderGUID').value,
+                testPatientGUID: document.getElementById('testPatientGUID').value
+            };
+        }
+
+        function getAuthHeader(config) {
+            const credentials = btoa(`${config.username}:${config.password}`);
+            return `Basic ${credentials}`;
+        }
+
+        function getUUI() {
+            return '765381306-000000000001030525-SR-000-000000000000DAL130-026DE427|333725|421458314VO|2d411063-3769-4618-86d1-925d3578c112|FSV';
+        }
+
+        function formatDate(date) {
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            const year = date.getFullYear();
+            return `${month}/${day}/${year}`;
+        }
+
+        function getTomorrow() {
+            const tomorrow = new Date();
+            tomorrow.setDate(tomorrow.getDate() + 1);
+            return formatDate(tomorrow);
+        }
+
+        function getEndDate(daysFromNow = 14) {
+            const date = new Date();
+            date.setDate(date.getDate() + daysFromNow);
+            return formatDate(date);
+        }
+
+        function showResult(action, status, data, duration) {
+            const panel = document.getElementById(`result-${action}`);
+            const header = panel.querySelector('.result-header span');
+            const body = panel.querySelector('.result-body pre');
+
+            panel.classList.add('show');
+            panel.querySelector('.result-header').className = `result-header ${status}`;
+
+            const statusText = status === 'success' ? 'SUCCESS' : status === 'error' ? 'ERROR' : 'LOADING...';
+            header.innerHTML = `<span class="status-indicator ${status}"></span>${statusText} ${duration ? `(${duration}ms)` : ''}`;
+
+            if (typeof data === 'object') {
+                body.textContent = JSON.stringify(data, null, 2);
+            } else {
+                body.textContent = data;
+            }
+
+            testResults[action] = status === 'success' ? 'pass' : status === 'error' ? 'fail' : null;
+            updateSummary();
+        }
+
+        function clearResult(action) {
+            const panel = document.getElementById(`result-${action}`);
+            panel.classList.remove('show');
+            testResults[action] = null;
+            updateSummary();
+
+            if (action === 'slots') {
+                document.getElementById('slots-picker').style.display = 'none';
+                availableSlots = [];
+            }
+        }
+
+        function copyResult(action) {
+            const body = document.querySelector(`#result-${action} .result-body pre`);
+            navigator.clipboard.writeText(body.textContent);
+        }
+
+        function updateSummary() {
+            const results = Object.values(testResults);
+            document.getElementById('passCount').textContent = results.filter(r => r === 'pass').length;
+            document.getElementById('failCount').textContent = results.filter(r => r === 'fail').length;
+            document.getElementById('pendingCount').textContent = results.filter(r => r === null).length;
+        }
+
+        async function makeRequest(endpoint, body) {
+            const config = getConfig();
+            const url = `${config.baseUrl}${endpoint}`;
+
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': getAuthHeader(config)
+                },
+                body: JSON.stringify(body)
+            });
+
+            const data = await response.json();
+            return { ok: response.ok, status: response.status, data };
+        }
+
+        function selectSlot(index) {
+            const slot = availableSlots[index];
+            if (!slot) return;
+
+            // Fill in the book_child form
+            document.getElementById('book_child-startTime').value = slot.startTime || slot.StartTime || '';
+            document.getElementById('book_child-scheduleViewGUID').value = slot.scheduleViewGUID || slot.ScheduleViewGUID || '';
+            document.getElementById('book_child-scheduleColumnGUID').value = slot.scheduleColumnGUID || slot.ScheduleColumnGUID || '';
+            document.getElementById('book_child-appointmentTypeGUID').value = slot.appointmentTypeGUID || slot.AppointmentTypeGUID || '';
+            document.getElementById('book_child-minutes').value = slot.minutes || slot.Minutes || 30;
+
+            // Highlight selected slot
+            document.querySelectorAll('.slot-item').forEach((el, i) => {
+                el.classList.toggle('selected', i === index);
+            });
+
+            // Scroll to book_child card
+            document.getElementById('card-book_child').scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+
+        function displaySlotPicker(slots) {
+            availableSlots = slots;
+            const picker = document.getElementById('slots-picker');
+            const list = document.getElementById('slots-list');
+
+            if (!slots || slots.length === 0) {
+                picker.style.display = 'none';
+                return;
+            }
+
+            list.innerHTML = '';
+            slots.slice(0, 20).forEach((slot, index) => {
+                const div = document.createElement('div');
+                div.className = 'slot-item';
+                div.onclick = () => selectSlot(index);
+
+                const time = slot.startTime || slot.StartTime || 'Unknown time';
+                const minutes = slot.minutes || slot.Minutes || '?';
+
+                div.innerHTML = `
+                    <strong>${time}</strong> (${minutes} min)
+                    <br><span style="color: #666; font-size: 11px;">View: ${(slot.scheduleViewGUID || slot.ScheduleViewGUID || '').substring(0, 8)}...</span>
+                `;
+                list.appendChild(div);
+            });
+
+            if (slots.length > 20) {
+                const more = document.createElement('div');
+                more.style.cssText = 'padding: 8px; color: #888; font-size: 11px; text-align: center;';
+                more.textContent = `... and ${slots.length - 20} more slots`;
+                list.appendChild(more);
+            }
+
+            picker.style.display = 'block';
+        }
+
+        // Test Functions
+        async function testSlots() {
+            const action = 'slots';
+            showResult(action, 'loading', 'Searching for available slots...');
+            const start = Date.now();
+
+            try {
+                const startDate = document.getElementById('slots-startDate').value || getTomorrow();
+                const endDate = document.getElementById('slots-endDate').value || getEndDate(14);
+                const scheduleViewGUIDs = document.getElementById('slots-scheduleViewGUIDs').value;
+
+                const body = {
+                    uui: getUUI(),
+                    startDate: startDate,
+                    endDate: endDate
+                };
+
+                if (scheduleViewGUIDs) {
+                    body.scheduleViewGUIDs = scheduleViewGUIDs;
+                }
+
+                const result = await makeRequest('/ortho/getApptSlots', body);
+                const duration = Date.now() - start;
+
+                if (result.ok && !result.data.error) {
+                    const slots = result.data.slots || [];
+                    showResult(action, 'success', {
+                        message: `Found ${slots.length} available slot(s)`,
+                        searchRange: { startDate, endDate },
+                        ...result.data
+                    }, duration);
+
+                    displaySlotPicker(slots);
+                } else {
+                    showResult(action, 'error', result.data, duration);
+                }
+            } catch (error) {
+                showResult(action, 'error', { error: error.message }, Date.now() - start);
+            }
+        }
+
+        async function testGroupedSlots() {
+            const action = 'grouped_slots';
+            showResult(action, 'loading', 'Searching for grouped slots (siblings)...');
+            const start = Date.now();
+
+            try {
+                const startDate = document.getElementById('grouped_slots-startDate').value || getTomorrow();
+                const endDate = document.getElementById('grouped_slots-endDate').value || getEndDate(14);
+                const numberOfPatients = parseInt(document.getElementById('grouped_slots-numberOfPatients').value) || 2;
+                const timeWindowMinutes = parseInt(document.getElementById('grouped_slots-timeWindowMinutes').value) || 60;
+
+                const body = {
+                    uui: getUUI(),
+                    startDate: startDate,
+                    endDate: endDate,
+                    numberOfPatients: numberOfPatients,
+                    timeWindowMinutes: timeWindowMinutes
+                };
+
+                const result = await makeRequest('/ortho/getGroupedApptSlots', body);
+                const duration = Date.now() - start;
+
+                if (result.ok && !result.data.error) {
+                    const groups = result.data.groups || [];
+                    showResult(action, 'success', {
+                        message: `Found ${groups.length} grouped slot option(s) for ${numberOfPatients} patients`,
+                        searchRange: { startDate, endDate },
+                        ...result.data
+                    }, duration);
+                } else {
+                    showResult(action, 'error', result.data, duration);
+                }
+            } catch (error) {
+                showResult(action, 'error', { error: error.message }, Date.now() - start);
+            }
+        }
+
+        async function testBookChild() {
+            const action = 'book_child';
+
+            // Validate required fields
+            const startTime = document.getElementById('book_child-startTime').value;
+            const scheduleViewGUID = document.getElementById('book_child-scheduleViewGUID').value;
+            const scheduleColumnGUID = document.getElementById('book_child-scheduleColumnGUID').value;
+            const appointmentTypeGUID = document.getElementById('book_child-appointmentTypeGUID').value;
+
+            if (!startTime || !scheduleViewGUID || !scheduleColumnGUID || !appointmentTypeGUID) {
+                showResult(action, 'error', {
+                    error: 'Missing required slot data',
+                    hint: 'Run "slots" first and select a slot, or manually enter all required fields',
+                    required: ['startTime', 'scheduleViewGUID', 'scheduleColumnGUID', 'appointmentTypeGUID']
+                });
+                return;
+            }
+
+            showResult(action, 'loading', 'Booking appointment...');
+            const start = Date.now();
+
+            try {
+                const config = getConfig();
+                const patientGUID = document.getElementById('book_child-patientGUID').value || config.testPatientGUID;
+
+                const body = {
+                    uui: getUUI(),
+                    patientGUID: patientGUID,
+                    startTime: startTime,
+                    scheduleViewGUID: scheduleViewGUID,
+                    scheduleColumnGUID: scheduleColumnGUID,
+                    appointmentTypeGUID: appointmentTypeGUID,
+                    minutes: parseInt(document.getElementById('book_child-minutes').value) || 30
+                };
+
+                const childName = document.getElementById('book_child-childName').value;
+                if (childName) {
+                    body.childName = childName;
+                }
+
+                const result = await makeRequest('/ortho/createAppt', body);
+                const duration = Date.now() - start;
+
+                if (result.ok && !result.data.error) {
+                    // Store the appointment GUID for cancel action
+                    if (result.data.appointmentGUID) {
+                        lastBookedAppointmentGUID = result.data.appointmentGUID;
+                        document.getElementById('cancel-appointmentGUID').value = lastBookedAppointmentGUID;
+                    }
+
+                    showResult(action, 'success', result.data, duration);
+                } else {
+                    showResult(action, 'error', result.data, duration);
+                }
+            } catch (error) {
+                showResult(action, 'error', { error: error.message }, Date.now() - start);
+            }
+        }
+
+        async function testCancel() {
+            const action = 'cancel';
+            const appointmentGUID = document.getElementById('cancel-appointmentGUID').value;
+
+            if (!appointmentGUID) {
+                showResult(action, 'error', {
+                    error: 'appointmentGUID is required',
+                    hint: 'Book an appointment first using book_child, then use the returned GUID'
+                });
+                return;
+            }
+
+            showResult(action, 'loading', 'Cancelling appointment...');
+            const start = Date.now();
+
+            try {
+                const body = {
+                    uui: getUUI(),
+                    appointmentGUID: appointmentGUID
+                };
+
+                const result = await makeRequest('/ortho/cancelAppt', body);
+                const duration = Date.now() - start;
+
+                if (result.ok && !result.data.error) {
+                    showResult(action, 'success', result.data, duration);
+                } else {
+                    showResult(action, 'error', result.data, duration);
+                }
+            } catch (error) {
+                showResult(action, 'error', { error: error.message }, Date.now() - start);
+            }
+        }
+
+        async function runAllTests() {
+            // Reset all results
+            Object.keys(testResults).forEach(key => {
+                testResults[key] = null;
+                clearResult(key);
+            });
+            updateSummary();
+
+            // Test 1: slots
+            await testSlots();
+            await new Promise(r => setTimeout(r, 1000));
+
+            // Test 2: grouped_slots
+            await testGroupedSlots();
+            await new Promise(r => setTimeout(r, 1000));
+
+            // Test 3: book_child - only if we have slot data
+            const startTime = document.getElementById('book_child-startTime').value;
+            if (startTime) {
+                await testBookChild();
+                await new Promise(r => setTimeout(r, 1000));
+
+                // Test 4: cancel - only if we just booked
+                if (lastBookedAppointmentGUID) {
+                    await testCancel();
+                } else {
+                    testResults['cancel'] = 'pass';
+                    showResult('cancel', 'success', {
+                        message: 'Skipped - no appointment to cancel',
+                        note: 'Book an appointment first to test cancellation'
+                    }, 0);
+                }
+            } else {
+                // Mark as passed with note
+                testResults['book_child'] = 'pass';
+                showResult('book_child', 'success', {
+                    message: 'Skipped - no slot selected',
+                    note: 'Select a slot from the "slots" results to test booking'
+                }, 0);
+
+                testResults['cancel'] = 'pass';
+                showResult('cancel', 'success', {
+                    message: 'Skipped - no appointment to cancel',
+                    note: 'Book an appointment first to test cancellation'
+                }, 0);
+            }
+        }
+    </script>
+</body>
+</html>

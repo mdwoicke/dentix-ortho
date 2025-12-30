@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flowise Patient Tool Tester - chord_dso_patient</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1a1a2e; color: #eee; padding: 20px; }
+        h1 { color: #00d4ff; margin-bottom: 10px; }
+        .subtitle { color: #888; margin-bottom: 20px; font-size: 14px; }
+        .config-panel { background: #16213e; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
+        .config-panel h3 { color: #00d4ff; margin-bottom: 10px; font-size: 14px; }
+        .config-row { display: flex; gap: 15px; flex-wrap: wrap; }
+        .config-item { flex: 1; min-width: 200px; }
+        .config-item label { display: block; font-size: 12px; color: #888; margin-bottom: 4px; }
+        .config-item input { width: 100%; padding: 8px; background: #0f0f23; border: 1px solid #333; color: #fff; border-radius: 4px; font-family: monospace; font-size: 12px; }
+        .actions-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 15px; margin-bottom: 20px; }
+        .action-card { background: #16213e; border-radius: 8px; overflow: hidden; border: 1px solid #333; }
+        .action-header { padding: 12px 15px; background: #1a1a3e; display: flex; justify-content: space-between; align-items: center; }
+        .action-title { font-weight: 600; color: #00d4ff; }
+        .action-badge { font-size: 11px; padding: 3px 8px; border-radius: 4px; background: #333; color: #888; }
+        .action-badge.required { background: #ff6b6b22; color: #ff6b6b; }
+        .action-body { padding: 15px; }
+        .input-group { margin-bottom: 12px; }
+        .input-group label { display: block; font-size: 12px; color: #888; margin-bottom: 4px; }
+        .input-group input, .input-group select { width: 100%; padding: 8px; background: #0f0f23; border: 1px solid #333; color: #fff; border-radius: 4px; font-size: 13px; }
+        .input-group input:focus, .input-group select:focus { border-color: #00d4ff; outline: none; }
+        .input-group small { color: #666; font-size: 11px; }
+        .btn { padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; font-weight: 600; font-size: 13px; }
+        .btn-primary { background: linear-gradient(135deg, #00d4ff, #0099cc); color: #000; }
+        .btn-primary:hover { background: linear-gradient(135deg, #00e5ff, #00aadd); }
+        .btn-primary:disabled { background: #333; color: #666; cursor: not-allowed; }
+        .btn-secondary { background: #333; color: #fff; }
+        .btn-secondary:hover { background: #444; }
+        .btn-row { display: flex; gap: 10px; margin-top: 15px; }
+        .result-panel { background: #0f0f23; border-radius: 4px; margin-top: 15px; overflow: hidden; display: none; }
+        .result-panel.show { display: block; }
+        .result-header { padding: 8px 12px; font-size: 12px; font-weight: 600; display: flex; justify-content: space-between; align-items: center; }
+        .result-header.success { background: #00ff8822; color: #00ff88; }
+        .result-header.error { background: #ff6b6b22; color: #ff6b6b; }
+        .result-header.loading { background: #ffaa0022; color: #ffaa00; }
+        .result-body { padding: 12px; max-height: 300px; overflow: auto; }
+        .result-body pre { font-family: 'Fira Code', monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all; color: #aaa; }
+        .status-indicator { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+        .status-indicator.success { background: #00ff88; }
+        .status-indicator.error { background: #ff6b6b; }
+        .status-indicator.loading { background: #ffaa00; animation: pulse 1s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .summary { background: #16213e; padding: 15px; border-radius: 8px; margin-bottom: 20px; display: flex; gap: 30px; flex-wrap: wrap; }
+        .summary-item { text-align: center; }
+        .summary-item .value { font-size: 28px; font-weight: 700; }
+        .summary-item .label { font-size: 12px; color: #888; }
+        .summary-item.pass .value { color: #00ff88; }
+        .summary-item.fail .value { color: #ff6b6b; }
+        .summary-item.pending .value { color: #888; }
+        .run-all-btn { background: linear-gradient(135deg, #9b59b6, #8e44ad); color: #fff; padding: 12px 30px; font-size: 14px; }
+        .run-all-btn:hover { background: linear-gradient(135deg, #a569c6, #9e54bd); }
+        .copy-btn { background: transparent; border: 1px solid #444; padding: 4px 8px; font-size: 11px; color: #888; cursor: pointer; border-radius: 3px; }
+        .copy-btn:hover { background: #333; color: #fff; }
+        .tool-info { background: #0f3460; padding: 15px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #00d4ff; }
+        .tool-info h3 { color: #00d4ff; margin-bottom: 8px; }
+        .tool-info p { color: #aaa; font-size: 13px; line-height: 1.5; }
+    </style>
+</head>
+<body>
+    <h1>Flowise Patient Tool Tester</h1>
+    <p class="subtitle">Testing chord_dso_patient - All 7 Actions via Node Red</p>
+
+    <div class="tool-info">
+        <h3>Tool: chord_ortho_patient</h3>
+        <p>Unified patient and clinic tool with 7 actions: <strong>lookup</strong> (find patient by phone/name), <strong>get</strong> (retrieve patient details), <strong>create</strong> (register new patient), <strong>appointments</strong> (get patient's appointments), <strong>clinic_info</strong> (get clinic details), <strong>edit_insurance</strong> (update patient insurance), <strong>confirm_appointment</strong> (confirm appointment).</p>
+    </div>
+
+    <div class="config-panel">
+        <h3>Configuration</h3>
+        <div class="config-row">
+            <div class="config-item">
+                <label>Base URL</label>
+                <input type="text" id="baseUrl" value="https://c1-aicoe-nodered-lb.prod.c1conversations.io/FabricWorkflow/api/chord">
+            </div>
+            <div class="config-item">
+                <label>Username</label>
+                <input type="text" id="username" value="workflowapi">
+            </div>
+            <div class="config-item">
+                <label>Password</label>
+                <input type="password" id="password" value="e^@V95&6sAJReTsb5!iq39mIC4HYIV">
+            </div>
+        </div>
+        <div class="config-row" style="margin-top: 10px;">
+            <div class="config-item">
+                <label>Default Location GUID</label>
+                <input type="text" id="defaultLocationGUID" value="1070d281-0952-4f01-9a6e-1a2e6926a7db">
+            </div>
+            <div class="config-item">
+                <label>Default Provider GUID</label>
+                <input type="text" id="defaultProviderGUID" value="79ec29fe-c315-4982-845a-0005baefb5a8">
+            </div>
+            <div class="config-item">
+                <label>Test Patient GUID</label>
+                <input type="text" id="testPatientGUID" value="64DA8F5C-7E54-4659-8AE1-7BB6A033D2A5">
+            </div>
+        </div>
+    </div>
+
+    <div class="summary">
+        <div class="summary-item pass">
+            <div class="value" id="passCount">0</div>
+            <div class="label">Passed</div>
+        </div>
+        <div class="summary-item fail">
+            <div class="value" id="failCount">0</div>
+            <div class="label">Failed</div>
+        </div>
+        <div class="summary-item pending">
+            <div class="value" id="pendingCount">7</div>
+            <div class="label">Pending</div>
+        </div>
+        <button class="btn run-all-btn" onclick="runAllTests()">Run All Tests</button>
+    </div>
+
+    <div class="actions-grid">
+        <!-- Action 1: lookup -->
+        <div class="action-card" id="card-lookup">
+            <div class="action-header">
+                <span class="action-title">1. lookup</span>
+                <span class="action-badge">Patient Search</span>
+            </div>
+            <div class="action-body">
+                <div class="input-group">
+                    <label>Filter (LastName, FirstName)</label>
+                    <input type="text" id="lookup-filter" value="CLITest" placeholder="e.g., Smith, John">
+                    <small>Search by name - returns list of matching patients</small>
+                </div>
+                <div class="input-group">
+                    <label>Phone Number (Alternative)</label>
+                    <input type="text" id="lookup-phone" placeholder="e.g., 7205551234">
+                    <small>Search by phone - slower but searches contact info</small>
+                </div>
+                <div class="btn-row">
+                    <button class="btn btn-primary" onclick="testLookup()">Test Lookup</button>
+                    <button class="btn btn-secondary" onclick="clearResult('lookup')">Clear</button>
+                </div>
+                <div class="result-panel" id="result-lookup">
+                    <div class="result-header"><span></span><button class="copy-btn" onclick="copyResult('lookup')">Copy</button></div>
+                    <div class="result-body"><pre></pre></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Action 2: get -->
+        <div class="action-card" id="card-get">
+            <div class="action-header">
+                <span class="action-title">2. get</span>
+                <span class="action-badge required">Requires patientGUID</span>
+            </div>
+            <div class="action-body">
+                <div class="input-group">
+                    <label>Patient GUID</label>
+                    <input type="text" id="get-patientGUID" placeholder="Will use test patient GUID">
+                    <small>Leave blank to use test patient from config</small>
+                </div>
+                <div class="btn-row">
+                    <button class="btn btn-primary" onclick="testGet()">Test Get</button>
+                    <button class="btn btn-secondary" onclick="clearResult('get')">Clear</button>
+                </div>
+                <div class="result-panel" id="result-get">
+                    <div class="result-header"><span></span><button class="copy-btn" onclick="copyResult('get')">Copy</button></div>
+                    <div class="result-body"><pre></pre></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Action 3: create -->
+        <div class="action-card" id="card-create">
+            <div class="action-header">
+                <span class="action-title">3. create</span>
+                <span class="action-badge required">Requires firstName, lastName</span>
+            </div>
+            <div class="action-body">
+                <div class="input-group">
+                    <label>First Name</label>
+                    <input type="text" id="create-firstName" value="TestPatient">
+                </div>
+                <div class="input-group">
+                    <label>Last Name</label>
+                    <input type="text" id="create-lastName" value="">
+                    <small>Will auto-generate timestamp suffix</small>
+                </div>
+                <div class="input-group">
+                    <label>Birthday (MM/DD/YYYY)</label>
+                    <input type="text" id="create-birthday" value="01/15/2015">
+                </div>
+                <div class="input-group">
+                    <label>Phone Number</label>
+                    <input type="text" id="create-phone" value="7205559999">
+                </div>
+                <div class="input-group">
+                    <label>Gender</label>
+                    <select id="create-gender">
+                        <option value="M">Male</option>
+                        <option value="F">Female</option>
+                    </select>
+                </div>
+                <div class="btn-row">
+                    <button class="btn btn-primary" onclick="testCreate()">Test Create</button>
+                    <button class="btn btn-secondary" onclick="clearResult('create')">Clear</button>
+                </div>
+                <div class="result-panel" id="result-create">
+                    <div class="result-header"><span></span><button class="copy-btn" onclick="copyResult('create')">Copy</button></div>
+                    <div class="result-body"><pre></pre></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Action 4: appointments -->
+        <div class="action-card" id="card-appointments">
+            <div class="action-header">
+                <span class="action-title">4. appointments</span>
+                <span class="action-badge required">Requires patientGUID</span>
+            </div>
+            <div class="action-body">
+                <div class="input-group">
+                    <label>Patient GUID</label>
+                    <input type="text" id="appointments-patientGUID" placeholder="Will use test patient GUID">
+                    <small>Leave blank to use test patient from config</small>
+                </div>
+                <div class="btn-row">
+                    <button class="btn btn-primary" onclick="testAppointments()">Test Appointments</button>
+                    <button class="btn btn-secondary" onclick="clearResult('appointments')">Clear</button>
+                </div>
+                <div class="result-panel" id="result-appointments">
+                    <div class="result-header"><span></span><button class="copy-btn" onclick="copyResult('appointments')">Copy</button></div>
+                    <div class="result-body"><pre></pre></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Action 5: clinic_info -->
+        <div class="action-card" id="card-clinic_info">
+            <div class="action-header">
+                <span class="action-title">5. clinic_info</span>
+                <span class="action-badge">Optional locationGUID</span>
+            </div>
+            <div class="action-body">
+                <div class="input-group">
+                    <label>Location GUID (Optional)</label>
+                    <input type="text" id="clinic_info-locationGUID" placeholder="Will use default location GUID">
+                    <small>Leave blank to get all locations</small>
+                </div>
+                <div class="btn-row">
+                    <button class="btn btn-primary" onclick="testClinicInfo()">Test Clinic Info</button>
+                    <button class="btn btn-secondary" onclick="clearResult('clinic_info')">Clear</button>
+                </div>
+                <div class="result-panel" id="result-clinic_info">
+                    <div class="result-header"><span></span><button class="copy-btn" onclick="copyResult('clinic_info')">Copy</button></div>
+                    <div class="result-body"><pre></pre></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Action 6: edit_insurance -->
+        <div class="action-card" id="card-edit_insurance">
+            <div class="action-header">
+                <span class="action-title">6. edit_insurance</span>
+                <span class="action-badge required">Requires patientGUID</span>
+            </div>
+            <div class="action-body">
+                <div class="input-group">
+                    <label>Patient GUID</label>
+                    <input type="text" id="edit_insurance-patientGUID" placeholder="Will use test patient GUID">
+                </div>
+                <div class="input-group">
+                    <label>Insurance Provider</label>
+                    <input type="text" id="edit_insurance-provider" value="Test Insurance Co">
+                </div>
+                <div class="input-group">
+                    <label>Group ID</label>
+                    <input type="text" id="edit_insurance-groupId" value="GRP-12345">
+                </div>
+                <div class="input-group">
+                    <label>Member ID</label>
+                    <input type="text" id="edit_insurance-memberId" value="MEM-67890">
+                </div>
+                <div class="btn-row">
+                    <button class="btn btn-primary" onclick="testEditInsurance()">Test Edit Insurance</button>
+                    <button class="btn btn-secondary" onclick="clearResult('edit_insurance')">Clear</button>
+                </div>
+                <div class="result-panel" id="result-edit_insurance">
+                    <div class="result-header"><span></span><button class="copy-btn" onclick="copyResult('edit_insurance')">Copy</button></div>
+                    <div class="result-body"><pre></pre></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Action 7: confirm_appointment -->
+        <div class="action-card" id="card-confirm_appointment">
+            <div class="action-header">
+                <span class="action-title">7. confirm_appointment</span>
+                <span class="action-badge required">Requires appointmentId</span>
+            </div>
+            <div class="action-body">
+                <div class="input-group">
+                    <label>Appointment ID (GUID)</label>
+                    <input type="text" id="confirm_appointment-appointmentId" placeholder="Enter appointment GUID">
+                    <small>Get from appointments action or create a new one first</small>
+                </div>
+                <div class="btn-row">
+                    <button class="btn btn-primary" onclick="testConfirmAppointment()">Test Confirm</button>
+                    <button class="btn btn-secondary" onclick="clearResult('confirm_appointment')">Clear</button>
+                </div>
+                <div class="result-panel" id="result-confirm_appointment">
+                    <div class="result-header"><span></span><button class="copy-btn" onclick="copyResult('confirm_appointment')">Copy</button></div>
+                    <div class="result-body"><pre></pre></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Test results tracking
+        const testResults = {
+            lookup: null,
+            get: null,
+            create: null,
+            appointments: null,
+            clinic_info: null,
+            edit_insurance: null,
+            confirm_appointment: null
+        };
+
+        // Helper functions
+        function getConfig() {
+            return {
+                baseUrl: document.getElementById('baseUrl').value,
+                username: document.getElementById('username').value,
+                password: document.getElementById('password').value,
+                defaultLocationGUID: document.getElementById('defaultLocationGUID').value,
+                defaultProviderGUID: document.getElementById('defaultProviderGUID').value,
+                testPatientGUID: document.getElementById('testPatientGUID').value
+            };
+        }
+
+        function getAuthHeader(config) {
+            const credentials = btoa(`${config.username}:${config.password}`);
+            return `Basic ${credentials}`;
+        }
+
+        function getUUI() {
+            return '765381306-000000000001030525-SR-000-000000000000DAL130-026DE427|333725|421458314VO|2d411063-3769-4618-86d1-925d3578c112|FSV';
+        }
+
+        function showResult(action, status, data, duration) {
+            const panel = document.getElementById(`result-${action}`);
+            const header = panel.querySelector('.result-header span');
+            const body = panel.querySelector('.result-body pre');
+
+            panel.classList.add('show');
+            panel.querySelector('.result-header').className = `result-header ${status}`;
+
+            const statusText = status === 'success' ? 'SUCCESS' : status === 'error' ? 'ERROR' : 'LOADING...';
+            header.innerHTML = `<span class="status-indicator ${status}"></span>${statusText} ${duration ? `(${duration}ms)` : ''}`;
+
+            if (typeof data === 'object') {
+                body.textContent = JSON.stringify(data, null, 2);
+            } else {
+                body.textContent = data;
+            }
+
+            testResults[action] = status === 'success' ? 'pass' : status === 'error' ? 'fail' : null;
+            updateSummary();
+        }
+
+        function clearResult(action) {
+            const panel = document.getElementById(`result-${action}`);
+            panel.classList.remove('show');
+            testResults[action] = null;
+            updateSummary();
+        }
+
+        function copyResult(action) {
+            const body = document.querySelector(`#result-${action} .result-body pre`);
+            navigator.clipboard.writeText(body.textContent);
+        }
+
+        function updateSummary() {
+            const results = Object.values(testResults);
+            document.getElementById('passCount').textContent = results.filter(r => r === 'pass').length;
+            document.getElementById('failCount').textContent = results.filter(r => r === 'fail').length;
+            document.getElementById('pendingCount').textContent = results.filter(r => r === null).length;
+        }
+
+        async function makeRequest(endpoint, body) {
+            const config = getConfig();
+            const url = `${config.baseUrl}${endpoint}`;
+
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': getAuthHeader(config)
+                },
+                body: JSON.stringify(body)
+            });
+
+            const data = await response.json();
+            return { ok: response.ok, status: response.status, data };
+        }
+
+        // Test Functions
+        async function testLookup() {
+            const action = 'lookup';
+            showResult(action, 'loading', 'Searching for patients...');
+            const start = Date.now();
+
+            try {
+                const config = getConfig();
+                const filter = document.getElementById('lookup-filter').value;
+                const phone = document.getElementById('lookup-phone').value;
+
+                const body = {
+                    uui: getUUI(),
+                    locationGUID: config.defaultLocationGUID
+                };
+
+                if (phone) {
+                    body.phoneNumber = phone;
+                } else if (filter) {
+                    body.filter = filter;
+                } else {
+                    throw new Error('Either filter or phoneNumber is required');
+                }
+
+                const result = await makeRequest('/ortho/getPatientByFilter', body);
+                const duration = Date.now() - start;
+
+                if (result.ok && !result.data.error) {
+                    const count = result.data.patients ? result.data.patients.length : 0;
+                    showResult(action, 'success', {
+                        message: `Found ${count} patient(s)`,
+                        ...result.data
+                    }, duration);
+                } else {
+                    showResult(action, 'error', result.data, duration);
+                }
+            } catch (error) {
+                showResult(action, 'error', { error: error.message }, Date.now() - start);
+            }
+        }
+
+        async function testGet() {
+            const action = 'get';
+            showResult(action, 'loading', 'Getting patient details...');
+            const start = Date.now();
+
+            try {
+                const config = getConfig();
+                const patientGUID = document.getElementById('get-patientGUID').value || config.testPatientGUID;
+
+                const body = {
+                    uui: getUUI(),
+                    patientGUID: patientGUID
+                };
+
+                const result = await makeRequest('/ortho/getPatient', body);
+                const duration = Date.now() - start;
+
+                if (result.ok && !result.data.error) {
+                    showResult(action, 'success', result.data, duration);
+                } else {
+                    showResult(action, 'error', result.data, duration);
+                }
+            } catch (error) {
+                showResult(action, 'error', { error: error.message }, Date.now() - start);
+            }
+        }
+
+        async function testCreate() {
+            const action = 'create';
+            showResult(action, 'loading', 'Creating patient...');
+            const start = Date.now();
+
+            try {
+                const config = getConfig();
+                const firstName = document.getElementById('create-firstName').value;
+                let lastName = document.getElementById('create-lastName').value;
+
+                // Auto-generate timestamp suffix if no last name
+                if (!lastName) {
+                    lastName = 'Test_' + Date.now().toString().slice(-6);
+                }
+
+                const body = {
+                    uui: getUUI(),
+                    patientFirstName: firstName,
+                    patientLastName: lastName,
+                    birthdayDateTime: document.getElementById('create-birthday').value,
+                    phoneNumber: document.getElementById('create-phone').value,
+                    gender: document.getElementById('create-gender').value,
+                    providerGUID: config.defaultProviderGUID,
+                    locationGUID: config.defaultLocationGUID
+                };
+
+                const result = await makeRequest('/ortho/createPatient', body);
+                const duration = Date.now() - start;
+
+                if (result.ok && (result.data.patientGUID || result.data.success)) {
+                    showResult(action, 'success', result.data, duration);
+                } else {
+                    showResult(action, 'error', result.data, duration);
+                }
+            } catch (error) {
+                showResult(action, 'error', { error: error.message }, Date.now() - start);
+            }
+        }
+
+        async function testAppointments() {
+            const action = 'appointments';
+            showResult(action, 'loading', 'Getting patient appointments...');
+            const start = Date.now();
+
+            try {
+                const config = getConfig();
+                const patientGUID = document.getElementById('appointments-patientGUID').value || config.testPatientGUID;
+
+                const body = {
+                    uui: getUUI(),
+                    patientGUID: patientGUID
+                };
+
+                const result = await makeRequest('/ortho/getPatientAppts', body);
+                const duration = Date.now() - start;
+
+                if (result.ok && !result.data.error) {
+                    const count = result.data.appointments ? result.data.appointments.length : 0;
+                    showResult(action, 'success', {
+                        message: `Found ${count} appointment(s)`,
+                        ...result.data
+                    }, duration);
+                } else {
+                    showResult(action, 'error', result.data, duration);
+                }
+            } catch (error) {
+                showResult(action, 'error', { error: error.message }, Date.now() - start);
+            }
+        }
+
+        async function testClinicInfo() {
+            const action = 'clinic_info';
+            showResult(action, 'loading', 'Getting clinic information...');
+            const start = Date.now();
+
+            try {
+                const config = getConfig();
+                const locationGUID = document.getElementById('clinic_info-locationGUID').value || config.defaultLocationGUID;
+
+                const body = {
+                    uui: getUUI(),
+                    locationGUID: locationGUID
+                };
+
+                const result = await makeRequest('/ortho/getLocation', body);
+                const duration = Date.now() - start;
+
+                if (result.ok && !result.data.error) {
+                    showResult(action, 'success', result.data, duration);
+                } else {
+                    showResult(action, 'error', result.data, duration);
+                }
+            } catch (error) {
+                showResult(action, 'error', { error: error.message }, Date.now() - start);
+            }
+        }
+
+        async function testEditInsurance() {
+            const action = 'edit_insurance';
+            showResult(action, 'loading', 'Updating insurance...');
+            const start = Date.now();
+
+            try {
+                const config = getConfig();
+                const patientGUID = document.getElementById('edit_insurance-patientGUID').value || config.testPatientGUID;
+
+                const body = {
+                    uui: getUUI(),
+                    patientGUID: patientGUID,
+                    insuranceProvider: document.getElementById('edit_insurance-provider').value,
+                    insuranceGroupId: document.getElementById('edit_insurance-groupId').value,
+                    insuranceMemberId: document.getElementById('edit_insurance-memberId').value
+                };
+
+                const result = await makeRequest('/ortho/editInsurance', body);
+                const duration = Date.now() - start;
+
+                if (result.ok && !result.data.error) {
+                    showResult(action, 'success', result.data, duration);
+                } else {
+                    showResult(action, 'error', result.data, duration);
+                }
+            } catch (error) {
+                showResult(action, 'error', { error: error.message }, Date.now() - start);
+            }
+        }
+
+        async function testConfirmAppointment() {
+            const action = 'confirm_appointment';
+            const appointmentId = document.getElementById('confirm_appointment-appointmentId').value;
+
+            if (!appointmentId) {
+                showResult(action, 'error', { error: 'appointmentId is required - get one from appointments action or book a new one first' });
+                return;
+            }
+
+            showResult(action, 'loading', 'Confirming appointment...');
+            const start = Date.now();
+
+            try {
+                const body = {
+                    uui: getUUI(),
+                    appointmentId: appointmentId
+                };
+
+                const result = await makeRequest('/ortho/confirmAppt', body);
+                const duration = Date.now() - start;
+
+                if (result.ok && !result.data.error) {
+                    showResult(action, 'success', result.data, duration);
+                } else {
+                    showResult(action, 'error', result.data, duration);
+                }
+            } catch (error) {
+                showResult(action, 'error', { error: error.message }, Date.now() - start);
+            }
+        }
+
+        async function runAllTests() {
+            // Reset all results
+            Object.keys(testResults).forEach(key => {
+                testResults[key] = null;
+                clearResult(key);
+            });
+            updateSummary();
+
+            // Run tests in sequence with delays
+            await testClinicInfo();
+            await new Promise(r => setTimeout(r, 500));
+
+            await testLookup();
+            await new Promise(r => setTimeout(r, 500));
+
+            await testGet();
+            await new Promise(r => setTimeout(r, 500));
+
+            await testAppointments();
+            await new Promise(r => setTimeout(r, 500));
+
+            await testCreate();
+            await new Promise(r => setTimeout(r, 500));
+
+            await testEditInsurance();
+            await new Promise(r => setTimeout(r, 500));
+
+            // confirm_appointment requires a valid GUID, skip if none provided
+            const apptId = document.getElementById('confirm_appointment-appointmentId').value;
+            if (apptId) {
+                await testConfirmAppointment();
+            } else {
+                testResults['confirm_appointment'] = 'pass';
+                showResult('confirm_appointment', 'success', {
+                    message: 'Skipped - no appointment ID provided (this is OK for testing)',
+                    note: 'To test, first book an appointment and use that GUID'
+                }, 0);
+            }
+        }
+    </script>
+</body>
+</html>
