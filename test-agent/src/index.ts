@@ -107,97 +107,147 @@ async function runGoalTests(
   const runId = db.createTestRun();
   const startTime = Date.now();
   const results: TestResult[] = [];
+  let runCompleted = false;
+
+  // Track current run for SIGINT handling
+  currentRunId = runId;
+  currentDb = db;
 
   // Track run counts per scenario for proper indexing when same test runs multiple times
   const runCountPerScenario = new Map<string, number>();
 
-  // Run tests (sequential for now, can add parallel later)
-  for (const scenario of scenariosToRun) {
-    // Increment run count for this scenario
-    const currentCount = (runCountPerScenario.get(scenario.id) || 0) + 1;
-    runCountPerScenario.set(scenario.id, currentCount);
+  try {
+    // Run tests (sequential for now, can add parallel later)
+    for (const scenario of scenariosToRun) {
+      // Increment run count for this scenario
+      const currentCount = (runCountPerScenario.get(scenario.id) || 0) + 1;
+      runCountPerScenario.set(scenario.id, currentCount);
 
-    // Generate unique test ID with run index (e.g., GOAL-HAPPY-001#2 for second run)
-    const testIdWithRun = currentCount > 1 ? `${scenario.id}#${currentCount}` : scenario.id;
+      // Generate unique test ID with run index (e.g., GOAL-HAPPY-001#2 for second run)
+      const testIdWithRun = currentCount > 1 ? `${scenario.id}#${currentCount}` : scenario.id;
 
-    console.log(`[GoalTest] Starting: ${testIdWithRun} - ${scenario.name}`);
+      console.log(`[GoalTest] Starting: ${testIdWithRun} - ${scenario.name}`);
 
-    // Create per-test runner with fresh session
-    const flowiseClient = new FlowiseClient();
-    const intentDetector = new IntentDetector();
-    const runner = new GoalTestRunner(flowiseClient, db, intentDetector);
+      // Create per-test runner with fresh session
+      const flowiseClient = new FlowiseClient();
+      const intentDetector = new IntentDetector();
+      const runner = new GoalTestRunner(flowiseClient, db, intentDetector);
 
-    try {
-      // Pass testIdWithRun to ensure multiple runs of same test are stored separately
-      const result = await runner.runTest(scenario, runId, testIdWithRun);
+      try {
+        // Pass testIdWithRun to ensure multiple runs of same test are stored separately
+        const result = await runner.runTest(scenario, runId, testIdWithRun);
 
-      const testResult: TestResult = {
-        runId,
-        testId: testIdWithRun,
-        testName: currentCount > 1 ? `${scenario.name} (Run ${currentCount})` : scenario.name,
-        category: scenario.category,
-        status: result.passed ? 'passed' : 'failed',
-        startedAt: new Date(Date.now() - result.durationMs).toISOString(),
-        completedAt: new Date().toISOString(),
-        durationMs: result.durationMs,
-        errorMessage: result.passed ? undefined : result.issues.map(i => i.description).join('; '),
-        transcript: result.transcript,
-        findings: result.issues.map(issue => ({
-          type: issue.type === 'error' ? 'bug' as const : 'prompt-issue' as const,
-          severity: issue.severity,
-          title: `Issue: ${issue.type}`,
-          description: issue.description,
-          affectedStep: `turn-${issue.turnNumber}`,
-        })),
-      };
+        const testResult: TestResult = {
+          runId,
+          testId: testIdWithRun,
+          testName: currentCount > 1 ? `${scenario.name} (Run ${currentCount})` : scenario.name,
+          category: scenario.category,
+          status: result.passed ? 'passed' : 'failed',
+          startedAt: new Date(Date.now() - result.durationMs).toISOString(),
+          completedAt: new Date().toISOString(),
+          durationMs: result.durationMs,
+          errorMessage: result.passed ? undefined : result.issues.map(i => i.description).join('; '),
+          transcript: result.transcript,
+          findings: result.issues.map(issue => ({
+            type: issue.type === 'error' ? 'bug' as const : 'prompt-issue' as const,
+            severity: issue.severity,
+            title: `Issue: ${issue.type}`,
+            description: issue.description,
+            affectedStep: `turn-${issue.turnNumber}`,
+          })),
+        };
 
-      results.push(testResult);
-      const status = result.passed ? '✓ PASSED' : '✗ FAILED';
-      console.log(`[GoalTest] ${status}: ${testIdWithRun} (${result.durationMs}ms, ${result.turnCount} turns)`);
-    } catch (error: any) {
-      const errorResult: TestResult = {
-        runId,
-        testId: testIdWithRun,
-        testName: currentCount > 1 ? `${scenario.name} (Run ${currentCount})` : scenario.name,
-        category: scenario.category,
-        status: 'error',
-        startedAt: new Date().toISOString(),
-        completedAt: new Date().toISOString(),
-        durationMs: 0,
-        errorMessage: error.message,
-        transcript: [],
-        findings: [],
-      };
-      results.push(errorResult);
-      db.saveTestResult(errorResult);
-      console.log(`[GoalTest] ✗ ERROR: ${testIdWithRun} - ${error.message}`);
+        results.push(testResult);
+        const status = result.passed ? '✓ PASSED' : '✗ FAILED';
+        console.log(`[GoalTest] ${status}: ${testIdWithRun} (${result.durationMs}ms, ${result.turnCount} turns)`);
+      } catch (error: any) {
+        const errorResult: TestResult = {
+          runId,
+          testId: testIdWithRun,
+          testName: currentCount > 1 ? `${scenario.name} (Run ${currentCount})` : scenario.name,
+          category: scenario.category,
+          status: 'error',
+          startedAt: new Date().toISOString(),
+          completedAt: new Date().toISOString(),
+          durationMs: 0,
+          errorMessage: error.message,
+          transcript: [],
+          findings: [],
+        };
+        results.push(errorResult);
+        db.saveTestResult(errorResult);
+        console.log(`[GoalTest] ✗ ERROR: ${testIdWithRun} - ${error.message}`);
+      }
+    }
+
+    const duration = Date.now() - startTime;
+    const summary: TestSuiteResult = {
+      runId,
+      totalTests: results.length,
+      passed: results.filter(r => r.status === 'passed').length,
+      failed: results.filter(r => r.status === 'failed' || r.status === 'error').length,
+      skipped: results.filter(r => r.status === 'skipped').length,
+      duration,
+      results,
+    };
+
+    // Update run record
+    db.completeTestRun(runId, summary);
+    runCompleted = true;
+
+    console.log('\n=== Goal Test Results ===');
+    console.log(`Passed: ${summary.passed}, Failed: ${summary.failed}, Total: ${summary.totalTests}`);
+    console.log(`Duration: ${(duration / 1000).toFixed(1)}s\n`);
+
+    return summary;
+  } finally {
+    // Clear tracking after run
+    currentRunId = null;
+    currentDb = null;
+
+    // Ensure run is marked as failed if not completed normally
+    if (!runCompleted) {
+      console.log(`[GoalTest] Run ${runId} did not complete normally, marking as failed`);
+      db.failTestRun(runId, 'Test run did not complete normally');
     }
   }
-
-  const duration = Date.now() - startTime;
-  const summary: TestSuiteResult = {
-    runId,
-    totalTests: results.length,
-    passed: results.filter(r => r.status === 'passed').length,
-    failed: results.filter(r => r.status === 'failed' || r.status === 'error').length,
-    skipped: results.filter(r => r.status === 'skipped').length,
-    duration,
-    results,
-  };
-
-  // Update run record
-  db.completeTestRun(runId, summary);
-
-  console.log('\n=== Goal Test Results ===');
-  console.log(`Passed: ${summary.passed}, Failed: ${summary.failed}, Total: ${summary.totalTests}`);
-  console.log(`Duration: ${(duration / 1000).toFixed(1)}s\n`);
-
-  return summary;
 }
 
 const program = new Command();
 const reporter = new ConsoleReporter();
 const markdownReporter = new MarkdownReporter();
+
+// Track current run for cleanup on SIGINT
+let currentRunId: string | null = null;
+let currentDb: Database | null = null;
+
+// Handle graceful shutdown on SIGINT (Ctrl+C)
+process.on('SIGINT', () => {
+  console.log('\n[GoalTest] Received SIGINT, cleaning up...');
+  if (currentRunId && currentDb) {
+    try {
+      currentDb.abortTestRun(currentRunId);
+      console.log(`[GoalTest] Marked run ${currentRunId} as aborted`);
+    } catch (error: any) {
+      console.error(`[GoalTest] Failed to abort run: ${error.message}`);
+    }
+  }
+  process.exit(130); // 128 + SIGINT signal number (2)
+});
+
+// Cleanup stale runs at startup
+function cleanupStaleRuns(): void {
+  try {
+    const db = new Database();
+    db.initialize();
+    const cleaned = db.cleanupStaleRuns(2); // Cleanup runs older than 2 hours
+    if (cleaned > 0) {
+      console.log(`[Cleanup] Marked ${cleaned} stale test run(s) as aborted`);
+    }
+  } catch (error: any) {
+    // Silently ignore cleanup errors
+  }
+}
 
 program
   .name('test-agent')
@@ -216,6 +266,9 @@ program
   .option('-n, --concurrency <number>', 'Number of parallel workers (1-10, default: 1)', '1')
   .action(async (options) => {
     try {
+      // Cleanup stale runs at startup
+      cleanupStaleRuns();
+
       const agent = new TestAgent();
       agent.initialize();
 

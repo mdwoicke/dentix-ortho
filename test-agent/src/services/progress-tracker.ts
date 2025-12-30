@@ -166,15 +166,38 @@ export class ProgressTracker {
   }
 
   /**
+   * Convert backend turn number to transcript message index
+   *
+   * Backend turnNumber counts conversation exchanges (user-assistant pairs):
+   * - turnNumber=1 means the first exchange (initial user msg + assistant response)
+   * - turnNumber=N corresponds to assistant message at transcript index 2*N - 1
+   *
+   * Frontend displays turns as individual messages (1-indexed):
+   * - Turn 1 = transcript[0], Turn 2 = transcript[1], etc.
+   *
+   * This function returns the frontend turn number (1-indexed message position)
+   * for the assistant message at the given backend turn.
+   */
+  private turnToTranscriptIndex(turnNumber: number): number {
+    // Issues are detected when analyzing assistant responses
+    // Assistant at backend turnNumber N is at transcript index 2*N - 1
+    // Frontend turn = index + 1 = 2*N
+    return 2 * turnNumber;
+  }
+
+  /**
    * Detect conversation issues
    */
   private detectIssues(intent: IntentDetectionResult, turnNumber: number): void {
+    // Convert to transcript-based turn number for frontend display
+    const transcriptTurn = this.turnToTranscriptIndex(turnNumber);
+
     // Check for repetition
     if (this.isRepeatingIntent(intent.primaryIntent)) {
       this.state.issues.push({
         type: 'repeating',
         description: `Agent asked for ${intent.primaryIntent} again`,
-        turnNumber,
+        turnNumber: transcriptTurn,
         severity: 'medium',
         context: { intent: intent.primaryIntent },
       });
@@ -185,8 +208,8 @@ export class ProgressTracker {
         this.state.collectedFields.size === 0) {
       this.state.issues.push({
         type: 'stuck',
-        description: `No data collected after ${turnNumber} turns`,
-        turnNumber,
+        description: `No data collected after ${turnNumber} conversation turns`,
+        turnNumber: transcriptTurn,
         severity: 'high',
       });
     }
@@ -196,7 +219,7 @@ export class ProgressTracker {
       this.state.issues.push({
         type: 'unknown_intent',
         description: 'Could not determine agent intent',
-        turnNumber,
+        turnNumber: transcriptTurn,
         severity: 'low',
         context: { confidence: intent.confidence },
       });

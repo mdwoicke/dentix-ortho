@@ -6,8 +6,8 @@ export const config = {
   // Flowise API Configuration
   flowise: {
     endpoint: 'https://app.c1elly.ai/api/v1/prediction/5f1fa57c-e6fd-463c-ac6e-c73fd5fb578b',
-    timeout: 60000, // 60 seconds
-    retryAttempts: 3,
+    timeout: 90000, // 90 seconds - increased to allow for Cloud9 API retries
+    retryAttempts: 2, // Reduced to 2 - scheduling tool handles internal retries
     retryDelay: 1000, // 1 second
   },
 
