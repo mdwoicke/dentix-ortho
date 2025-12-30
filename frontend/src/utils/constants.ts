@@ -26,6 +26,7 @@ export const ROUTES = {
   TEST_MONITOR_AB_TESTING: '/test-monitor/ab-testing',
   TEST_MONITOR_SANDBOX: '/test-monitor/sandbox',
   TEST_MONITOR_AI_PROMPTING: '/test-monitor/ai-prompting',
+  TEST_MONITOR_API_TESTING: '/test-monitor/api-testing',
   TEST_MONITOR_RUN_DETAIL: '/test-monitor/run/:runId',
 } as const;
 
@@ -36,7 +37,7 @@ export const API_CONFIG = {
   BASE_URL: import.meta.env.VITE_API_URL || 'http://localhost:3001/api',
   DEFAULT_ENVIRONMENT: (import.meta.env.VITE_DEFAULT_ENVIRONMENT || 'sandbox') as 'sandbox' | 'production',
   TIMEOUT: 30000, // 30 seconds
-  AI_TIMEOUT: 300000, // 5 minutes for AI enhancement operations
+  AI_TIMEOUT: 600000, // 10 minutes for AI enhancement operations (large prompts need more time)
 } as const;
 
 /**
@@ -117,6 +118,7 @@ export const STORAGE_KEYS = {
   ENVIRONMENT: 'dentix_environment',
   THEME: 'dentix_theme',
   SIDEBAR_STATE: 'dentix_sidebar_open',
+  SIDEBAR_COLLAPSED: 'dentix_sidebar_collapsed',
 } as const;
 
 /**

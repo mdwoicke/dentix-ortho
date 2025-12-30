@@ -23,6 +23,7 @@ import {
   ABTestingDashboard,
   ABTestingSandbox,
   AIPromptingPage,
+  APITestingPage,
 } from '../pages/TestMonitor';
 import { NotFound } from '../pages/NotFound';
 import { ROUTES } from '../utils/constants';
@@ -58,6 +59,7 @@ export function AppRouter() {
             <Route path="ab-testing" element={<ABTestingDashboard />} />
             <Route path="sandbox" element={<ABTestingSandbox />} />
             <Route path="ai-prompting" element={<AIPromptingPage />} />
+            <Route path="api-testing" element={<APITestingPage />} />
             <Route path="run/:runId" element={<TestRunDetail />} />
           </Route>
 

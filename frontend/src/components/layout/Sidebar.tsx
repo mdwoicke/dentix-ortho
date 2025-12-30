@@ -5,7 +5,7 @@
 
 import { NavLink } from 'react-router-dom';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
-import { selectSidebarOpen, setSidebarOpen } from '../../store/slices/uiSlice';
+import { selectSidebarOpen, setSidebarOpen, selectSidebarCollapsed, toggleSidebarCollapsed } from '../../store/slices/uiSlice';
 import { ROUTES } from '../../utils/constants';
 import { cn } from '../../utils/cn';
 
@@ -111,12 +111,17 @@ const navItems: NavItem[] = [
 export function Sidebar() {
   const dispatch = useAppDispatch();
   const isOpen = useAppSelector(selectSidebarOpen);
+  const isCollapsed = useAppSelector(selectSidebarCollapsed);
 
   const handleClose = () => {
     // Only close on mobile
     if (window.innerWidth < 1024) {
       dispatch(setSidebarOpen(false));
     }
+  };
+
+  const handleToggleCollapse = () => {
+    dispatch(toggleSidebarCollapsed());
   };
 
   return (
@@ -133,30 +138,63 @@ export function Sidebar() {
       {/* Sidebar */}
       <aside
         className={cn(
-          'fixed top-0 left-0 z-40 h-screen pt-16 transition-all bg-white dark:bg-slate-800 border-r border-gray-200 dark:border-slate-700',
+          'fixed top-0 left-0 z-40 h-screen pt-16 transition-all duration-300 bg-white dark:bg-slate-800 border-r border-gray-200 dark:border-slate-700',
           'lg:translate-x-0 lg:static lg:pt-0',
           isOpen ? 'translate-x-0' : '-translate-x-full',
-          'w-64'
+          isCollapsed ? 'lg:w-16' : 'w-64'
         )}
       >
-        <div className="h-full px-3 py-4 overflow-y-auto scrollbar-thin">
-          <nav className="space-y-1">
+        <div className="h-full flex flex-col overflow-y-auto scrollbar-thin">
+          {/* Collapse toggle button - visible only on desktop */}
+          <div className="hidden lg:flex items-center justify-end px-2 py-2 border-b border-gray-200 dark:border-slate-700">
+            <button
+              onClick={handleToggleCollapse}
+              className="p-1.5 rounded-md text-gray-500 dark:text-slate-400 hover:bg-gray-100 dark:hover:bg-slate-700 transition-colors"
+              aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            >
+              <svg
+                className={cn('w-5 h-5 transition-transform duration-300', isCollapsed && 'rotate-180')}
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M11 19l-7-7 7-7m8 14l-7-7 7-7"
+                />
+              </svg>
+            </button>
+          </div>
+
+          {/* Navigation items */}
+          <nav className={cn('flex-1 space-y-1 py-4', isCollapsed ? 'px-2' : 'px-3')}>
             {navItems.map((item) => (
               <NavLink
                 key={item.path}
                 to={item.path}
                 onClick={handleClose}
+                title={isCollapsed ? item.label : undefined}
                 className={({ isActive }) =>
                   cn(
-                    'flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors',
+                    'flex items-center rounded-md text-sm font-medium transition-colors',
+                    isCollapsed ? 'justify-center p-2' : 'gap-3 px-3 py-2',
                     isActive
-                      ? 'bg-blue-50 dark:bg-blue-500/20 text-blue-700 dark:text-blue-300 border-l-4 border-blue-500'
-                      : 'text-gray-700 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-700/50 border-l-4 border-transparent'
+                      ? cn(
+                          'bg-blue-50 dark:bg-blue-500/20 text-blue-700 dark:text-blue-300',
+                          !isCollapsed && 'border-l-4 border-blue-500'
+                        )
+                      : cn(
+                          'text-gray-700 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-700/50',
+                          !isCollapsed && 'border-l-4 border-transparent'
+                        )
                   )
                 }
               >
                 {item.icon}
-                <span>{item.label}</span>
+                {!isCollapsed && <span>{item.label}</span>}
               </NavLink>
             ))}
           </nav>
