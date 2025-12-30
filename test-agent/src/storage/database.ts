@@ -111,6 +111,8 @@ export interface PromptVersion {
 // AI ENHANCEMENT INTERFACES
 // ============================================================================
 
+export type PromptContext = 'production' | 'sandbox_a' | 'sandbox_b';
+
 export interface AIEnhancementHistory {
   id?: number;
   enhancementId: string;
@@ -136,6 +138,9 @@ export interface AIEnhancementHistory {
   appliedAt?: string;
   promotedAt?: string;
   appliedContent?: string;
+  // Context fields for sandbox support
+  context?: PromptContext;
+  sandboxId?: string;
 }
 
 export interface AIEnhancementTemplate {
@@ -834,6 +839,14 @@ export class Database {
 
     // Migration: Add is_enabled field to reference_documents (for selective inclusion in enhancements)
     this.addColumnIfNotExists('reference_documents', 'is_enabled', 'INTEGER DEFAULT 1');
+
+    // Migration: Add context columns to ai_enhancement_history for sandbox support
+    this.addColumnIfNotExists('ai_enhancement_history', 'context', "TEXT DEFAULT 'production'");
+    this.addColumnIfNotExists('ai_enhancement_history', 'sandbox_id', 'TEXT');
+
+    // Add index for context-based queries
+    const db = this.getDb();
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_ai_enhancement_context ON ai_enhancement_history(context, file_key)`);
 
     // Initialize built-in enhancement templates
     this.initializeBuiltInTemplates();
@@ -3377,8 +3390,8 @@ export class Database {
 
     db.prepare(`
       INSERT INTO ai_enhancement_history
-      (enhancement_id, file_key, source_version, command, command_template, web_search_used, status, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      (enhancement_id, file_key, source_version, command, command_template, web_search_used, status, created_by, context, sandbox_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       enhancementId,
       enhancement.fileKey,
@@ -3387,7 +3400,9 @@ export class Database {
       enhancement.commandTemplate || null,
       enhancement.webSearchUsed ? 1 : 0,
       enhancement.status,
-      enhancement.createdBy
+      enhancement.createdBy,
+      enhancement.context || 'production',
+      enhancement.sandboxId || null
     );
 
     return enhancementId;
@@ -3488,15 +3503,15 @@ export class Database {
   /**
    * Get enhancement history for a file
    */
-  getEnhancementHistory(fileKey: string, limit: number = 20): AIEnhancementHistory[] {
+  getEnhancementHistory(fileKey: string, limit: number = 20, context: PromptContext = 'production'): AIEnhancementHistory[] {
     const db = this.getDb();
 
     const rows = db.prepare(`
       SELECT * FROM ai_enhancement_history
-      WHERE file_key = ?
+      WHERE file_key = ? AND (context = ? OR context IS NULL)
       ORDER BY created_at DESC
       LIMIT ?
-    `).all(fileKey, limit) as any[];
+    `).all(fileKey, context, limit) as any[];
 
     return rows.map(row => this.mapEnhancementRow(row));
   }
@@ -3619,6 +3634,9 @@ export class Database {
       appliedAt: row.applied_at,
       promotedAt: row.promoted_at,
       appliedContent: row.applied_content,
+      // Context fields
+      context: row.context || 'production',
+      sandboxId: row.sandbox_id,
     };
   }
 

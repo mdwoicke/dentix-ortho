@@ -318,9 +318,9 @@ export async function updateFixStatus(
 /**
  * Get all prompt files with version info
  */
-export async function getPromptFiles(): Promise<PromptFile[]> {
+export async function getPromptFiles(context: PromptContext = 'production'): Promise<PromptFile[]> {
   const response = await get<TestMonitorApiResponse<PromptFile[]>>(
-    '/test-monitor/prompts'
+    `/test-monitor/prompts?context=${context}`
   );
   return response.data;
 }
@@ -328,9 +328,9 @@ export async function getPromptFiles(): Promise<PromptFile[]> {
 /**
  * Get current content of a prompt file
  */
-export async function getPromptContent(fileKey: string): Promise<PromptContent> {
+export async function getPromptContent(fileKey: string, context: PromptContext = 'production'): Promise<PromptContent> {
   const response = await get<TestMonitorApiResponse<PromptContent>>(
-    `/test-monitor/prompts/${fileKey}`
+    `/test-monitor/prompts/${fileKey}?context=${context}`
   );
   return response.data;
 }
@@ -340,10 +340,11 @@ export async function getPromptContent(fileKey: string): Promise<PromptContent> 
  */
 export async function getPromptHistory(
   fileKey: string,
-  limit: number = 20
+  limit: number = 20,
+  context: PromptContext = 'production'
 ): Promise<PromptVersionHistory[]> {
   const response = await get<TestMonitorApiResponse<PromptVersionHistory[]>>(
-    `/test-monitor/prompts/${fileKey}/history?limit=${limit}`
+    `/test-monitor/prompts/${fileKey}/history?limit=${limit}&context=${context}`
   );
   return response.data;
 }
@@ -353,10 +354,11 @@ export async function getPromptHistory(
  */
 export async function getPromptVersionContent(
   fileKey: string,
-  version: number
+  version: number,
+  context: PromptContext = 'production'
 ): Promise<PromptContent> {
   const response = await get<TestMonitorApiResponse<PromptContent>>(
-    `/test-monitor/prompts/${fileKey}/version/${version}`
+    `/test-monitor/prompts/${fileKey}/version/${version}?context=${context}`
   );
   return response.data;
 }
@@ -1023,6 +1025,7 @@ import type {
   QualityScore,
   ReferenceDocument,
   UpdateReferenceDocumentRequest,
+  PromptContext,
 } from '../../types/aiPrompting.types';
 
 /**
@@ -1072,11 +1075,13 @@ export async function enhancePrompt(
  */
 export async function getEnhancementHistory(
   fileKey: string,
-  limit?: number
+  limit?: number,
+  context: PromptContext = 'production'
 ): Promise<EnhancementHistory[]> {
   const params = new URLSearchParams();
   if (limit) params.append('limit', limit.toString());
-  const queryString = params.toString() ? `?${params.toString()}` : '';
+  params.append('context', context);
+  const queryString = `?${params.toString()}`;
 
   const response = await get<TestMonitorApiResponse<EnhancementHistory[]>>(
     `/test-monitor/prompts/${fileKey}/enhancements${queryString}`
@@ -1137,11 +1142,13 @@ export async function discardEnhancement(
  */
 export async function getQualityScore(
   fileKey: string,
-  version?: number
+  version?: number,
+  context: PromptContext = 'production'
 ): Promise<QualityScore> {
   const params = new URLSearchParams();
   if (version) params.append('version', version.toString());
-  const queryString = params.toString() ? `?${params.toString()}` : '';
+  params.append('context', context);
+  const queryString = `?${params.toString()}`;
 
   const response = await get<TestMonitorApiResponse<QualityScore>>(
     `/test-monitor/prompts/${fileKey}/quality-score${queryString}`,

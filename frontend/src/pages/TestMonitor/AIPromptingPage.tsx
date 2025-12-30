@@ -10,6 +10,7 @@ import type {
   EnhancementHistory,
   QualityScore,
   ReferenceDocument,
+  PromptContext,
 } from '../../types/aiPrompting.types';
 import {
   FILE_KEY_DISPLAY_NAMES,
@@ -1355,6 +1356,7 @@ const PopoutHighlightedView: React.FC<{
 
 const AIPromptingPage: React.FC = () => {
   // State
+  const [selectedContext, setSelectedContext] = useState<PromptContext>('production');
   const [promptFiles, setPromptFiles] = useState<PromptFile[]>([]);
   const [filesLoading, setFilesLoading] = useState(false);
   const [selectedFileKey, setSelectedFileKey] = useState<string>('');
@@ -1392,13 +1394,32 @@ const AIPromptingPage: React.FC = () => {
   const [referenceDocs, setReferenceDocs] = useState<ReferenceDocument[]>([]);
   const [referenceDocsLoading, setReferenceDocsLoading] = useState(false);
 
-  // Load initial data
+  // Load initial data and when context changes
   useEffect(() => {
     loadPromptFiles();
     loadTemplates();
-  }, []);
+  }, [selectedContext]);
 
-  // Load version history when file changes
+  // Context change handler - clears state before switching
+  const handleContextChange = (newContext: PromptContext) => {
+    if (newContext === selectedContext) return;
+
+    // Clear all file-specific state
+    setPreviewResult(null);
+    setSelectedEnhancementId(null);
+    setSelectedEnhancementDetails(null);
+    setContentView(null);
+    setVersionHistory([]);
+    setEnhancementHistory([]);
+    setQualityScore(null);
+    setError(null);
+    setSuccessMessage(null);
+
+    // Update context (this triggers useEffect to reload files)
+    setSelectedContext(newContext);
+  };
+
+  // Load version history when file or context changes
   useEffect(() => {
     if (selectedFileKey) {
       loadVersionHistory();
@@ -1410,7 +1431,7 @@ const AIPromptingPage: React.FC = () => {
       setSelectedEnhancementDetails(null);
       setPreviewResult(null);
     }
-  }, [selectedFileKey]);
+  }, [selectedFileKey, selectedContext]);
 
   // Reload content when version selection changes
   useEffect(() => {
@@ -1429,7 +1450,7 @@ const AIPromptingPage: React.FC = () => {
   const loadPromptFiles = async () => {
     setFilesLoading(true);
     try {
-      const files = await testMonitorApi.getPromptFiles();
+      const files = await testMonitorApi.getPromptFiles(selectedContext);
       setPromptFiles(files);
       if (files.length > 0 && !selectedFileKey) {
         setSelectedFileKey(files[0].fileKey);
@@ -1452,7 +1473,7 @@ const AIPromptingPage: React.FC = () => {
 
   const loadVersionHistory = async () => {
     try {
-      const history = await testMonitorApi.getPromptHistory(selectedFileKey, 20);
+      const history = await testMonitorApi.getPromptHistory(selectedFileKey, 20, selectedContext);
       setVersionHistory(history);
     } catch (err) {
       console.error('Failed to load version history:', err);
@@ -1461,7 +1482,7 @@ const AIPromptingPage: React.FC = () => {
 
   const loadEnhancementHistory = async () => {
     try {
-      const history = await testMonitorApi.getEnhancementHistory(selectedFileKey, 10);
+      const history = await testMonitorApi.getEnhancementHistory(selectedFileKey, 10, selectedContext);
       setEnhancementHistory(history);
     } catch (err) {
       console.error('Failed to load enhancement history:', err);
@@ -1476,9 +1497,9 @@ const AIPromptingPage: React.FC = () => {
     try {
       let result: PromptContent;
       if (selectedVersion) {
-        result = await testMonitorApi.getPromptVersionContent(selectedFileKey, selectedVersion);
+        result = await testMonitorApi.getPromptVersionContent(selectedFileKey, selectedVersion, selectedContext);
       } else {
-        result = await testMonitorApi.getPromptContent(selectedFileKey);
+        result = await testMonitorApi.getPromptContent(selectedFileKey, selectedContext);
       }
       setContentView({
         content: result.content,
@@ -1495,7 +1516,7 @@ const AIPromptingPage: React.FC = () => {
     setQualityScoreLoading(true);
     setQualityScore(null); // Clear old score immediately
     try {
-      const score = await testMonitorApi.getQualityScore(selectedFileKey, selectedVersion);
+      const score = await testMonitorApi.getQualityScore(selectedFileKey, selectedVersion, selectedContext);
       setQualityScore(score);
     } catch (err) {
       console.error('Failed to load quality score:', err);
@@ -1583,6 +1604,7 @@ const AIPromptingPage: React.FC = () => {
         templateId: selectedTemplateId,
         useWebSearch,
         sourceVersion: selectedVersion,
+        context: selectedContext,
       });
 
       if (result.status === 'failed') {
@@ -1613,6 +1635,7 @@ const AIPromptingPage: React.FC = () => {
         useWebSearch,
         sourceVersion: selectedVersion,
         enhancementId: previewResult.enhancementId, // Use cached preview - no LLM call!
+        context: selectedContext,
       });
 
       if (enhanceResult.status === 'failed') {
@@ -1778,11 +1801,34 @@ const AIPromptingPage: React.FC = () => {
   return (
     <div className="h-full flex flex-col p-6 overflow-y-auto">
       {/* Header */}
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">AI Prompting</h1>
-        <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">
-          Enhance prompts and tools with AI-powered improvements
-        </p>
+      <div className="mb-4 flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">AI Prompting</h1>
+          <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">
+            Enhance prompts and tools with AI-powered improvements
+          </p>
+        </div>
+
+        {/* Context Selector */}
+        <div className="flex gap-1 p-1 bg-gray-100 dark:bg-gray-700 rounded-lg">
+          {(['production', 'sandbox_a', 'sandbox_b'] as const).map((ctx) => (
+            <button
+              key={ctx}
+              onClick={() => handleContextChange(ctx)}
+              className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                selectedContext === ctx
+                  ? ctx === 'production'
+                    ? 'bg-blue-600 text-white'
+                    : ctx === 'sandbox_a'
+                    ? 'bg-green-600 text-white'
+                    : 'bg-purple-600 text-white'
+                  : 'text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
+              }`}
+            >
+              {ctx === 'production' ? 'Production' : ctx === 'sandbox_a' ? 'Sandbox A' : 'Sandbox B'}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Messages */}

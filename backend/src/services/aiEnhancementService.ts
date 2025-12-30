@@ -268,12 +268,15 @@ function parseEnhancementResponse(content: string): {
 // TYPES
 // ============================================================================
 
+export type PromptContext = 'production' | 'sandbox_a' | 'sandbox_b';
+
 export interface EnhanceRequest {
   fileKey: string;
   command: string;
   templateId?: string;
   useWebSearch?: boolean;
   sourceVersion?: number;
+  context?: PromptContext;
 }
 
 export interface EnhanceResult {
@@ -452,33 +455,19 @@ export class AIEnhancementService {
    * Returns enhancementId so it can be confirmed later without re-running LLM
    */
   async previewEnhancement(request: EnhanceRequest): Promise<EnhanceResult> {
-    // Create DB record first to get a real enhancementId
-    const promptFile = promptService.getPromptContent(request.fileKey);
-    if (!promptFile) {
-      throw new Error(`Prompt file not found: ${request.fileKey}`);
-    }
-    const sourceVersion = request.sourceVersion || promptFile.version;
+    const context = request.context || 'production';
 
-    const enhancementId = this.db.createEnhancement({
-      enhancementId: '', // Will be generated
-      fileKey: request.fileKey,
-      sourceVersion,
-      command: request.command,
-      commandTemplate: request.templateId,
-      webSearchUsed: request.useWebSearch || false,
-      status: 'preview', // Mark as preview - can be confirmed later
-      createdBy: 'user',
-    });
+    // Get source content based on context (production vs sandbox)
+    let originalContent: string;
+    let sourceVersion: number;
 
-    try {
-      // Get current content
+    if (context === 'production') {
+      // Production: Get from main prompt files
       const promptFile = promptService.getPromptContent(request.fileKey);
       if (!promptFile) {
         throw new Error(`Prompt file not found: ${request.fileKey}`);
       }
-
-      const sourceVersion = request.sourceVersion || promptFile.version;
-      let originalContent: string;
+      sourceVersion = request.sourceVersion || promptFile.version;
 
       if (request.sourceVersion && request.sourceVersion !== promptFile.version) {
         const versionContent = promptService.getVersionContent(request.fileKey, request.sourceVersion);
@@ -489,6 +478,30 @@ export class AIEnhancementService {
       } else {
         originalContent = promptFile.content;
       }
+    } else {
+      // Sandbox: Get from ab_sandbox_files
+      const sandboxFile = this.db.getSandboxFile(context, request.fileKey);
+      if (!sandboxFile) {
+        throw new Error(`File ${request.fileKey} not found in ${context}. Copy from production first.`);
+      }
+      originalContent = sandboxFile.content;
+      sourceVersion = sandboxFile.version;
+    }
+
+    const enhancementId = this.db.createEnhancement({
+      enhancementId: '', // Will be generated
+      fileKey: request.fileKey,
+      sourceVersion,
+      command: request.command,
+      commandTemplate: request.templateId,
+      webSearchUsed: request.useWebSearch || false,
+      status: 'preview', // Mark as preview - can be confirmed later
+      createdBy: 'user',
+      context,
+      sandboxId: context !== 'production' ? context : undefined,
+    });
+
+    try {
 
       // Get template if specified
       let command = request.command;
@@ -769,9 +782,10 @@ ${doc.extractedText}
   }
 
   /**
-   * Apply an enhancement - saves to AI Enhancements storage (NOT to main prompt files)
-   * Use promoteToProduction() to actually save to the main prompt files
-   * @param customDescription - Optional custom description for when promoted
+   * Apply an enhancement
+   * - For sandbox context: saves directly to sandbox files
+   * - For production context: saves to AI Enhancements storage (use promoteToProduction to save to main files)
+   * @param customDescription - Optional custom description
    */
   async applyEnhancement(
     fileKey: string,
@@ -793,29 +807,63 @@ ${doc.extractedText}
         throw new Error('Enhancement has no content to apply');
       }
 
-      // Store the description for later use when promoting
+      const context = enhancement.context || 'production';
       const description = customDescription?.trim() ||
         `AI Enhancement [${enhancementId.slice(0, 8)}]: ${enhancement.command}`;
 
-      // Save to AI Enhancements storage (NOT to main prompt files)
-      // The enhancement stays in the "AI Enhancements" group until promoted
-      this.db.updateEnhancement(enhancementId, {
-        status: 'applied',
-        appliedAt: new Date().toISOString(),
-        appliedContent: aiResponse.enhancedContent,
-        // Store description in metadata for use when promoting
-        metadataJson: JSON.stringify({
-          ...JSON.parse(enhancement.metadataJson || '{}'),
-          pendingDescription: description,
-        }),
-      });
+      if (context !== 'production') {
+        // SANDBOX CONTEXT: Save directly to sandbox files
+        const existingFile = this.db.getSandboxFile(context, fileKey);
+        if (!existingFile) {
+          throw new Error(`File ${fileKey} not found in ${context}`);
+        }
 
-      return {
-        success: true,
-        newVersion: 0, // No version created yet - only created when promoted
-        fileKey,
-        enhancementId,
-      };
+        // Save to sandbox file
+        const newVersion = this.db.saveSandboxFile({
+          sandboxId: context,
+          fileKey,
+          fileType: existingFile.fileType,
+          displayName: existingFile.displayName,
+          content: aiResponse.enhancedContent,
+          version: existingFile.version + 1,
+          changeDescription: description,
+        });
+
+        // Update enhancement status
+        this.db.updateEnhancement(enhancementId, {
+          status: 'applied',
+          appliedAt: new Date().toISOString(),
+          appliedContent: aiResponse.enhancedContent,
+          resultVersion: newVersion,
+        });
+
+        return {
+          success: true,
+          newVersion,
+          fileKey,
+          enhancementId,
+        };
+      } else {
+        // PRODUCTION CONTEXT: Save to AI Enhancements storage (NOT to main prompt files)
+        // The enhancement stays in the "AI Enhancements" group until promoted
+        this.db.updateEnhancement(enhancementId, {
+          status: 'applied',
+          appliedAt: new Date().toISOString(),
+          appliedContent: aiResponse.enhancedContent,
+          // Store description in metadata for use when promoting
+          metadataJson: JSON.stringify({
+            ...JSON.parse(enhancement.metadataJson || '{}'),
+            pendingDescription: description,
+          }),
+        });
+
+        return {
+          success: true,
+          newVersion: 0, // No version created yet - only created when promoted
+          fileKey,
+          enhancementId,
+        };
+      }
     } catch (error) {
       return {
         success: false,
@@ -1161,8 +1209,8 @@ ${doc.extractedText}
   /**
    * Get enhancement history for a file
    */
-  getEnhancementHistory(fileKey: string, limit: number = 20): AIEnhancementHistory[] {
-    return this.db.getEnhancementHistory(fileKey, limit);
+  getEnhancementHistory(fileKey: string, limit: number = 20, context: PromptContext = 'production'): AIEnhancementHistory[] {
+    return this.db.getEnhancementHistory(fileKey, limit, context);
   }
 
   /**

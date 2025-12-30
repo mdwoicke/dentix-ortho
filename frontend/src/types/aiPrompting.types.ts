@@ -5,6 +5,11 @@
  */
 
 /**
+ * Context for prompt operations (production or sandbox)
+ */
+export type PromptContext = 'production' | 'sandbox_a' | 'sandbox_b';
+
+/**
  * Request to enhance a prompt using AI
  */
 export interface EnhanceRequest {
@@ -14,6 +19,7 @@ export interface EnhanceRequest {
   useWebSearch?: boolean;
   sourceVersion?: number;
   enhancementId?: string; // If provided, saves an existing preview (fast - no LLM call)
+  context?: PromptContext; // Context for sandbox support
 }
 
 /**
@@ -144,6 +150,9 @@ export interface EnhancementHistory {
   appliedAt?: string;
   promotedAt?: string;
   appliedContent?: string;
+  // Context fields for sandbox support
+  context?: PromptContext;
+  sandboxId?: string;
 }
 
 /**

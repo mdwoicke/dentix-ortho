@@ -21,6 +21,16 @@ import * as documentParserService from '../services/documentParserService';
 // Path to test-agent database
 const TEST_AGENT_DB_PATH = path.resolve(__dirname, '../../../test-agent/data/test-results.db');
 
+// Prompt context type for sandbox support
+type PromptContext = 'production' | 'sandbox_a' | 'sandbox_b';
+
+// File key display names
+const FILE_KEY_DISPLAY_NAMES: Record<string, string> = {
+  'system_prompt': 'System Prompt',
+  'scheduling_tool': 'Scheduling Tool',
+  'patient_tool': 'Patient Tool',
+};
+
 // ============================================================================
 // MULTER CONFIGURATION FOR FILE UPLOADS
 // ============================================================================
@@ -962,9 +972,38 @@ export async function streamTestRun(req: Request, res: Response, _next: NextFunc
  * GET /api/test-monitor/prompts
  * List all prompt files with their current version info
  */
-export async function getPromptFiles(_req: Request, res: Response, next: NextFunction): Promise<void> {
+export async function getPromptFiles(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const files = promptService.getPromptFiles();
+    const context = (req.query.context as PromptContext) || 'production';
+
+    if (context === 'production') {
+      const files = promptService.getPromptFiles();
+      res.json({ success: true, data: files });
+      return;
+    }
+
+    // Sandbox context - get from ab_sandbox_files
+    const db = new BetterSqlite3(TEST_AGENT_DB_PATH);
+    const sandboxFiles = db.prepare(`
+      SELECT file_key, display_name, content, version, updated_at
+      FROM ab_sandbox_files
+      WHERE sandbox_id = ?
+    `).all(context) as any[];
+    db.close();
+
+    // Map to same format as production files, including files that don't exist yet
+    const files = ['system_prompt', 'scheduling_tool', 'patient_tool'].map(fileKey => {
+      const sandboxFile = sandboxFiles.find((f: any) => f.file_key === fileKey);
+      return {
+        fileKey,
+        displayName: FILE_KEY_DISPLAY_NAMES[fileKey] || fileKey,
+        fileType: fileKey === 'system_prompt' ? 'markdown' : 'javascript',
+        version: sandboxFile?.version || 0,
+        exists: !!sandboxFile,
+        updatedAt: sandboxFile?.updated_at || null,
+      };
+    });
+
     res.json({ success: true, data: files });
   } catch (error) {
     next(error);
@@ -978,14 +1017,47 @@ export async function getPromptFiles(_req: Request, res: Response, next: NextFun
 export async function getPromptContent(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { fileKey } = req.params;
-    const result = promptService.getPromptContent(fileKey);
+    const context = (req.query.context as PromptContext) || 'production';
 
-    if (!result) {
-      res.status(404).json({ success: false, error: 'Prompt file not found' });
+    if (context === 'production') {
+      const result = promptService.getPromptContent(fileKey);
+      if (!result) {
+        res.status(404).json({ success: false, error: 'Prompt file not found' });
+        return;
+      }
+      res.json({ success: true, data: result });
       return;
     }
 
-    res.json({ success: true, data: result });
+    // Sandbox context
+    const db = new BetterSqlite3(TEST_AGENT_DB_PATH);
+    const sandboxFile = db.prepare(`
+      SELECT file_key, content, version, change_description, updated_at
+      FROM ab_sandbox_files
+      WHERE sandbox_id = ? AND file_key = ?
+    `).get(context, fileKey) as any;
+    db.close();
+
+    if (!sandboxFile) {
+      res.status(404).json({
+        success: false,
+        error: 'File not found in sandbox. Copy from production first.',
+        exists: false,
+        canCopyFromProduction: true
+      });
+      return;
+    }
+
+    res.json({
+      success: true,
+      data: {
+        fileKey: sandboxFile.file_key,
+        content: sandboxFile.content,
+        version: sandboxFile.version,
+        changeDescription: sandboxFile.change_description,
+        updatedAt: sandboxFile.updated_at,
+      }
+    });
   } catch (error) {
     next(error);
   }
@@ -999,9 +1071,34 @@ export async function getPromptHistory(req: Request, res: Response, next: NextFu
   try {
     const { fileKey } = req.params;
     const limit = parseInt(req.query.limit as string) || 20;
+    const context = (req.query.context as PromptContext) || 'production';
 
-    const history = promptService.getPromptHistory(fileKey, limit);
-    res.json({ success: true, data: history });
+    if (context === 'production') {
+      const history = promptService.getPromptHistory(fileKey, limit);
+      res.json({ success: true, data: history });
+      return;
+    }
+
+    // Sandbox context - get from ab_sandbox_file_history
+    const db = new BetterSqlite3(TEST_AGENT_DB_PATH);
+    const history = db.prepare(`
+      SELECT version, content, change_description, created_at
+      FROM ab_sandbox_file_history
+      WHERE sandbox_id = ? AND file_key = ?
+      ORDER BY version DESC
+      LIMIT ?
+    `).all(context, fileKey, limit) as any[];
+    db.close();
+
+    const formattedHistory = history.map((h: any) => ({
+      version: h.version,
+      changeDescription: h.change_description,
+      createdAt: h.created_at,
+      isExperimental: false,
+      aiGenerated: false,
+    }));
+
+    res.json({ success: true, data: formattedHistory });
   } catch (error) {
     next(error);
   }
@@ -4335,7 +4432,7 @@ export async function previewEnhancement(
 ): Promise<void> {
   try {
     const { fileKey } = req.params;
-    const { command, templateId, useWebSearch, sourceVersion } = req.body;
+    const { command, templateId, useWebSearch, sourceVersion, context } = req.body;
 
     if (!command && !templateId) {
       res.status(400).json({
@@ -4351,6 +4448,7 @@ export async function previewEnhancement(
       templateId,
       useWebSearch: useWebSearch || false,
       sourceVersion,
+      context: context || 'production',
     });
 
     res.json({
@@ -4375,7 +4473,8 @@ export async function enhancePrompt(
 ): Promise<void> {
   try {
     const { fileKey } = req.params;
-    const { command, templateId, useWebSearch, sourceVersion, enhancementId } = req.body;
+    const { command, templateId, useWebSearch, sourceVersion, enhancementId, context } = req.body;
+    const promptContext = (context as PromptContext) || 'production';
 
     // If enhancementId is provided, save the existing preview (no LLM call needed)
     if (enhancementId) {
@@ -4398,13 +4497,14 @@ export async function enhancePrompt(
       return;
     }
 
-    console.log(`[EnhancePrompt] Running new enhancement for ${fileKey}`);
+    console.log(`[EnhancePrompt] Running new enhancement for ${fileKey} (context: ${promptContext})`);
     const result = await aiEnhancementService.enhancePrompt({
       fileKey,
       command: command || '',
       templateId,
       useWebSearch: useWebSearch || false,
       sourceVersion,
+      context: promptContext,
     });
 
     res.json({
@@ -4428,8 +4528,9 @@ export async function getEnhancementHistory(
   try {
     const { fileKey } = req.params;
     const limit = parseInt(req.query.limit as string) || 20;
+    const context = (req.query.context as PromptContext) || 'production';
 
-    const history = aiEnhancementService.getEnhancementHistory(fileKey, limit);
+    const history = aiEnhancementService.getEnhancementHistory(fileKey, limit, context);
 
     res.json({
       success: true,
