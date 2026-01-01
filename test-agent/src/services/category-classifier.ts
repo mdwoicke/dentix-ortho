@@ -883,7 +883,9 @@ Return ONLY the JSON, no markdown.`;
     }
 
     // Override for specific confirmation subjects
-    if (result.category === 'confirm_or_deny') {
+    // IMPORTANT: Don't override terminal state intents (booking, transfer, goodbye)
+    const isTerminalIntent = result.terminalState && result.terminalState !== 'none';
+    if (result.category === 'confirm_or_deny' && !isTerminalIntent) {
       switch (result.confirmationSubject) {
         case 'spelling_correct':
           primaryIntent = 'confirming_spelling';
@@ -903,8 +905,8 @@ Return ONLY the JSON, no markdown.`;
       }
     }
 
-    // Handle select_from_options
-    if (result.category === 'select_from_options') {
+    // Handle select_from_options (don't override terminal state intents)
+    if (result.category === 'select_from_options' && !isTerminalIntent) {
       primaryIntent = 'offering_time_slots';
     }
 
