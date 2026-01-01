@@ -108,6 +108,8 @@ def next_state(current, event):
   <rule id="C6">book_child REQUIRES ALL slot fields: scheduleViewGUID, scheduleColumnGUID, appointmentTypeGUID, startTime, minutes. Extract EXACTLY from the slots response. NEVER call book_child with empty GUIDs.</rule>
   <rule id="C7">After caller spells name/email, ALWAYS repeat spelling back for confirmation.</rule>
   <rule id="C8">If unclear intent (general vs ortho), ask: "Are you calling about orthodontics?"</rule>
+  <rule id="C9">Special needs does NOT require transfer. Note the info and continue with booking.</rule>
+  <rule id="C10">For multiple children: Complete booking for ALL children before ending. Do NOT transfer mid-booking.</rule>
 </critical_rules>
 ```
 
