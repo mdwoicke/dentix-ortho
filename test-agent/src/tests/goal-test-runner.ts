@@ -20,11 +20,89 @@ import {
   VariantService,
   type VariantSelection,
 } from '../services/ab-testing';
+// New category-based system
+import { CategoryClassifier, getCategoryClassifier } from '../services/category-classifier';
+import { ResponseStrategyEngine, createResponseStrategyEngine } from '../services/response-strategy-engine';
+import type { CategoryClassificationResult, DataFieldCategory } from '../schemas/response-category-schemas';
 import type { GoalOrientedTestCase, GoalTestResult } from './types/goal-test';
 import type { ConversationTurn, Finding } from './test-case';
 import type { IntentDetectionResult } from './types/intent';
 import type { UserPersona, DynamicUserPersona, ResolvedPersona } from './types/persona';
+import type { CollectableField } from './types/goals';
 import { config } from '../config/config';
+
+/**
+ * Pattern definitions for extracting volunteered data from user messages.
+ * This helps track data that users provide without being explicitly asked.
+ */
+interface VolunteeredData {
+  field: CollectableField;
+  value: string;
+}
+
+/**
+ * Extract volunteered data from a user message.
+ * Detects phone numbers, emails, names, and other data that users
+ * commonly provide upfront without being asked.
+ */
+function extractVolunteeredData(message: string): VolunteeredData[] {
+  const extracted: VolunteeredData[] = [];
+
+  // Phone number patterns (US format)
+  const phonePatterns = [
+    /\b(\d{3}[-.\s]?\d{3}[-.\s]?\d{4})\b/,
+    /\b(\(\d{3}\)\s?\d{3}[-.\s]?\d{4})\b/,
+    /\b(1[-.\s]?\d{3}[-.\s]?\d{3}[-.\s]?\d{4})\b/,
+  ];
+  for (const pattern of phonePatterns) {
+    const match = message.match(pattern);
+    if (match) {
+      extracted.push({ field: 'parent_phone', value: match[1] });
+      break;
+    }
+  }
+
+  // Email pattern
+  const emailPattern = /\b([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\b/i;
+  const emailMatch = message.match(emailPattern);
+  if (emailMatch) {
+    extracted.push({ field: 'parent_email', value: emailMatch[1] });
+  }
+
+  // Insurance provider names (common ones)
+  const insurancePatterns = [
+    /\b(aetna|cigna|united\s*health|blue\s*cross|anthem|humana|kaiser|keystone\s*first|medicaid|medicare)\b/i,
+    /\binsurance\s+is\s+([a-zA-Z\s]+?)(?:\.|,|$)/i,
+    /\bthrough\s+([a-zA-Z\s]+?)(?:\s+insurance|\.|,|$)/i,
+  ];
+  for (const pattern of insurancePatterns) {
+    const match = message.match(pattern);
+    if (match) {
+      extracted.push({ field: 'insurance', value: match[1].trim() });
+      break;
+    }
+  }
+
+  // Name extraction - look for "I'm [Name]" or "my name is [Name]" or "this is [Name]"
+  const namePatterns = [
+    /\b(?:i'?m|my name is|this is)\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)?)\b/i,
+    /\bhi,?\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)?)\s+(?:here|calling)\b/i,
+  ];
+  for (const pattern of namePatterns) {
+    const match = message.match(pattern);
+    if (match) {
+      // Only add if it looks like a real name (not a common word)
+      const name = match[1];
+      const commonWords = ['calling', 'looking', 'trying', 'wanting', 'needing', 'interested'];
+      if (!commonWords.includes(name.toLowerCase())) {
+        extracted.push({ field: 'parent_name', value: name });
+        break;
+      }
+    }
+  }
+
+  return extracted;
+}
 
 /**
  * Configuration for the goal test runner
@@ -44,6 +122,13 @@ export interface GoalTestRunnerConfig {
 
   /** Whether to continue on non-critical errors */
   continueOnError: boolean;
+
+  /**
+   * Use the new category-based classification and response system.
+   * When true, uses CategoryClassifier + ResponseStrategyEngine.
+   * When false, uses legacy IntentDetector + ResponseGenerator.
+   */
+  useCategoryBasedSystem: boolean;
 }
 
 const DEFAULT_CONFIG: GoalTestRunnerConfig = {
@@ -52,6 +137,7 @@ const DEFAULT_CONFIG: GoalTestRunnerConfig = {
   turnTimeout: 30000,
   saveProgressSnapshots: true,
   continueOnError: true,
+  useCategoryBasedSystem: true, // Default to new system
 };
 
 /**
@@ -89,6 +175,10 @@ export class GoalTestRunner {
   private experimentService: ExperimentService | null = null;
   private variantService: VariantService | null = null;
 
+  // New category-based system
+  private categoryClassifier: CategoryClassifier;
+  private responseStrategyEngine: ResponseStrategyEngine;
+
   constructor(
     flowiseClient: FlowiseClient,
     database: Database,
@@ -99,6 +189,18 @@ export class GoalTestRunner {
     this.database = database;
     this.intentDetector = intentDetector;
     this.config = { ...DEFAULT_CONFIG, ...cfg };
+
+    // Initialize new category-based services
+    this.categoryClassifier = getCategoryClassifier();
+    this.responseStrategyEngine = createResponseStrategyEngine({
+      useLlmForComplex: false, // Templates by default
+    });
+
+    if (this.config.useCategoryBasedSystem) {
+      console.log('[GoalTestRunner] Using category-based classification system');
+    } else {
+      console.log('[GoalTestRunner] Using legacy intent-based system');
+    }
   }
 
   /**
@@ -183,33 +285,98 @@ export class GoalTestRunner {
 
       turnNumber = 1;
 
+      // Track child index for multi-child scenarios
+      let currentChildIndex = 0;
+      const providedFields = new Set<DataFieldCategory>();
+
+      // Extract volunteered data from initial message
+      const initialVolunteeredData = extractVolunteeredData(initialMessage);
+      for (const { field, value } of initialVolunteeredData) {
+        progressTracker.markFieldCollected(field, value, 1);
+        console.log(`[GoalTestRunner] Extracted volunteered ${field}: ${value}`);
+      }
+
       // Main conversation loop
       while (!this.shouldStop(progressTracker, turnNumber, testCase)) {
         // Get the last agent response
         const lastAgentTurn = transcript.filter(t => t.role === 'assistant').pop();
         if (!lastAgentTurn) break;
 
-        // Detect what the agent is asking for
-        const intentResult = await this.intentDetector.detectIntent(
-          lastAgentTurn.content,
-          transcript,
-          progressTracker.getPendingFields()
-        );
+        let intentResult: IntentDetectionResult;
+        let userResponse: string;
 
-        // Check if conversation should end
-        if (this.isTerminalIntent(intentResult)) {
-          console.log(`[GoalTestRunner] Terminal intent detected: ${intentResult.primaryIntent}`);
+        if (this.config.useCategoryBasedSystem) {
+          // New category-based system
+          const classification = await this.categoryClassifier.classify(
+            lastAgentTurn.content,
+            transcript,
+            personaToUse
+          );
 
-          // Update progress one more time for terminal intents
-          progressTracker.updateProgress(intentResult, '', turnNumber);
-          break;
+          // Check if conversation should end
+          if (this.categoryClassifier.isTerminal(classification)) {
+            console.log(`[GoalTestRunner] Terminal state: ${classification.terminalState}`);
+            intentResult = this.categoryClassifier.toLegacyIntent(classification);
+            progressTracker.updateProgress(intentResult, '', turnNumber);
+            break;
+          }
+
+          // Detect child advancement
+          if (/\b(next|other|second|third)\s+(child|kid|patient)\b/i.test(lastAgentTurn.content)) {
+            if (currentChildIndex < personaToUse.inventory.children.length - 1) {
+              currentChildIndex++;
+              console.log(`[GoalTestRunner] Advanced to child ${currentChildIndex + 1}`);
+            }
+          }
+
+          // Generate response using strategy engine
+          userResponse = await this.responseStrategyEngine.generateResponse(
+            classification,
+            personaToUse,
+            {
+              currentChildIndex,
+              providedFields,
+              conversationHistory: transcript,
+              turnNumber,
+            }
+          );
+
+          // Mark provided fields
+          if (classification.dataFields) {
+            for (const field of classification.dataFields) {
+              providedFields.add(field);
+            }
+          }
+
+          // Convert to legacy intent for progress tracker
+          intentResult = this.categoryClassifier.toLegacyIntent(classification);
+        } else {
+          // Legacy intent-based system
+          intentResult = await this.intentDetector.detectIntent(
+            lastAgentTurn.content,
+            transcript,
+            progressTracker.getPendingFields()
+          );
+
+          // Check if conversation should end
+          if (this.isTerminalIntent(intentResult)) {
+            console.log(`[GoalTestRunner] Terminal intent detected: ${intentResult.primaryIntent}`);
+            progressTracker.updateProgress(intentResult, '', turnNumber);
+            break;
+          }
+
+          // Generate user response based on intent
+          userResponse = await responseGenerator.generateResponse(intentResult, transcript);
         }
-
-        // Generate user response based on intent
-        const userResponse = await responseGenerator.generateResponse(intentResult, transcript);
 
         // Update progress tracker
         progressTracker.updateProgress(intentResult, userResponse, turnNumber);
+
+        // Extract any volunteered data from user response
+        const volunteeredData = extractVolunteeredData(userResponse);
+        for (const { field, value } of volunteeredData) {
+          progressTracker.markFieldCollected(field, value, turnNumber);
+        }
 
         // Check for abort conditions
         if (progressTracker.shouldAbort()) {

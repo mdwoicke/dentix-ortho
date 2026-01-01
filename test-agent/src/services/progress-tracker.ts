@@ -685,6 +685,30 @@ export class ProgressTracker {
   }
 
   /**
+   * Mark a field as collected (for volunteered data not triggered by agent intent)
+   * This allows tracking fields that the user provides without being asked.
+   */
+  markFieldCollected(field: CollectableField, value: string, turnNumber: number): void {
+    if (!this.state.collectedFields.has(field)) {
+      this.state.collectedFields.set(field, {
+        field,
+        value,
+        collectedAtTurn: turnNumber,
+        confirmedByAgent: false,
+        userResponse: value,
+      });
+
+      // Remove from pending if it was there
+      this.state.pendingFields = this.state.pendingFields.filter(f => f !== field);
+
+      console.log(`[ProgressTracker] Marked volunteered field: ${field}`);
+
+      // Re-evaluate goals since we collected new data
+      this.evaluateGoals();
+    }
+  }
+
+  /**
    * Reset tracker for a new conversation
    */
   reset(): void {

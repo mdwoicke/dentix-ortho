@@ -190,7 +190,11 @@ export const PRESET_CONSTRAINTS = {
     type: 'must_not_happen',
     description: 'No error messages should appear in agent responses',
     condition: (ctx) => ctx.conversationHistory.some(
-      t => t.role === 'assistant' && /\b(error|failed|problem|sorry.*trouble)\b/i.test(t.content)
+      t => t.role === 'assistant' &&
+        // Check for error patterns but exclude common polite phrases
+        /\b(error|failed|sorry\s+.*\s+trouble)\b/i.test(t.content) ||
+        // "problem" only counts if NOT preceded by "no" (e.g., "there's a problem" but not "no problem")
+        (t.role === 'assistant' && /\bproblem\b/i.test(t.content) && !/\bno\s+problem\b/i.test(t.content))
     ),
     severity: 'critical',
   }),

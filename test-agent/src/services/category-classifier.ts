@@ -92,9 +92,19 @@ const PATTERN_RULES: PatternRule[] = [
   {
     category: 'acknowledge',
     patterns: [
+      // Standard patterns
       /\b(your appointment|booking|appointment)\s+(has been|is)\s+(successfully\s+)?(scheduled|booked|confirmed)\b/i,
       /\bI have (booked|scheduled|confirmed)\b/i,
       /\bconfirmation number\b/i,
+      // Plural appointments (multi-child scenarios)
+      /\b(both|all|your)\s+appointments?\s+(are|is)\s+confirmed\b/i,
+      // Direct confirmation phrases
+      /\bappointment\s+is\s+confirmed\b/i,
+      /\bappointments?\s+confirmed\b/i,
+      /\byou('re| are)\s+(all\s+)?(set|booked|scheduled)\b/i,
+      /\bwe('ve| have)\s+(scheduled|booked)\s+(you|your)\b/i,
+      // Scheduled for pattern
+      /\b(is|are)\s+scheduled\s+for\b/i,
     ],
     confidence: 0.95,
     priority: 100,
@@ -275,7 +285,10 @@ const PATTERN_RULES: PatternRule[] = [
     patterns: [
       /\b(what('s| is)|may I have|could I get)\s+(your\s+)?(phone|contact)\s*(number)?\b/i,
       /\bgood (phone|contact) number\b/i,
-      /\bbest (phone|number) to reach you\b/i,
+      /\bbest (phone|number|way) to reach you\b/i,
+      /\bphone number\s+(to reach|for)\b/i,
+      /\b(what('s| is)|may I have)\s+(the\s+)?(best\s+)?(phone|contact)\s*(number)?\b/i,
+      /\bwhat('s| is)\s+\w+\s+phone\s*number\b/i,
     ],
     confidence: 0.90,
     priority: 58,
@@ -314,12 +327,14 @@ const PATTERN_RULES: PatternRule[] = [
   {
     category: 'provide_data',
     patterns: [
-      /\b(what('s| is)|may I have)\s+(the\s+)?(child'?s?|patient'?s?)\s+(first\s+)?(and\s+last\s+)?name\b/i,
-      /\bname of (the\s+)?(child|patient)\b/i,
-      /\bchild('?s)? (full\s+)?name\b/i,
+      /\b(what('s| is)|may I have)\s+(the\s+)?(child'?s?|patient'?s?|son'?s?|daughter'?s?)\s+(first\s+)?(and\s+last\s+)?(full\s+)?name\b/i,
+      /\bname of (the\s+)?(child|patient|son|daughter)\b/i,
+      /\b(child|son|daughter)('?s)? (full\s+)?name\b/i,
+      /\b(your\s+)?(son'?s?|daughter'?s?)\s+(full\s+)?name\b/i,
+      /\bwhat'?s\s+(your\s+)?(son'?s?|daughter'?s?)\s+name\b/i,
     ],
     confidence: 0.90,
-    priority: 54,
+    priority: 55, // Higher priority to ensure son/daughter name questions match correctly
     extractors: {
       dataFields: () => ['child_name'],
     },
@@ -327,12 +342,15 @@ const PATTERN_RULES: PatternRule[] = [
   {
     category: 'provide_data',
     patterns: [
-      /\b(what('s| is)|when is)\s+(the\s+)?(child'?s?|patient'?s?)?\s*(date of birth|dob|birthday|birth date)\b/i,
-      /\bwhen (was|were) (the\s+)?(child|patient|they|he|she) born\b/i,
-      /\bchild('?s)? (date of birth|birthday|dob)\b/i,
+      /\b(what('s| is)|when is)\s+(the\s+)?(child'?s?|patient'?s?|son'?s?|daughter'?s?)?\s*(date of birth|dob|birthday|birth date)\b/i,
+      /\bwhen (was|were) (the\s+)?(child|patient|son|daughter|they|he|she) born\b/i,
+      /\b(child|son|daughter)('?s)? (date of birth|birthday|dob)\b/i,
+      /\bwhat('s| is)\s+\w+'?s?\s+(date of birth|dob|birthday|birth date)\b/i,
+      /\b\w+'?s\s+(date of birth|dob|birthday)\b/i,
+      /\b(your\s+)?(son'?s?|daughter'?s?)\s+(date of birth|birthday|dob)\b/i,
     ],
     confidence: 0.90,
-    priority: 53,
+    priority: 54, // Slightly lower than child_name (55)
     extractors: {
       dataFields: () => ['child_dob'],
     },
@@ -373,8 +391,12 @@ const PATTERN_RULES: PatternRule[] = [
       /\bhave (you|they) visited (this|our) (office|location) before\b/i,
       /\bprevious visit\b/i,
       /\bbeen here before\b/i,
+      // Additional patterns for child/patient visit questions
+      /\bhas (your|the) (child|patient|son|daughter) been (to|at) (our|this|the) office before\b/i,
+      /\b(child|patient|kid) (been|visited) (here|our office|this office) before\b/i,
+      /\bvisited (us|this office|our office) before\b/i,
     ],
-    confidence: 0.85,
+    confidence: 0.88,
     priority: 49,
     extractors: {
       dataFields: () => ['previous_visit'],
@@ -384,8 +406,11 @@ const PATTERN_RULES: PatternRule[] = [
     category: 'provide_data',
     patterns: [
       /\bhad (braces|orthodontic treatment|ortho) before\b/i,
+      /\bhad braces (or|and) orthodontic treatment before\b/i,
+      /\bhad (braces|ortho|orthodontic).*(before|previously)\b/i,
       /\bprevious orthodontic\b/i,
       /\bseen (an )?orthodontist before\b/i,
+      /\borthodontic treatment before\b/i,
     ],
     confidence: 0.85,
     priority: 48,
@@ -403,6 +428,9 @@ const PATTERN_RULES: PatternRule[] = [
       /\b(what('s| is)|do you have)\s+(your\s+)?insurance\b/i,
       /\binsurance (provider|company|carrier)\b/i,
       /\bwho is (your\s+)?insurance (with|through)\b/i,
+      /\bwhat insurance (do you have|does \w+ have)\b/i,
+      /\bwhat (kind of )?insurance\b/i,
+      /\b(do you have|does \w+ have) insurance\b/i,
     ],
     confidence: 0.88,
     priority: 45,
@@ -413,12 +441,16 @@ const PATTERN_RULES: PatternRule[] = [
   {
     category: 'provide_data',
     patterns: [
-      /\bspecial (needs|accommodations|requirements)\b/i,
-      /\banything (else )?(we should know|to note)\b/i,
+      // Question-form patterns (high priority - match actual questions, not acknowledgments)
+      /\b(are there )?(any )?special (needs|accommodations|requirements)\b/i,
+      /\bspecial needs or accommodations\b/i,
+      /\b(should|do) (we|I) (know|note|be aware)\b/i,
+      /\banything (else )?(we should know|to note|to be aware of)\b/i,
       /\bmedical conditions\b/i,
+      /\baccommodations (we should|to) (know|note)\b/i,
     ],
-    confidence: 0.85,
-    priority: 44,
+    confidence: 0.92, // Higher confidence to beat previous_ortho_treatment
+    priority: 49, // Higher priority than previous_ortho_treatment (48)
     extractors: {
       dataFields: () => ['special_needs'],
     },
@@ -719,6 +751,7 @@ Return ONLY the JSON, no markdown.`;
 
   /**
    * Parse LLM response into CategoryClassificationResult
+   * Uses lenient parsing to handle LLM variations
    */
   private parseLlmResponse(text: string): CategoryClassificationResult {
     try {
@@ -729,8 +762,11 @@ Return ONLY the JSON, no markdown.`;
 
       const parsed = JSON.parse(jsonMatch[0]);
 
+      // Sanitize LLM response before Zod validation
+      const sanitized = this.sanitizeLlmResponse(parsed);
+
       // Validate with Zod schema
-      return CategoryClassificationResultSchema.parse(parsed);
+      return CategoryClassificationResultSchema.parse(sanitized);
     } catch (error) {
       console.warn('[CategoryClassifier] Failed to parse LLM response:', error);
       // Return a safe default
@@ -744,6 +780,65 @@ Return ONLY the JSON, no markdown.`;
         reasoning: 'Failed to parse LLM response',
       };
     }
+  }
+
+  /**
+   * Sanitize LLM response to handle enum value variations
+   */
+  private sanitizeLlmResponse(parsed: any): any {
+    const validCategories = ['provide_data', 'confirm_or_deny', 'select_from_options', 'acknowledge', 'clarify_request', 'express_preference'];
+    const validConfirmationSubjects = ['information_correct', 'proceed_anyway', 'booking_details', 'wants_address', 'wants_parking_info', 'spelling_correct', 'insurance_card_reminder', 'general'];
+    const validExpectedAnswers = ['yes', 'no', 'either'];
+    const validTerminalStates = ['booking_confirmed', 'transfer_initiated', 'conversation_ended', 'error_terminal', 'none'];
+    const validDataFields = ['caller_name', 'caller_name_spelling', 'caller_phone', 'caller_email', 'child_count', 'child_name', 'child_dob', 'child_age', 'new_patient_status', 'previous_visit', 'previous_ortho_treatment', 'insurance_info', 'special_needs', 'time_preference', 'location_preference', 'day_preference', 'other', 'unknown'];
+
+    // Sanitize category
+    if (!validCategories.includes(parsed.category)) {
+      parsed.category = 'provide_data';
+    }
+
+    // Sanitize confirmationSubject - map invalid values to 'general'
+    if (parsed.confirmationSubject && !validConfirmationSubjects.includes(parsed.confirmationSubject)) {
+      // Check if it's actually a data field (LLM confusion)
+      if (validDataFields.includes(parsed.confirmationSubject)) {
+        // Move to dataFields and remove from confirmationSubject
+        parsed.dataFields = parsed.dataFields || [];
+        if (!parsed.dataFields.includes(parsed.confirmationSubject)) {
+          parsed.dataFields.push(parsed.confirmationSubject);
+        }
+        parsed.confirmationSubject = 'general';
+      } else {
+        parsed.confirmationSubject = 'general';
+      }
+    }
+
+    // Sanitize expectedAnswer
+    if (parsed.expectedAnswer && !validExpectedAnswers.includes(parsed.expectedAnswer)) {
+      // Handle "yes/no" -> "either"
+      if (parsed.expectedAnswer.includes('/') || parsed.expectedAnswer.includes('or')) {
+        parsed.expectedAnswer = 'either';
+      } else if (parsed.expectedAnswer.toLowerCase().startsWith('yes')) {
+        parsed.expectedAnswer = 'yes';
+      } else if (parsed.expectedAnswer.toLowerCase().startsWith('no')) {
+        parsed.expectedAnswer = 'no';
+      } else {
+        parsed.expectedAnswer = 'either';
+      }
+    }
+
+    // Sanitize terminalState
+    if (parsed.terminalState && !validTerminalStates.includes(parsed.terminalState)) {
+      parsed.terminalState = 'none';
+    }
+
+    // Sanitize dataFields array
+    if (parsed.dataFields && Array.isArray(parsed.dataFields)) {
+      parsed.dataFields = parsed.dataFields
+        .map((f: string) => validDataFields.includes(f) ? f : 'unknown')
+        .filter((f: string, i: number, arr: string[]) => arr.indexOf(f) === i); // unique
+    }
+
+    return parsed;
   }
 
   /**
