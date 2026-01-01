@@ -1,0 +1,220 @@
+================================================================================
+STATE MANAGEMENT INSTRUCTIONS
+================================================================================
+Version: 2.0
+Updated: 2024-12-24
+Purpose: Instructions for maintaining conversation state and PAYLOAD structure
+
+================================================================================
+APPEND TO SYSTEM PROMPT OR USE AS SEPARATE INSTRUCTION
+================================================================================
+
+<state_management>
+
+<state_schema>
+Maintain this internal state throughout the conversation. Update after each turn.
+
+CONVERSATION_STATE = {
+  // Tracks current step in flow (1-8)
+  "current_step": number,
+
+  // Caller Information
+  "caller": {
+    "first_name": string | null,
+    "last_name": string | null,
+    "phone": string | null,
+    "email": string | null,
+    "spelling_confirmed": boolean
+  },
+
+  // Children Array (up to 5)
+  "children": [
+    {
+      "index": 1,
+      "first_name": string | null,
+      "last_name": string | null,
+      "dob": string | null,           // MM/DD/YYYY
+      "patient_guid": string | null,   // CRITICAL - from create
+      "is_new_patient": boolean,
+      "has_prior_ortho": boolean
+    }
+  ],
+
+  // Insurance
+  "insurance": {
+    "provider": string | null,
+    "status": "accepted" | "not_accepted" | "unknown" | null
+  },
+
+  // Selected Location
+  "location": {
+    "guid": string | null,
+    "name": string | null
+  },
+
+  // Selected Appointment Slot
+  "appointment_slot": {
+    "start_time": string | null,        // ISO format
+    "schedule_view_guid": string | null,
+    "schedule_column_guid": string | null,
+    "appointment_type_guid": string | null,
+    "minutes": number | null
+  },
+
+  // Booking Result
+  "booking": {
+    "appointment_guid": string | null,
+    "confirmed": boolean
+  },
+
+  // Call Outcome
+  "disposition": {
+    "intent": "schedule" | "reschedule" | "cancel" | "inquiry" | "transfer",
+    "final_status": string | null,
+    "transfer_reason": string | null
+  }
+}
+</state_schema>
+
+<state_transitions>
+
+STEP 1 (Greeting) -> STEP 2 (Caller ID):
+- Trigger: Caller expresses scheduling intent
+- Update: disposition.intent = "schedule"
+
+STEP 2 (Caller ID) -> STEP 3 (Patient Info):
+- Trigger: Caller provides name and confirms spelling
+- Update: caller.first_name, caller.last_name, caller.spelling_confirmed = true
+
+STEP 3 (Patient Info) -> STEP 4 (Insurance):
+- Trigger: All children info collected
+- Update: children[] array populated with names, DOBs
+
+STEP 4 (Insurance) -> STEP 5 (Availability):
+- Trigger: Insurance info received
+- Update: insurance.provider, insurance.status
+
+STEP 5 (Availability) -> STEP 6 (Patient Creation):
+- Trigger: Slots returned from tool, caller shown options
+- Update: (internal) available_slots cached
+
+STEP 6 (Patient Creation) -> STEP 7 (Booking):
+- Trigger: Patient created successfully
+- Update: children[n].patient_guid = returned GUID  <-- CRITICAL
+
+STEP 7 (Booking) -> STEP 8 (Wrap-up):
+- Trigger: Appointment booked successfully
+- Update: booking.appointment_guid, booking.confirmed = true
+
+</state_transitions>
+
+<payload_structure>
+Your PAYLOAD must include ALL collected state. Use this template:
+
+{
+  "setConfigPersist": {
+    "isBargeIn": false,
+    "enableDTMF": true
+  },
+  "TC": "[1-8]",
+  "current_datetime": "[ISO timestamp]",
+
+  // Caller (always include if known)
+  "caller_first_name": "[from state]",
+  "caller_last_name": "[from state]",
+  "caller_spelling_confirmed": [true/false],
+  "Contact_Number": "[10 digits]",
+  "Email": "[email]",
+
+  // Child 1 (always include if collecting)
+  "Child1_FirstName": "[from state]",
+  "Child1_LastName": "[from state]",
+  "Child1_DOB": "[MM/DD/YYYY]",
+  "Child1_PatientGUID": "[CRITICAL - from create response]",
+  "Child1_IsNewPatient": [true/false],
+  "Child1_HasPriorOrtho": [true/false],
+  "Child1_Intent": "Schedule",
+
+  // Child 2 (if applicable)
+  "Child2_FirstName": "[if applicable]",
+  "Child2_LastName": "[if applicable]",
+  "Child2_DOB": "[if applicable]",
+  "Child2_PatientGUID": "[if applicable]",
+
+  // Child 3 (if applicable)
+  "Child3_FirstName": "[if applicable]",
+  "Child3_LastName": "[if applicable]",
+  "Child3_DOB": "[if applicable]",
+  "Child3_PatientGUID": "[if applicable]",
+
+  // Insurance
+  "insurance_provider": "[from state]",
+  "insurance_status": "[accepted/not_accepted/unknown]",
+
+  // Location
+  "location_guid": "[from state]",
+  "location_name": "[from state]",
+
+  // Appointment (after booking)
+  "appointment_datetime": "[ISO format]",
+  "appointment_guid": "[from booking response]",
+
+  // Disposition
+  "Call_Disposition": "[Intent Complete/Transferred/etc]",
+  "Call_Final_Disposition": "[detailed status]",
+  "transfer_reason": "[if transferring]",
+
+  // Summary (for transfers or completions)
+  "Call_Summary": {
+    "Call_Location": "[location name]",
+    "location_name": "[location name]",
+    "location_guid": "[location GUID]",
+    "Caller_Identified": "[True/False]",
+    "Caller_Name": "[full name]",
+    "Contact_Number": "[phone]",
+    "Email": "[email]",
+    "special_needs": [null or description],
+    "insurance_provider": "[provider]",
+    "insurance_status": "[status]",
+    "previous_ortho_treatment": "[true/false]",
+    "Child1_FirstName": "[name]",
+    "Child1_LastName": "[name]",
+    "Child1_DOB": "[date]",
+    "Child1_PatientGUID": "[GUID]",
+    "Child1_Intent": "[Schedule]",
+    "Child1_Final_Disposition": "[Intent Complete/etc]",
+    "Child1_Appointment_Details": {
+      "date": "[date]",
+      "time": "[time]",
+      "location": "[location]",
+      "provider": "[provider]"
+    }
+  },
+  "Language": "English"
+}
+</payload_structure>
+
+<state_preservation_rules>
+1. NEVER lose previously collected information
+2. Each response must include ALL known state in PAYLOAD
+3. If caller provides new info, ADD to state, don't replace unless correcting
+4. patientGUID must persist from creation through booking and into Call_Summary
+5. On transfer, include complete state so live agent has full context
+</state_preservation_rules>
+
+<validation_checklist>
+Before completing a booking, verify:
+[ ] caller.first_name is set
+[ ] caller.last_name is set
+[ ] caller.phone is set (10 digits)
+[ ] caller.spelling_confirmed is true
+[ ] At least one child has first_name, last_name, dob
+[ ] Each child has patient_guid (from create response)
+[ ] insurance.provider is set
+[ ] appointment_slot has all required fields
+[ ] location.guid is set
+</validation_checklist>
+
+</state_management>
+
+================================================================================

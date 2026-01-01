@@ -1,0 +1,206 @@
+================================================================================
+TEST FAILURE ANALYSIS & FIXES
+================================================================================
+Version: 1.0
+Updated: 2024-12-24
+Purpose: Document known test failures and required prompt fixes
+
+================================================================================
+FAILURE: HAPPY-003 - Quick Info Provider - All Details Upfront
+================================================================================
+
+SYMPTOM:
+Test fails at step-4 "Confirm insurance and request time"
+
+EXPECTED PATTERN:
+/check|available|time|monday|tuesday|wednesday|moment|look/i
+
+ACTUAL BEHAVIOR:
+Bot skips availability language when caller provides all info upfront
+
+ROOT CAUSE:
+When caller provides name, phone, child info, and insurance all at once,
+the bot jumps to "what time works for you?" without saying it will
+"check availability" or "look at the schedule".
+
+FIX REQUIRED:
+Update prompt to ALWAYS include availability-checking language before
+offering times, even if caller provided everything.
+
+PROMPT ADDITION:
+```
+<availability_check_rule>
+CRITICAL: Even if the caller provides all information upfront, you MUST:
+1. Acknowledge the information they provided
+2. Say you will check availability: "Let me check what times we have available..."
+3. Call chord_dso_scheduling action='slots'
+4. THEN offer specific time options
+
+NEVER skip the "checking availability" step, even for efficient callers.
+
+EXAMPLE for quick info provider:
+User: "I'm Jane Smith, phone 215-555-1111. My daughter Emma, born 2/5/2014, needs an appointment. We have Keystone insurance."
+
+CORRECT Response:
+ANSWER: "Thank you, Jane! I have all your information - Emma Smith, born February 5th, 2014, and you have Keystone insurance. Let me check what appointment times we have available for Emma... [after tool call] I have openings on Monday at 9 AM, Tuesday at 2 PM, or Thursday at 10 AM. Which works best for you?"
+
+INCORRECT Response:
+ANSWER: "Great! What day works best for you?" (Missing availability check language)
+</availability_check_rule>
+```
+
+================================================================================
+FAILURE: Tool Not Called Before Transfer
+================================================================================
+
+SYMPTOM:
+Agent transfers with "Unable to retrieve appointment availability" without
+actually calling the scheduling tool
+
+EXPECTED BEHAVIOR:
+Agent should call chord_dso_scheduling action='slots' before transferring
+
+ROOT CAUSE:
+Agent decides to transfer before attempting to fetch availability
+
+FIX REQUIRED:
+Add explicit instruction to NEVER transfer for availability issues without
+calling the tool first.
+
+PROMPT ADDITION:
+```
+<transfer_rules>
+FORBIDDEN TRANSFER REASONS (without trying tool first):
+- "Unable to retrieve appointment availability"
+- "Cannot access scheduling system"
+- "No available appointments"
+
+BEFORE transferring for scheduling issues, you MUST:
+1. Call chord_dso_scheduling action='slots' at least once
+2. If it fails, retry with corrected parameters
+3. Only then, if still failing, transfer with SPECIFIC error details
+
+CORRECT transfer reason: "Scheduling tool returned error: [specific error message]"
+INCORRECT transfer reason: "Unable to retrieve appointment availability"
+</transfer_rules>
+```
+
+================================================================================
+FAILURE: Missing patientGUID in Payload
+================================================================================
+
+SYMPTOM:
+Test Monitor cannot link patient names to patient detail pages because
+patientGUID is not included in the payload
+
+EXPECTED BEHAVIOR:
+After calling chord_dso_patient_V3 action='create', the returned patientGUID
+should be stored and included in the PAYLOAD
+
+ROOT CAUSE:
+Agent creates patient but doesn't persist the returned GUID in subsequent
+responses
+
+FIX REQUIRED:
+Add explicit instruction to store and include patientGUID
+
+PROMPT ADDITION:
+```
+<patient_guid_tracking>
+CRITICAL: When you call chord_dso_patient_V3 action='create':
+
+1. The tool returns: { "patientGUID": "59D26B3E-2725-460D-9FD7-BD9C03452B86" }
+2. You MUST store this value
+3. Include it in EVERY subsequent PAYLOAD as:
+   - "Child1_PatientGUID": "59D26B3E-2725-460D-9FD7-BD9C03452B86"
+
+4. For multiple children:
+   - "Child1_PatientGUID": "[guid from first create]"
+   - "Child2_PatientGUID": "[guid from second create]"
+
+5. Include in Call_Summary when transferring or completing
+
+This enables the Test Monitor dashboard to create clickable links to
+patient detail pages.
+
+EXAMPLE PAYLOAD after patient creation:
+{
+  "Child1_FirstName": "Emma",
+  "Child1_LastName": "Smith",
+  "Child1_DOB": "02/05/2014",
+  "Child1_PatientGUID": "59D26B3E-2725-460D-9FD7-BD9C03452B86"  // <-- REQUIRED
+}
+</patient_guid_tracking>
+```
+
+================================================================================
+FAILURE: Date Validation Issues
+================================================================================
+
+SYMPTOM:
+Agent attempts to book appointments for past dates
+
+EXPECTED BEHAVIOR:
+Only schedule appointments for today or future dates
+
+FIX REQUIRED:
+Add date validation instruction
+
+PROMPT ADDITION:
+```
+<date_validation>
+BEFORE calling chord_dso_scheduling action='slots':
+1. Ensure startDate is TODAY or a FUTURE date
+2. Format must be MM/DD/YYYY
+3. If caller requests a past date, inform them and offer future dates
+
+EXAMPLE:
+User: "Can we schedule for last Tuesday?"
+ANSWER: "I'm sorry, but I can only schedule appointments for future dates. Would you like me to check availability for this coming Tuesday instead?"
+</date_validation>
+```
+
+================================================================================
+FAILURE: Spelling Confirmation Skipped
+================================================================================
+
+SYMPTOM:
+Agent doesn't ask caller to spell their name, leading to potential errors
+
+EXPECTED BEHAVIOR:
+Always confirm spelling for names
+
+FIX REQUIRED:
+Add spelling confirmation step
+
+PROMPT ADDITION:
+```
+<spelling_confirmation>
+ALWAYS ask the caller to spell names for accuracy:
+
+1. After caller provides their name:
+   ANSWER: "Thank you, [name]. Could you spell that for me to make sure I have it right?"
+
+2. After they spell it:
+   ANSWER: "Perfect, I have [spelled name]. And what's the best phone number to reach you?"
+
+3. Track in state: caller_spelling_confirmed = true
+
+This prevents booking errors due to misheard names.
+</spelling_confirmation>
+```
+
+================================================================================
+IMPLEMENTATION CHECKLIST
+================================================================================
+
+[ ] Update Flowise system prompt with consolidated prompt (06-consolidated-system-prompt.txt)
+[ ] Update chord_dso_scheduling tool description (02-tool-chord-dso-scheduling.txt)
+[ ] Update chord_dso_patient_V3 tool description (03-tool-chord-dso-patient.txt)
+[ ] Add state management instructions (04-state-management.txt)
+[ ] Add error handling instructions (05-error-handling-edge-cases.txt)
+[ ] Test HAPPY-003 scenario to verify availability check language
+[ ] Test patientGUID appears in payload after patient creation
+[ ] Verify Test Monitor shows clickable patient links
+
+================================================================================
