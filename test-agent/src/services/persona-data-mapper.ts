@@ -45,8 +45,14 @@ const DATA_MAPPERS: Record<DataFieldCategory, DataMapperFn> = {
   caller_phone: (inv) =>
     inv.parentPhone,
 
-  caller_email: (inv) =>
-    inv.parentEmail || null,
+  caller_email: (inv) => {
+    // Return actual email if available, otherwise generate a fallback
+    // This prevents infinite loops when agent asks for email and persona has none
+    if (inv.parentEmail) return inv.parentEmail;
+    // Generate fallback email from first name
+    const firstName = inv.parentFirstName?.toLowerCase() || 'user';
+    return `${firstName.replace(/[^a-z]/g, '')}@email.com`;
+  },
 
   // Child fields
   child_count: (inv) => {

@@ -148,8 +148,9 @@ const CONFIRMATION_RESPONSES: Record<ConfirmationSubject, Record<'yes' | 'no', R
   general: {
     yes: {
       terse: ['Yes', 'OK'],
-      normal: ['Yes', "That's fine", 'Okay'],
-      verbose: ["Yes, that sounds good to me!"],
+      // Removed "That's fine" - too ambiguous, can be interpreted as declining
+      normal: ['Yes please', 'Yes, thank you', 'Sure, please do'],
+      verbose: ["Yes, that sounds great! Please do.", "Yes please, that would be wonderful!"],
     },
     no: {
       terse: ['No'],

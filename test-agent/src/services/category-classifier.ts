@@ -115,14 +115,36 @@ const PATTERN_RULES: PatternRule[] = [
   {
     category: 'acknowledge',
     patterns: [
-      /\b(transfer|connect|transferring)\s+(you|caller)\s+(to|with)\b/i,
+      // Actual transfer in progress - specific phrases indicating action is happening
+      /\bI('m| am) (now\s+)?(transferring|connecting) you\b/i,
+      /\btransferring you (now|to)\b/i,
       /\bplease hold\s+(while|as)\s+I\s+transfer\b/i,
-      /\blet me (transfer|connect) you\b/i,
+      /\blet me transfer you (now|right now)\b/i,
+      /\bconnecting you (now|right now)\b/i,
+      // "One moment while I transfer your call"
+      /\bone moment while I transfer\b/i,
+      /\bwhile I transfer your call\b/i,
     ],
     confidence: 0.95,
     priority: 99,
     extractors: {
       terminalState: () => 'transfer_initiated',
+    },
+  },
+  // Offer to transfer/connect - NOT a terminal state (just asking if user wants transfer)
+  {
+    category: 'confirm_or_deny',
+    patterns: [
+      /\bwould you like (me to )?(connect|transfer) you\b/i,
+      /\bshould I (connect|transfer) you\b/i,
+      /\bconnect you with a (specialist|representative|team member)\b/i,
+      /\bwant me to (connect|transfer) you\b/i,
+      /\bfor more options\??$/i,
+    ],
+    confidence: 0.90,
+    priority: 98,
+    extractors: {
+      confirmationSubject: () => 'proceed_anyway',
     },
   },
   {
@@ -351,6 +373,20 @@ const PATTERN_RULES: PatternRule[] = [
     priority: 58,
     extractors: {
       dataFields: () => ['caller_phone'],
+    },
+  },
+  {
+    // Spell your email - still returns caller_email (emails are spoken, not spelled letter by letter)
+    category: 'provide_data',
+    patterns: [
+      /\b(spell|spelling)\b.*\bemail\b/i,
+      /\bspell your email\b/i,
+      /\bcan you spell.*email\b/i,
+    ],
+    confidence: 0.92,
+    priority: 58,
+    extractors: {
+      dataFields: () => ['caller_email'],
     },
   },
   {
