@@ -291,9 +291,15 @@ export async function getFixes(options?: {
  * Get fixes for a specific test run
  */
 export async function getFixesForRun(runId: string): Promise<GeneratedFix[]> {
+  console.log(`[Fixes:API] getFixesForRun called with runId: ${runId}`);
   const response = await get<TestMonitorApiResponse<GeneratedFix[]>>(
     `/test-monitor/runs/${runId}/fixes`
   );
+  console.log(`[Fixes:API] getFixesForRun response:`, {
+    success: response.success,
+    fixCount: response.data?.length ?? 0,
+    fixIds: response.data?.map(f => f.fixId) ?? [],
+  });
   return response.data;
 }
 

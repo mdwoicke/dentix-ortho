@@ -74,22 +74,43 @@ export class AgentFailureAnalyzer {
       saveToDatabase = true,
     } = options;
 
-    console.log(`\n[AgentFailureAnalyzer] Analyzing run: ${runId}`);
-    console.log(`  LLM Analysis: ${useLLM ? 'ENABLED' : 'DISABLED (rule-based only)'}`);
+    console.log(`\n[Diagnosis:Analyzer] ========== Analyzing Run ==========`);
+    console.log(`[Diagnosis:Analyzer] runId: ${runId}`);
+    console.log(`[Diagnosis:Analyzer] Options: useLLM=${useLLM}, maxConcurrent=${maxConcurrent}, saveToDatabase=${saveToDatabase}`);
+    console.log(`[Diagnosis:Analyzer] LLM Available: ${this.llmService.isAvailable()}`);
 
     // Get failed tests
+    console.log(`[Diagnosis:Analyzer] Calling db.getFailedTestIds(${runId})...`);
     const failedTestIds = this.db.getFailedTestIds(runId);
+    console.log(`[Diagnosis:Analyzer] getFailedTestIds returned:`, failedTestIds);
+
+    console.log(`[Diagnosis:Analyzer] Calling db.getTestResults(${runId})...`);
     const testResults = this.db.getTestResults(runId);
+    console.log(`[Diagnosis:Analyzer] getTestResults returned ${testResults.length} results`);
+
+    // Log status breakdown
+    const statusBreakdown = testResults.reduce((acc, r) => {
+      acc[r.status] = (acc[r.status] || 0) + 1;
+      return acc;
+    }, {} as Record<string, number>);
+    console.log(`[Diagnosis:Analyzer] Test results by status:`, statusBreakdown);
 
     if (failedTestIds.length === 0) {
-      console.log('  No failures to analyze');
+      console.log(`[Diagnosis:Analyzer] No failures to analyze - returning empty report`);
       return this.createEmptyReport(runId);
     }
 
-    console.log(`  Found ${failedTestIds.length} failed test(s)`);
+    console.log(`[Diagnosis:Analyzer] Found ${failedTestIds.length} failed test(s): ${failedTestIds.join(', ')}`);
 
     // Build failure contexts
+    console.log(`[Diagnosis:Analyzer] Building failure contexts...`);
     const failureContexts = await this.buildFailureContexts(runId, failedTestIds, testResults);
+    console.log(`[Diagnosis:Analyzer] Built ${failureContexts.length} failure context(s)`);
+
+    if (failureContexts.length === 0) {
+      console.log(`[Diagnosis:Analyzer] No failure contexts built - returning empty report`);
+      return this.createEmptyReport(runId);
+    }
 
     // Analyze failures
     const allFixes: GeneratedFix[] = [];
@@ -98,15 +119,25 @@ export class AgentFailureAnalyzer {
 
     for (const context of failureContexts) {
       try {
-        console.log(`  Analyzing: ${context.testId} - ${context.stepId}`);
+        console.log(`[Diagnosis:Analyzer] Analyzing: ${context.testId} - ${context.stepId}`);
+        console.log(`[Diagnosis:Analyzer]   Expected pattern: ${context.expectedPattern?.slice(0, 100)}...`);
 
         let result: AnalysisResult;
 
         if (useLLM) {
+          console.log(`[Diagnosis:Analyzer]   Using LLM analysis...`);
           result = await this.llmService.analyzeFailure(context);
         } else {
+          console.log(`[Diagnosis:Analyzer]   Using rule-based analysis...`);
           result = this.llmService.generateRuleBasedAnalysis(context);
         }
+
+        console.log(`[Diagnosis:Analyzer]   Analysis result:`, {
+          rootCause: result.rootCause.type,
+          confidence: result.rootCause.confidence,
+          fixCount: result.fixes.length,
+          classification: result.classification?.issueLocation,
+        });
 
         // Track root cause
         const causeType = result.rootCause.type;
@@ -121,24 +152,34 @@ export class AgentFailureAnalyzer {
           result.classification
         );
 
+        console.log(`[Diagnosis:Analyzer]   Converted to ${generatedFixes.length} GeneratedFix(es)`);
+
         allFixes.push(...generatedFixes);
         analyzedCount++;
 
-        console.log(`    Root cause: ${causeType} (confidence: ${(result.rootCause.confidence * 100).toFixed(0)}%)`);
-        console.log(`    Generated ${generatedFixes.length} fix(es)`);
+        console.log(`[Diagnosis:Analyzer]   Root cause: ${causeType} (confidence: ${(result.rootCause.confidence * 100).toFixed(0)}%)`);
+        console.log(`[Diagnosis:Analyzer]   Generated ${generatedFixes.length} fix(es)`);
 
       } catch (error) {
-        console.error(`  Failed to analyze ${context.testId}:`, error);
+        console.error(`[Diagnosis:Analyzer] Failed to analyze ${context.testId}:`, error);
       }
     }
 
+    console.log(`[Diagnosis:Analyzer] Total fixes before deduplication: ${allFixes.length}`);
+
     // Deduplicate fixes
     const deduplicatedFixes = this.deduplicateFixes(allFixes);
+    console.log(`[Diagnosis:Analyzer] Total fixes after deduplication: ${deduplicatedFixes.length}`);
 
     // Save to database if requested
     if (saveToDatabase && deduplicatedFixes.length > 0) {
+      console.log(`[Diagnosis:Analyzer] Saving ${deduplicatedFixes.length} fix(es) to database...`);
       this.db.saveGeneratedFixes(deduplicatedFixes);
-      console.log(`\n  Saved ${deduplicatedFixes.length} fix(es) to database`);
+      console.log(`[Diagnosis:Analyzer] Saved successfully`);
+    } else if (deduplicatedFixes.length === 0) {
+      console.log(`[Diagnosis:Analyzer] No fixes to save (deduplicatedFixes.length = 0)`);
+    } else {
+      console.log(`[Diagnosis:Analyzer] Skipping database save (saveToDatabase = false)`);
     }
 
     // Build report

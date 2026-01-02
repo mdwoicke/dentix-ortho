@@ -135,7 +135,8 @@ const DEFAULT_CONFIG: GoalTestRunnerConfig = {
   maxTurns: 50,
   delayBetweenTurns: 500,
   turnTimeout: 30000,
-  saveProgressSnapshots: true,
+  // Disable snapshots during parallel runs to reduce SQLite contention
+  saveProgressSnapshots: process.env.PARALLEL_MODE !== 'true',
   continueOnError: true,
   useCategoryBasedSystem: true, // Default to new system
 };

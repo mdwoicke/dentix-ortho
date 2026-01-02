@@ -54,12 +54,12 @@ export interface CategoryClassifierConfig {
 }
 
 const DEFAULT_CONFIG: CategoryClassifierConfig = {
-  tier1ConfidenceThreshold: 0.8,
+  tier1ConfidenceThreshold: 0.75, // Lowered from 0.8 - more pattern matches, fewer LLM calls
   useLlm: true,
   model: 'claude-3-5-haiku-20241022',
   temperature: 0.1,
   maxTokens: 512,
-  timeout: 15000,
+  timeout: 15000, // 15s - needed for parallel execution (8s caused too many timeouts)
   cacheEnabled: true,
   cacheTtlMs: 300000, // 5 minutes
 };
@@ -237,6 +237,41 @@ const PATTERN_RULES: PatternRule[] = [
     priority: 74,
     extractors: {
       confirmationSubject: () => 'insurance_card_reminder',
+    },
+  },
+  {
+    // "Are you calling about X?" / "Is this for X?" / "Is this about X?" patterns
+    // Common opening confirmation questions from agent - expect "yes" response
+    category: 'confirm_or_deny',
+    patterns: [
+      /\bare you calling (about|for|regarding)\b/i,
+      /\bis this (for|about|regarding)\s+(a|an)?\s*(ortho|braces|dental|appointment)\b/i,
+      /\bis this (call )?(about|for|regarding)\b/i,
+      /\bare you (looking|interested) (in|for)\b/i,
+      /\blike braces\??$/i,  // "...like braces?"
+      /\bor invisalign\??$/i,  // "...or Invisalign?"
+    ],
+    confidence: 0.88,
+    priority: 73,
+    extractors: {
+      confirmationSubject: () => 'general',
+    },
+  },
+  {
+    // "Would that work?" / "Does that work?" patterns
+    // Agent offering a time slot and asking for confirmation
+    category: 'confirm_or_deny',
+    patterns: [
+      /\bwould that work\b/i,
+      /\bdoes that work\b/i,
+      /\bwork for you\?$/i,
+      /\bwork for \w+\?$/i,  // "work for Emma?"
+      /\bsound good\??$/i,
+    ],
+    confidence: 0.90,
+    priority: 72,
+    extractors: {
+      confirmationSubject: () => 'booking_details',
     },
   },
 
@@ -417,6 +452,9 @@ const PATTERN_RULES: PatternRule[] = [
       /\bhas (your|the) (child|patient|son|daughter) been (to|at) (our|this|the) office before\b/i,
       /\b(child|patient|kid) (been|visited) (here|our office|this office) before\b/i,
       /\bvisited (us|this office|our office) before\b/i,
+      // Patterns for multiple children
+      /\bhave (either of |any of )?(your )?(children|kids) been (to |at )?(our |this |the )?office before\b/i,
+      /\b(children|kids) been (here|to our office) before\b/i,
     ],
     confidence: 0.88,
     priority: 49,

@@ -109,9 +109,31 @@ export function AgentTuning() {
     setSelectedFixIds(new Set());
   }, []);
 
+  // Debug logging for fixes from Redux store
+  useEffect(() => {
+    console.log(`[Fixes:AgentTuning] fixes from Redux store:`, {
+      totalFixes: fixes.length,
+      fixesLoading,
+      activeRunId,
+      fixIds: fixes.map(f => f.fixId),
+      fixStatuses: fixes.reduce((acc, f) => {
+        acc[f.status] = (acc[f.status] || 0) + 1;
+        return acc;
+      }, {} as Record<string, number>),
+    });
+  }, [fixes, fixesLoading, activeRunId]);
+
   // Filter pending fixes
   const pendingFixes = fixes.filter((f) => f.status === 'pending');
   const appliedFixes = fixes.filter((f) => f.status === 'applied');
+
+  // Log filtered pending fixes
+  useEffect(() => {
+    console.log(`[Fixes:AgentTuning] pendingFixes to pass to FixesPanel:`, {
+      count: pendingFixes.length,
+      ids: pendingFixes.map(f => f.fixId),
+    });
+  }, [pendingFixes]);
 
   // Phase 6: Calculate bot fixes count for Flowise sync prominence
   const appliedBotFixes = appliedFixes.filter(f =>

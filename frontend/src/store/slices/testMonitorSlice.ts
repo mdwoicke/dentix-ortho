@@ -230,10 +230,13 @@ export const fetchRecommendations = createAsyncThunk(
 export const fetchFixes = createAsyncThunk(
   'testMonitor/fetchFixes',
   async (runId: string, { rejectWithValue }) => {
+    console.log(`[Fixes:Redux] fetchFixes thunk dispatched with runId: ${runId}`);
     try {
       const fixes = await testMonitorApi.getFixesForRun(runId);
+      console.log(`[Fixes:Redux] fetchFixes thunk received ${fixes?.length ?? 0} fixes from API`);
       return fixes;
     } catch (error) {
+      console.error(`[Fixes:Redux] fetchFixes thunk failed:`, error);
       logError(error, 'fetchFixes');
       const formattedError = handleError(error, 'Failed to fetch fixes');
       return rejectWithValue(formattedError.message);
@@ -646,13 +649,19 @@ export const testMonitorSlice = createSlice({
     // Fetch Fixes
     builder
       .addCase(fetchFixes.pending, (state) => {
+        console.log(`[Fixes:Reducer] fetchFixes.pending - setting fixesLoading=true`);
         state.fixesLoading = true;
       })
       .addCase(fetchFixes.fulfilled, (state, action) => {
+        console.log(`[Fixes:Reducer] fetchFixes.fulfilled - received ${action.payload?.length ?? 0} fixes`);
+        console.log(`[Fixes:Reducer] Previous fixes count: ${state.fixes.length}`);
         state.fixesLoading = false;
         state.fixes = action.payload;
+        console.log(`[Fixes:Reducer] New fixes count: ${state.fixes.length}`);
+        console.log(`[Fixes:Reducer] Fix IDs in state:`, state.fixes.map(f => f.fixId));
       })
       .addCase(fetchFixes.rejected, (state, action) => {
+        console.error(`[Fixes:Reducer] fetchFixes.rejected - error:`, action.payload);
         state.fixesLoading = false;
         state.error = action.payload as string;
       });

@@ -262,19 +262,27 @@ export function TestRunDetail() {
 
   // Handle running diagnosis on current run
   const handleRunDiagnosis = async () => {
-    if (!selectedRun) return;
+    console.log(`[Fixes:TestRunDetail] handleRunDiagnosis called, selectedRun:`, selectedRun?.runId);
+    if (!selectedRun) {
+      console.log(`[Fixes:TestRunDetail] No selectedRun, returning early`);
+      return;
+    }
 
     setDiagnosisRunning(true);
     try {
+      console.log(`[Fixes:TestRunDetail] Calling testMonitorApi.runDiagnosis(${selectedRun.runId})...`);
       const result = await testMonitorApi.runDiagnosis(selectedRun.runId);
-      console.log('[Diagnosis] Result:', result);
+      console.log('[Fixes:TestRunDetail] Diagnosis result:', result);
 
       // Refresh fixes after diagnosis completes
       if (result.success) {
+        console.log(`[Fixes:TestRunDetail] Diagnosis successful, dispatching fetchFixes(${selectedRun.runId})`);
         dispatch(fetchFixes(selectedRun.runId));
+      } else {
+        console.warn(`[Fixes:TestRunDetail] Diagnosis result.success is falsy, NOT fetching fixes`);
       }
     } catch (error) {
-      console.error('[Diagnosis] Error:', error);
+      console.error('[Fixes:TestRunDetail] Diagnosis error:', error);
     } finally {
       setDiagnosisRunning(false);
     }

@@ -1353,14 +1353,24 @@ export class Database {
    * Get failed test IDs from a run
    */
   getFailedTestIds(runId: string): string[] {
+    console.log(`[Diagnosis:DB] getFailedTestIds called with runId: ${runId}`);
     const db = this.getDb();
+
+    // First, log all test results for this run for debugging
+    const allResults = db.prepare(`
+      SELECT test_id, status FROM test_results WHERE run_id = ?
+    `).all(runId) as any[];
+    console.log(`[Diagnosis:DB] All test_results for run (${allResults.length} total):`, allResults);
 
     const rows = db.prepare(`
       SELECT test_id FROM test_results
       WHERE run_id = ? AND status IN ('failed', 'error')
     `).all(runId) as any[];
 
-    return rows.map(r => r.test_id);
+    const testIds = rows.map(r => r.test_id);
+    console.log(`[Diagnosis:DB] getFailedTestIds returning ${testIds.length} failed test(s):`, testIds);
+
+    return testIds;
   }
 
   /**
@@ -1613,44 +1623,63 @@ export class Database {
    * Save a generated fix
    */
   saveGeneratedFix(fix: GeneratedFix): void {
+    console.log(`[Diagnosis:DB] saveGeneratedFix called:`, {
+      fixId: fix.fixId,
+      runId: fix.runId,
+      type: fix.type,
+      targetFile: fix.targetFile,
+      priority: fix.priority,
+      confidence: fix.confidence,
+      status: fix.status,
+    });
+
     const db = this.getDb();
 
-    db.prepare(`
-      INSERT OR REPLACE INTO generated_fixes
-      (fix_id, run_id, type, target_file, change_description, change_code,
-       location_json, priority, confidence, affected_tests, root_cause_json, classification_json, status, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      fix.fixId,
-      fix.runId,
-      fix.type,
-      fix.targetFile,
-      fix.changeDescription,
-      fix.changeCode,
-      fix.location ? JSON.stringify(fix.location) : null,
-      fix.priority,
-      fix.confidence,
-      JSON.stringify(fix.affectedTests),
-      fix.rootCause ? JSON.stringify(fix.rootCause) : null,
-      fix.classification ? JSON.stringify(fix.classification) : null,
-      fix.status,
-      fix.createdAt || new Date().toISOString()
-    );
+    try {
+      db.prepare(`
+        INSERT OR REPLACE INTO generated_fixes
+        (fix_id, run_id, type, target_file, change_description, change_code,
+         location_json, priority, confidence, affected_tests, root_cause_json, classification_json, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        fix.fixId,
+        fix.runId,
+        fix.type,
+        fix.targetFile,
+        fix.changeDescription,
+        fix.changeCode,
+        fix.location ? JSON.stringify(fix.location) : null,
+        fix.priority,
+        fix.confidence,
+        JSON.stringify(fix.affectedTests),
+        fix.rootCause ? JSON.stringify(fix.rootCause) : null,
+        fix.classification ? JSON.stringify(fix.classification) : null,
+        fix.status,
+        fix.createdAt || new Date().toISOString()
+      );
+      console.log(`[Diagnosis:DB] Successfully saved fix ${fix.fixId}`);
+    } catch (error) {
+      console.error(`[Diagnosis:DB] Error saving fix ${fix.fixId}:`, error);
+      throw error;
+    }
   }
 
   /**
    * Save multiple generated fixes
    */
   saveGeneratedFixes(fixes: GeneratedFix[]): void {
+    console.log(`[Diagnosis:DB] saveGeneratedFixes called with ${fixes.length} fix(es)`);
     for (const fix of fixes) {
       this.saveGeneratedFix(fix);
     }
+    console.log(`[Diagnosis:DB] Finished saving ${fixes.length} fix(es)`);
   }
 
   /**
    * Get generated fixes for a run
    */
   getGeneratedFixes(runId?: string, status?: string): GeneratedFix[] {
+    console.log(`[Diagnosis:DB] getGeneratedFixes called with runId: ${runId}, status: ${status}`);
     const db = this.getDb();
 
     let query = `
@@ -1676,7 +1705,13 @@ export class Database {
 
     query += ' ORDER BY confidence DESC, priority ASC';
 
+    console.log(`[Diagnosis:DB] Executing query: ${query.replace(/\s+/g, ' ').trim()}`);
     const rows = db.prepare(query).all(...params) as any[];
+    console.log(`[Diagnosis:DB] getGeneratedFixes found ${rows.length} fix(es)`);
+
+    if (rows.length > 0) {
+      console.log(`[Diagnosis:DB] Fix IDs:`, rows.map(r => r.fix_id));
+    }
 
     return rows.map(row => ({
       fixId: row.fix_id,

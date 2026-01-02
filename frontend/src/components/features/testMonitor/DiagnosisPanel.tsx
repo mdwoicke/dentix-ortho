@@ -28,15 +28,23 @@ export function DiagnosisPanel({
   const [useLLM, setUseLLM] = useState(true);
 
   const handleRunDiagnosis = useCallback(async () => {
-    if (!runId || diagnosisState.isRunning) return;
+    console.log(`[Fixes:DiagnosisPanel] handleRunDiagnosis called with runId: ${runId}`);
+    if (!runId || diagnosisState.isRunning) {
+      console.log(`[Fixes:DiagnosisPanel] Early return - runId: ${runId}, isRunning: ${diagnosisState.isRunning}`);
+      return;
+    }
 
     try {
-      await dispatch(runDiagnosis({ runId, useLLM })).unwrap();
+      console.log(`[Fixes:DiagnosisPanel] Dispatching runDiagnosis thunk...`);
+      const result = await dispatch(runDiagnosis({ runId, useLLM })).unwrap();
+      console.log(`[Fixes:DiagnosisPanel] runDiagnosis completed:`, result);
       // Refresh fixes after diagnosis
+      console.log(`[Fixes:DiagnosisPanel] Dispatching fetchFixes(${runId})...`);
       dispatch(fetchFixes(runId));
+      console.log(`[Fixes:DiagnosisPanel] Calling onDiagnosisComplete callback`);
       onDiagnosisComplete?.();
     } catch (error) {
-      console.error('Diagnosis failed:', error);
+      console.error('[Fixes:DiagnosisPanel] Diagnosis failed:', error);
     }
   }, [dispatch, runId, useLLM, diagnosisState.isRunning, onDiagnosisComplete]);
 

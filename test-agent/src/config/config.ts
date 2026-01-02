@@ -30,7 +30,7 @@ export const config = {
 
   // Test Configuration
   tests: {
-    defaultDelayBetweenSteps: 500, // ms between conversation turns
+    defaultDelayBetweenSteps: 100, // ms between conversation turns (reduced from 500ms for faster testing)
     maxConversationTurns: 20,
   },
 
@@ -59,8 +59,8 @@ export const config = {
     // Evaluation mode:
     // - 'realtime': Evaluate each step immediately (highest accuracy, best for tuning)
     // - 'batch': Evaluate all steps after test completes (balanced)
-    // - 'failures-only': Only use LLM for failed tests (lowest cost)
-    mode: 'realtime' as 'realtime' | 'batch' | 'failures-only',
+    // - 'failures-only': Only use LLM for failed tests (lowest cost, fastest)
+    mode: 'failures-only' as 'realtime' | 'batch' | 'failures-only',
 
     // Fall back to regex validation when LLM unavailable
     fallbackToRegex: true,

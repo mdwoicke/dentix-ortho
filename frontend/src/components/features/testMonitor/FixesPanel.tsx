@@ -773,6 +773,17 @@ export function FixesPanel({
   const setClassificationFilter = onClassificationFilterChange ?? setInternalFilter;
   const targetCategoryFilter = externalTargetFilter ?? internalTargetFilter;
   const setTargetCategoryFilter = onTargetCategoryFilterChange ?? setInternalTargetFilter;
+
+  // Debug logging for fixes updates
+  useEffect(() => {
+    console.log(`[Fixes:FixesPanel] Component received fixes update:`, {
+      fixCount: fixes.length,
+      loading,
+      hasFailedTests,
+      fixIds: fixes.map(f => f.fixId),
+      fixStatuses: fixes.map(f => ({ id: f.fixId, status: f.status })),
+    });
+  }, [fixes, loading, hasFailedTests]);
   // Section expand/collapse state - bot sections expanded by default, test-agent collapsed
   const [sectionExpanded, setSectionExpanded] = useState<Record<FixCategory, boolean>>({
     'prompt': true,

@@ -1,7 +1,7 @@
 /**
  * ============================================================================
  * CHORD SCHEDULING DSO - Appointment Scheduling Tool (Node Red Version)
- * Version: v18 | Updated: 2025-12-31
+ * Version: v19 | Updated: 2026-01-01
  * ============================================================================
  * Actions: slots, grouped_slots, book_child, cancel
  * 
@@ -58,13 +58,27 @@ const ACTIONS = {{
             startTime: params.startTime,
             scheduleViewGUID: params.scheduleViewGUID,
             scheduleColumnGUID: params.scheduleColumnGUID,
-            appointmentTypeGUID: params.appointmentTypeGUID,
-            minutes: params.minutes,
+            appointmentTypeGUID: params.appointmentTypeGUID || '8fc9d063-ae46-4975-a5ae-734c6efe341a',
+            minutes: params.minutes || 45,
             childName: params.childName
         }}),
         validate: (params) => {{
-            if (!params.patientGUID) throw new Error("patientGUID is required for 'book_child' action");
-            if (!params.startTime) throw new Error("startTime is required for 'book_child' action");
+            // CRITICAL: All slot fields are REQUIRED for booking to succeed
+            // These must be extracted EXACTLY from the slots/grouped_slots response
+            const missing = [];
+            if (!params.patientGUID) missing.push('patientGUID');
+            if (!params.startTime) missing.push('startTime');
+            if (!params.scheduleViewGUID) missing.push('scheduleViewGUID');
+            if (!params.scheduleColumnGUID) missing.push('scheduleColumnGUID');
+
+            if (missing.length > 0) {{
+                throw new Error(
+                    'BOOKING FAILED - Missing required fields: ' + missing.join(', ') + '. ' +
+                    'You MUST extract these from the slots response. Each slot contains: ' +
+                    'StartTime, ScheduleViewGUID, ScheduleColumnGUID, AppointmentTypeGUID, Minutes. ' +
+                    'Copy these EXACTLY when calling book_child.'
+                );
+            }}
         }},
         successLog: () => 'Appointment booked successfully'
     }},
@@ -217,7 +231,7 @@ async function executeRequest() {{
     const action = $action;
     const timeout = 60000; // Longer timeout for slot searches with retries
     
-    console.log(`[${{toolName}}] v18 - 2025-12-31 - added date correction for past dates`);
+    console.log(`[${{toolName}}] v19 - 2026-01-01 - added comprehensive book_child slot field validation`);
     console.log(`[${{toolName}}] Action: ${{action}}`);
     
     // Validate action

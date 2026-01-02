@@ -191,14 +191,22 @@ export class LLMAnalysisService {
    * Analyze a test failure and generate fix recommendations
    */
   async analyzeFailure(context: FailureContext): Promise<AnalysisResult> {
+    console.log(`[Diagnosis:LLM] ========== analyzeFailure ==========`);
+    console.log(`[Diagnosis:LLM] Test: ${context.testId}, Step: ${context.stepId}`);
+
     const status = await this.llmProvider.checkAvailability();
+    console.log(`[Diagnosis:LLM] LLM Provider status:`, status);
+
     if (!status.available) {
+      console.error(`[Diagnosis:LLM] LLM not available, throwing error`);
       throw new Error(`LLM Analysis Service not available: ${status.error}`);
     }
 
     const prompt = this.buildAnalysisPrompt(context);
+    console.log(`[Diagnosis:LLM] Built prompt (${prompt.length} chars)`);
 
     try {
+      console.log(`[Diagnosis:LLM] Calling LLM provider with model: ${config.llmAnalysis.model}, timeout: ${config.llmAnalysis.timeout}ms`);
       const response = await this.llmProvider.execute({
         prompt,
         model: config.llmAnalysis.model,
@@ -207,26 +215,42 @@ export class LLMAnalysisService {
         timeout: config.llmAnalysis.timeout,
       });
 
+      console.log(`[Diagnosis:LLM] LLM response:`, {
+        success: response.success,
+        provider: response.provider,
+        durationMs: response.durationMs,
+        contentLength: response.content?.length || 0,
+        error: response.error,
+      });
+
       if (!response.success) {
         // Handle timeout or other errors
         if (response.error?.includes('timeout')) {
-          console.error(`LLM Analysis timed out after ${config.llmAnalysis.timeout}ms - falling back to rule-based analysis`);
+          console.warn(`[Diagnosis:LLM] Timed out after ${config.llmAnalysis.timeout}ms - falling back to rule-based analysis`);
           return this.generateRuleBasedAnalysis(context);
         }
         throw new Error(response.error || 'LLM Analysis failed');
       }
 
       const responseText = response.content || '';
-      console.log(`[LLMAnalysisService] Analysis completed via ${response.provider} in ${response.durationMs}ms`);
+      console.log(`[Diagnosis:LLM] Analysis completed via ${response.provider} in ${response.durationMs}ms`);
 
-      return this.parseAnalysisResponse(responseText, context);
+      const result = this.parseAnalysisResponse(responseText, context);
+      console.log(`[Diagnosis:LLM] Parsed result:`, {
+        rootCause: result.rootCause.type,
+        confidence: result.rootCause.confidence,
+        fixCount: result.fixes.length,
+        fixTypes: result.fixes.map(f => f.type),
+      });
+
+      return result;
     } catch (error: any) {
       // Handle timeout specifically
       if (error.message?.includes('timeout')) {
-        console.error(`LLM Analysis timed out after ${config.llmAnalysis.timeout}ms - falling back to rule-based analysis`);
+        console.warn(`[Diagnosis:LLM] Caught timeout error - falling back to rule-based analysis`);
         return this.generateRuleBasedAnalysis(context);
       }
-      console.error('LLM Analysis failed:', error);
+      console.error(`[Diagnosis:LLM] LLM Analysis failed:`, error.message);
       throw error;
     }
   }
@@ -702,6 +726,11 @@ Be specific and actionable. Generate complete code that can be directly applied.
    * Generate a quick analysis without full LLM call (for testing/fallback)
    */
   generateRuleBasedAnalysis(context: FailureContext): AnalysisResult {
+    console.log(`[Diagnosis:RuleBased] ========== generateRuleBasedAnalysis ==========`);
+    console.log(`[Diagnosis:RuleBased] Test: ${context.testId}, Step: ${context.stepId}`);
+    console.log(`[Diagnosis:RuleBased] Transcript length: ${context.transcript.length} turns`);
+    console.log(`[Diagnosis:RuleBased] API calls: ${context.apiCalls.length}`);
+
     const fixes: (PromptFix | ToolFix)[] = [];
     let rootCauseType: RootCause['type'] = 'prompt-gap';
     const evidence: string[] = [];
@@ -710,6 +739,9 @@ Be specific and actionable. Generate complete code that can be directly applied.
     const lastAssistantMessage = context.transcript
       .filter(t => t.role === 'assistant')
       .pop()?.content || '';
+
+    console.log(`[Diagnosis:RuleBased] Last assistant message (${lastAssistantMessage.length} chars): "${lastAssistantMessage.slice(0, 100)}..."`);
+
 
     // Check for banned words
     const bannedWords = ['sorry', 'error', 'problem', 'unable', 'cannot', 'failed'];
@@ -765,7 +797,7 @@ Be specific and actionable. Generate complete code that can be directly applied.
       botResponseAppropriate: false, // Assume bot has issue since test failed
     };
 
-    return {
+    const result = {
       rootCause: {
         type: rootCauseType,
         evidence,
@@ -780,6 +812,17 @@ Be specific and actionable. Generate complete code that can be directly applied.
         : 'No automatic fixes generated - LLM analysis recommended',
       classification,
     };
+
+    console.log(`[Diagnosis:RuleBased] Result:`, {
+      rootCauseType: result.rootCause.type,
+      confidence: result.rootCause.confidence,
+      evidenceCount: result.rootCause.evidence.length,
+      fixCount: result.fixes.length,
+      fixTypes: result.fixes.map(f => `${f.type}:${f.fixType}`),
+      classification: result.classification?.issueLocation,
+    });
+
+    return result;
   }
 }
 

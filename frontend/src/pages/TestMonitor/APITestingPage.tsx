@@ -310,17 +310,38 @@ const AppointmentsFormatter = ({ data }: { data: unknown }) => {
 };
 
 const LocationFormatter = ({ data }: { data: unknown }) => {
-  const locations = (data as { locations?: Array<Record<string, string>> })?.locations || (Array.isArray(data) ? data : [data]);
+  const result = data as { location?: Record<string, string>; locations?: Array<Record<string, string>>; success?: boolean; error?: string };
+
+  // Handle error responses
+  if (result?.error) {
+    return <div className="text-red-600 text-sm">{result.error}</div>;
+  }
+
+  // Handle both singular 'location' and plural 'locations' responses
+  let locations: Array<Record<string, string>> = [];
+  if (result?.location) {
+    locations = [result.location];
+  } else if (result?.locations) {
+    locations = result.locations;
+  } else if (Array.isArray(data)) {
+    locations = data as Array<Record<string, string>>;
+  }
+
   if (!locations.length || !locations[0]) return <div className="text-gray-500 italic">No location data</div>;
 
   return (
     <div className="space-y-2">
-      {locations.slice(0, 3).map((loc, i) => {
-        const locGuid = (loc as Record<string, string>).LocationGUID || (loc as Record<string, string>).locationGUID || '';
+      {locations.slice(0, 5).map((loc, i) => {
+        const locGuid = loc.LocationGUID || loc.locationGUID || loc.LocGUID || '';
+        const locName = loc.LocationName || loc.locationName || loc.LocName || 'Location';
+        const locAddr = loc.LocAddress || loc.Address || '';
+        const locPhone = loc.LocPhone || loc.Phone || '';
         return (
           <div key={i} className="p-2 bg-gray-50 dark:bg-gray-700 rounded text-sm">
-            <div className="font-medium">{(loc as Record<string, string>).LocationName || (loc as Record<string, string>).locationName || 'Location'}</div>
-            <div className="text-gray-600 dark:text-gray-300 text-xs flex items-center gap-1 group">
+            <div className="font-medium">{locName}</div>
+            {locAddr && <div className="text-gray-600 dark:text-gray-300 text-xs">{locAddr}</div>}
+            {locPhone && <div className="text-gray-600 dark:text-gray-300 text-xs">{locPhone}</div>}
+            <div className="text-gray-600 dark:text-gray-300 text-xs flex items-center gap-1 group mt-1">
               <span>GUID: {locGuid || 'N/A'}</span>
               {locGuid && (
                 <span className="opacity-0 group-hover:opacity-100 transition-opacity">
@@ -425,7 +446,7 @@ const Cloud9RecordsFormatter = ({ data }: { data: unknown }) => {
       <div className="space-y-2">
         {records.slice(0, 10).map((record, i) => (
           <div key={i} className="p-2 bg-gray-50 dark:bg-gray-700 rounded text-xs">
-            {Object.entries(record).slice(0, 8).map(([key, value]) => (
+            {Object.entries(record).map(([key, value]) => (
               <div key={key} className="flex items-center gap-1 group">
                 <span className="text-gray-400 w-32 shrink-0 truncate">{key}:</span>
                 <span className={keyFields.includes(key) ? 'font-mono' : ''}>{value || 'N/A'}</span>
@@ -436,9 +457,6 @@ const Cloud9RecordsFormatter = ({ data }: { data: unknown }) => {
                 )}
               </div>
             ))}
-            {Object.keys(record).length > 8 && (
-              <div className="text-gray-400 mt-1">...and {Object.keys(record).length - 8} more fields</div>
-            )}
           </div>
         ))}
       </div>

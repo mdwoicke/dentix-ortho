@@ -625,6 +625,7 @@ export async function getFixes(req: Request, res: Response, next: NextFunction):
 export async function getFixesForRun(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { runId } = req.params;
+    console.log(`[Diagnosis:Backend] getFixesForRun called for runId: ${runId}`);
 
     const db = getTestAgentDbWritable();
 
@@ -643,6 +644,11 @@ export async function getFixesForRun(req: Request, res: Response, next: NextFunc
         END,
         confidence DESC
     `).all(runId) as any[];
+
+    console.log(`[Diagnosis:Backend] getFixesForRun found ${rows.length} fix(es) in database`);
+    if (rows.length > 0) {
+      console.log(`[Diagnosis:Backend] Fix IDs:`, rows.map(r => r.fix_id));
+    }
 
     db.close();
 
@@ -664,8 +670,10 @@ export async function getFixesForRun(req: Request, res: Response, next: NextFunc
       createdAt: row.created_at,
     }));
 
+    console.log(`[Diagnosis:Backend] Returning ${fixes.length} fix(es) to frontend`);
     res.json({ success: true, data: fixes });
   } catch (error) {
+    console.error(`[Diagnosis:Backend] Error in getFixesForRun:`, error);
     next(error);
   }
 }
@@ -2205,20 +2213,44 @@ export async function runDiagnosis(req: Request, res: Response, next: NextFuncti
   const { runId } = req.params;
   const { useLLM = true } = req.body;
 
+  console.log(`[Diagnosis:Backend] ========== Starting Diagnosis ==========`);
+  console.log(`[Diagnosis:Backend] runId: ${runId}, useLLM: ${useLLM}`);
+
   try {
     // Verify run exists
     const db = getTestAgentDbWritable();
     const runRow = db.prepare(`
       SELECT run_id, status, failed FROM test_runs WHERE run_id = ?
     `).get(runId) as any;
+
+    console.log(`[Diagnosis:Backend] test_runs row:`, runRow);
+
+    // Also check actual test_results to detect mismatch
+    const testResultsCount = db.prepare(`
+      SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
+        SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) as error,
+        SUM(CASE WHEN status = 'passed' THEN 1 ELSE 0 END) as passed
+      FROM test_results WHERE run_id = ?
+    `).get(runId) as any;
+
+    console.log(`[Diagnosis:Backend] test_results counts:`, testResultsCount);
+
+    if (runRow && runRow.failed > 0 && testResultsCount && (testResultsCount.failed + testResultsCount.error) === 0) {
+      console.warn(`[Diagnosis:Backend] MISMATCH DETECTED! test_runs.failed=${runRow.failed} but actual failed test_results=0`);
+    }
+
     db.close();
 
     if (!runRow) {
+      console.log(`[Diagnosis:Backend] Run not found, returning 404`);
       res.status(404).json({ success: false, error: 'Test run not found' });
       return;
     }
 
     if (runRow.failed === 0) {
+      console.log(`[Diagnosis:Backend] test_runs.failed=0, returning early`);
       res.json({
         success: true,
         message: 'No failures to analyze',
@@ -2226,6 +2258,8 @@ export async function runDiagnosis(req: Request, res: Response, next: NextFuncti
       });
       return;
     }
+
+    console.log(`[Diagnosis:Backend] Proceeding with diagnosis - ${runRow.failed} failures in test_runs table`);
 
     // Run the test-agent analyze command
     const testAgentDir = path.resolve(__dirname, '../../../test-agent');
@@ -2295,19 +2329,34 @@ export async function runDiagnosis(req: Request, res: Response, next: NextFuncti
         }
 
         // Parse the JSON result from the output
+        console.log(`[Diagnosis:Backend] Process exited with code: ${code}`);
+        console.log(`[Diagnosis:Backend] Looking for __RESULT_JSON__ marker in output (length: ${stdout.length} chars)`);
+
         const jsonMatch = stdout.match(/__RESULT_JSON__\s*\n([\s\S]*?)$/);
         if (jsonMatch) {
+          console.log(`[Diagnosis:Backend] Found __RESULT_JSON__ marker, parsing JSON...`);
           try {
             const parsed = JSON.parse(jsonMatch[1].trim());
+            console.log(`[Diagnosis:Backend] Parsed result:`, {
+              success: parsed.success,
+              fixesGenerated: parsed.fixesGenerated,
+              analyzedCount: parsed.analyzedCount,
+              totalFailures: parsed.totalFailures,
+            });
             resolve(parsed);
             return;
           } catch (e) {
-            console.error('[Diagnosis] Failed to parse JSON result:', e);
+            console.error('[Diagnosis:Backend] Failed to parse JSON result:', e);
+            console.error('[Diagnosis:Backend] Raw JSON string:', jsonMatch[1].trim().slice(0, 500));
           }
+        } else {
+          console.warn(`[Diagnosis:Backend] No __RESULT_JSON__ marker found in output`);
+          console.log(`[Diagnosis:Backend] Last 500 chars of output:`, stdout.slice(-500));
         }
 
         // Fallback if no JSON found
         if (code === 0) {
+          console.log(`[Diagnosis:Backend] Using fallback response (no JSON found, exit code 0)`);
           resolve({
             success: true,
             output: stdout,
