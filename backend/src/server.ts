@@ -2,6 +2,7 @@ import dotenv from 'dotenv';
 import app from './app';
 import logger from './utils/logger';
 import { getDatabase } from './config/database';
+import { seedMasterAdmin } from './services/authService';
 
 // Load environment variables
 dotenv.config();
@@ -19,6 +20,13 @@ try {
   });
   process.exit(1);
 }
+
+// Seed master admin account
+seedMasterAdmin().catch((error) => {
+  logger.error('Failed to seed master admin', {
+    error: error instanceof Error ? error.message : String(error),
+  });
+});
 
 // Start server
 const server = app.listen(Number(PORT), HOST, () => {

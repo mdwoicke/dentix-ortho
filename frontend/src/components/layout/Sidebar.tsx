@@ -1,24 +1,29 @@
 /**
  * Sidebar Component
- * Navigation sidebar with menu items
+ * Navigation sidebar with menu items filtered by user permissions
  */
 
 import { NavLink } from 'react-router-dom';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import { selectSidebarOpen, setSidebarOpen, selectSidebarCollapsed, toggleSidebarCollapsed } from '../../store/slices/uiSlice';
+import { selectUser, selectIsAdmin, selectCanAccessTab } from '../../store/slices/authSlice';
 import { ROUTES } from '../../utils/constants';
 import { cn } from '../../utils/cn';
+import type { TabKey } from '../../types/auth.types';
 
 interface NavItem {
   label: string;
   path: string;
   icon: React.ReactNode;
+  tabKey?: TabKey;
+  adminOnly?: boolean;
 }
 
 const navItems: NavItem[] = [
   {
     label: 'Dashboard',
     path: ROUTES.HOME,
+    tabKey: 'dashboard',
     icon: (
       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path
@@ -33,6 +38,7 @@ const navItems: NavItem[] = [
   {
     label: 'Patients',
     path: ROUTES.PATIENTS,
+    tabKey: 'patients',
     icon: (
       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path
@@ -47,6 +53,7 @@ const navItems: NavItem[] = [
   {
     label: 'Appointments',
     path: ROUTES.APPOINTMENTS,
+    tabKey: 'appointments',
     icon: (
       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path
@@ -61,6 +68,7 @@ const navItems: NavItem[] = [
   {
     label: 'Calendar',
     path: ROUTES.CALENDAR,
+    tabKey: 'calendar',
     icon: (
       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path
@@ -75,6 +83,7 @@ const navItems: NavItem[] = [
   {
     label: 'Test Monitor',
     path: ROUTES.TEST_MONITOR,
+    tabKey: 'test_monitor',
     icon: (
       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path
@@ -89,6 +98,7 @@ const navItems: NavItem[] = [
   {
     label: 'Settings',
     path: ROUTES.SETTINGS,
+    tabKey: 'settings',
     icon: (
       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path
@@ -106,12 +116,29 @@ const navItems: NavItem[] = [
       </svg>
     ),
   },
+  {
+    label: 'Admin',
+    path: ROUTES.ADMIN,
+    adminOnly: true,
+    icon: (
+      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={2}
+          d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197m9-4.803a4 4 0 11-8 0 4 4 0 018 0zM6.5 9a2.5 2.5 0 100-5 2.5 2.5 0 000 5z"
+        />
+      </svg>
+    ),
+  },
 ];
 
 export function Sidebar() {
   const dispatch = useAppDispatch();
   const isOpen = useAppSelector(selectSidebarOpen);
   const isCollapsed = useAppSelector(selectSidebarCollapsed);
+  const user = useAppSelector(selectUser);
+  const isAdmin = useAppSelector(selectIsAdmin);
 
   const handleClose = () => {
     // Only close on mobile
@@ -123,6 +150,28 @@ export function Sidebar() {
   const handleToggleCollapse = () => {
     dispatch(toggleSidebarCollapsed());
   };
+
+  // Filter nav items based on permissions
+  const filteredNavItems = navItems.filter((item) => {
+    // Admin-only items: only show to admin users
+    if (item.adminOnly) {
+      return isAdmin;
+    }
+
+    // Tab-based items: check permissions
+    if (item.tabKey) {
+      // Admin users can see all tabs
+      if (isAdmin) {
+        return true;
+      }
+      // Check user permissions
+      const permission = user?.permissions.find(p => p.tab_key === item.tabKey);
+      return permission?.can_access ?? false;
+    }
+
+    // No restrictions
+    return true;
+  });
 
   return (
     <>
@@ -171,7 +220,7 @@ export function Sidebar() {
 
           {/* Navigation items */}
           <nav className={cn('flex-1 space-y-1 py-4', isCollapsed ? 'px-2' : 'px-3')}>
-            {navItems.map((item) => (
+            {filteredNavItems.map((item) => (
               <NavLink
                 key={item.path}
                 to={item.path}

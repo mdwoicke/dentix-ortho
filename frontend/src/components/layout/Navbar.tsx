@@ -1,16 +1,17 @@
 /**
  * Navbar Component
- * Top navigation bar with logo, environment indicator, theme toggle, and menu toggle
+ * Top navigation bar with logo, environment indicator, theme toggle, user info, and menu toggle
  */
 
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
-import { selectEnvironment, toggleEnvironment } from '../../store/slices/authSlice';
+import { selectEnvironment, toggleEnvironment, selectUser, logout } from '../../store/slices/authSlice';
 import { toggleSidebar } from '../../store/slices/uiSlice';
 import { useTheme } from '../../contexts/ThemeContext';
 
 export function Navbar() {
   const dispatch = useAppDispatch();
   const environment = useAppSelector(selectEnvironment);
+  const user = useAppSelector(selectUser);
   const { theme, toggleTheme } = useTheme();
 
   const handleToggleSidebar = () => {
@@ -19,6 +20,10 @@ export function Navbar() {
 
   const handleToggleEnvironment = () => {
     dispatch(toggleEnvironment());
+  };
+
+  const handleLogout = () => {
+    dispatch(logout());
   };
 
   return (
@@ -56,7 +61,7 @@ export function Navbar() {
           </div>
         </div>
 
-        {/* Right: Theme toggle & Environment toggle */}
+        {/* Right: Theme toggle, Environment toggle, User info & Logout */}
         <div className="flex items-center gap-3">
           {/* Theme Toggle */}
           <button
@@ -113,6 +118,43 @@ export function Navbar() {
               {environment === 'sandbox' ? 'Sandbox' : 'Production'}
             </button>
           </div>
+
+          {/* Divider */}
+          <div className="h-6 w-px bg-gray-300 dark:bg-gray-600 hidden sm:block" />
+
+          {/* User Info & Logout */}
+          {user && (
+            <div className="flex items-center gap-3">
+              <div className="hidden sm:block text-right">
+                <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                  {user.display_name || user.email.split('@')[0]}
+                </div>
+                {user.is_admin && (
+                  <div className="text-xs text-blue-600 dark:text-blue-400">Admin</div>
+                )}
+              </div>
+              <button
+                onClick={handleLogout}
+                className="p-2 rounded-md hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors text-gray-700 dark:text-gray-200"
+                aria-label="Logout"
+                title="Logout"
+              >
+                <svg
+                  className="w-5 h-5"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
+                  />
+                </svg>
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </nav>

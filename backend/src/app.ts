@@ -9,6 +9,8 @@ import patientRoutes from './routes/patients';
 import appointmentRoutes from './routes/appointments';
 import postmanRoutes from './routes/postman';
 import testMonitorRoutes from './routes/testMonitor';
+import authRoutes from './routes/auth';
+import adminRoutes from './routes/admin';
 
 /**
  * Express Application Setup
@@ -62,6 +64,8 @@ app.use('/api/patients', patientRoutes);
 app.use('/api/appointments', appointmentRoutes);
 app.use('/api/postman', postmanRoutes);
 app.use('/api/test-monitor', testMonitorRoutes);
+app.use('/api/auth', authRoutes);
+app.use('/api/admin', adminRoutes);
 
 // ===========================================
 // Error Handling

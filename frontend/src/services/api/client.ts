@@ -9,9 +9,31 @@ import { API_CONFIG } from '../../utils/constants';
 import type { ApiError, ApiResponse, Environment } from '../../types';
 
 /**
- * Environment storage key
+ * Storage keys
  */
 const ENVIRONMENT_KEY = 'dentix_environment';
+const AUTH_TOKEN_KEY = 'dentix_auth_token';
+
+/**
+ * Get auth token from localStorage
+ */
+export function getAuthToken(): string | null {
+  return localStorage.getItem(AUTH_TOKEN_KEY);
+}
+
+/**
+ * Set auth token in localStorage
+ */
+export function setAuthToken(token: string): void {
+  localStorage.setItem(AUTH_TOKEN_KEY, token);
+}
+
+/**
+ * Remove auth token from localStorage
+ */
+export function removeAuthToken(): void {
+  localStorage.removeItem(AUTH_TOKEN_KEY);
+}
 
 /**
  * Get current environment from localStorage
@@ -40,11 +62,18 @@ function createApiClient(): AxiosInstance {
     },
   });
 
-  // Request interceptor: Add environment header
+  // Request interceptor: Add environment header and auth token
   client.interceptors.request.use(
     (config) => {
       const environment = getCurrentEnvironment();
       config.headers['X-Environment'] = environment;
+
+      // Add auth token if present
+      const token = getAuthToken();
+      if (token) {
+        config.headers['Authorization'] = `Bearer ${token}`;
+      }
+
       return config;
     },
     (error) => {

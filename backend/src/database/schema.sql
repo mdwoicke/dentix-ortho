@@ -167,3 +167,38 @@ CREATE TABLE IF NOT EXISTS prompt_version_history (
 
 CREATE INDEX IF NOT EXISTS idx_prompt_history_file_key ON prompt_version_history(file_key);
 CREATE INDEX IF NOT EXISTS idx_prompt_history_version ON prompt_version_history(file_key, version);
+
+-- User Authentication Tables
+
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  email TEXT UNIQUE NOT NULL,
+  password_hash TEXT NOT NULL,
+  display_name TEXT,
+  is_admin INTEGER DEFAULT 0,
+  is_active INTEGER DEFAULT 1,
+  must_change_password INTEGER DEFAULT 1,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  last_login_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+CREATE INDEX IF NOT EXISTS idx_users_active ON users(is_active);
+
+-- Tab permissions (which tabs a user can access)
+CREATE TABLE IF NOT EXISTS user_permissions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  tab_key TEXT NOT NULL CHECK(tab_key IN (
+    'dashboard', 'patients', 'appointments', 'calendar', 'test_monitor', 'settings',
+    'goal_tests', 'goal_test_generator', 'history', 'tuning',
+    'ab_testing_sandbox', 'ai_prompting', 'api_testing', 'advanced'
+  )),
+  can_access INTEGER DEFAULT 1,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  UNIQUE(user_id, tab_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_permissions_user_id ON user_permissions(user_id);

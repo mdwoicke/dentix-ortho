@@ -9,6 +9,8 @@
 export const ROUTES = {
   HOME: '/',
   DASHBOARD: '/',
+  LOGIN: '/login',
+  ADMIN: '/admin',
   PATIENTS: '/patients',
   PATIENT_DETAIL: '/patients/:patientGuid',
   PATIENT_NEW: '/patients/new',
@@ -119,6 +121,7 @@ export const STORAGE_KEYS = {
   THEME: 'dentix_theme',
   SIDEBAR_STATE: 'dentix_sidebar_open',
   SIDEBAR_COLLAPSED: 'dentix_sidebar_collapsed',
+  AUTH_TOKEN: 'dentix_auth_token',
 } as const;
 
 /**
