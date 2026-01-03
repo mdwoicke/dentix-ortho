@@ -1,51 +1,68 @@
 /**
  * ============================================================================
  * CHORD SCHEDULING DSO - Appointment Scheduling Tool (Node Red Version)
- * Version: v19 | Updated: 2026-01-01
+ * Version: v43 | Updated: 2026-01-03
  * ============================================================================
  * Actions: slots, grouped_slots, book_child, cancel
- * 
+ *
+ * v43 FIX: Removed DEFAULT_SCHEDULE_VIEW_GUID - was pointing to schedule with no slots
+ *          Now returns all available slots when no specific schedule view is provided
+ * v42 FIX: Default numberOfPatients=2 for grouped_slots (LLM often omits it)
+ * v41 FIX: Added _debug_error and _debug_dates for API failure diagnosis
+ * v40 FIX: Added default timeWindowMinutes=30 for grouped_slots action
+ * CRITICAL FIX: SANDBOX_MIN_DATE ensures slot searches start from Jan 13, 2026
  * This version calls Node Red endpoints instead of Cloud9 directly.
- * All Cloud9 XML/SOAP logic, stepwise search, and LLM guidance is handled by Node Red.
  * ============================================================================
  */
 
 const fetch = require('node-fetch');
 
-// ============================================================================
-// 📝 ACTION CONFIGURATIONS
-// ============================================================================
-
+const TOOL_VERSION = 'v43';
+const MAX_SLOTS_RETURNED = 10; // Limit response size for Flowise
 const BASE_URL = 'https://c1-aicoe-nodered-lb.prod.c1conversations.io/FabricWorkflow/api/chord';
+// v43: Removed DEFAULT_SCHEDULE_VIEW_GUID - was pointing to schedule with no slots
+
+// SANDBOX MINIMUM DATE: Cloud9 sandbox has no slots before this date
+const SANDBOX_MIN_DATE = new Date(2026, 0, 13); // January 13, 2026
 
 const ACTIONS = {
     slots: {
         endpoint: `${BASE_URL}/ortho/getApptSlots`,
         method: 'POST',
-        buildBody: (params, uui) => ({
-            uui: uui,
-            startDate: params.startDate,
-            endDate: params.endDate,
-            scheduleViewGUIDs: params.scheduleViewGUIDs
-        }),
+        buildBody: (params, uui) => {
+            const body = {
+                uui: uui,
+                startDate: params.startDate,
+                endDate: params.endDate
+            };
+            // v43: Only include scheduleViewGUIDs if explicitly provided
+            if (params.scheduleViewGUIDs) {
+                body.scheduleViewGUIDs = params.scheduleViewGUIDs;
+            }
+            return body;
+        },
         validate: () => {},
         successLog: (data) => `Found ${data.count || (data.slots ? data.slots.length : 0) || 0} available slots`
     },
     grouped_slots: {
         endpoint: `${BASE_URL}/ortho/getGroupedApptSlots`,
         method: 'POST',
-        buildBody: (params, uui) => ({
-            uui: uui,
-            startDate: params.startDate,
-            endDate: params.endDate,
-            numberOfPatients: params.numberOfPatients,
-            timeWindowMinutes: params.timeWindowMinutes,
-            scheduleViewGUIDs: params.scheduleViewGUIDs
-        }),
-        validate: (params) => {
-            if (!params.numberOfPatients) {
-                throw new Error("numberOfPatients is required for 'grouped_slots' action");
+        buildBody: (params, uui) => {
+            const body = {
+                uui: uui,
+                startDate: params.startDate,
+                endDate: params.endDate,
+                numberOfPatients: params.numberOfPatients || 2,
+                timeWindowMinutes: params.timeWindowMinutes || 30
+            };
+            // v43: Only include scheduleViewGUIDs if explicitly provided
+            if (params.scheduleViewGUIDs) {
+                body.scheduleViewGUIDs = params.scheduleViewGUIDs;
             }
+            return body;
+        },
+        validate: () => {
+            // numberOfPatients defaults to 2 in buildBody
         },
         successLog: (data) => `Found ${data.totalGroups || (data.groups ? data.groups.length : 0) || 0} grouped slot options`
     },
@@ -63,21 +80,13 @@ const ACTIONS = {
             childName: params.childName
         }),
         validate: (params) => {
-            // CRITICAL: All slot fields are REQUIRED for booking to succeed
-            // These must be extracted EXACTLY from the slots/grouped_slots response
             const missing = [];
             if (!params.patientGUID) missing.push('patientGUID');
             if (!params.startTime) missing.push('startTime');
             if (!params.scheduleViewGUID) missing.push('scheduleViewGUID');
             if (!params.scheduleColumnGUID) missing.push('scheduleColumnGUID');
-
             if (missing.length > 0) {
-                throw new Error(
-                    'BOOKING FAILED - Missing required fields: ' + missing.join(', ') + '. ' +
-                    'You MUST extract these from the slots response. Each slot contains: ' +
-                    'StartTime, ScheduleViewGUID, ScheduleColumnGUID, AppointmentTypeGUID, Minutes. ' +
-                    'Copy these EXACTLY when calling book_child.'
-                );
+                throw new Error('BOOKING FAILED - Missing required fields: ' + missing.join(', '));
             }
         },
         successLog: () => 'Appointment booked successfully'
@@ -98,123 +107,102 @@ const ACTIONS = {
     }
 };
 
-// ============================================================================
-// 🔐 AUTHENTICATION
-// ============================================================================
-
 function getAuthHeader() {
     try {
         const username = "workflowapi";
         const password = "e^@V95&6sAJReTsb5!iq39mIC4HYIV";
-        if (username && password) {
-            const credentials = Buffer.from(`${username}:${password}`).toString('base64');
-            return `Basic ${credentials}`;
-        }
+        const credentials = Buffer.from(`${username}:${password}`).toString('base64');
+        return `Basic ${credentials}`;
     } catch (e) {
         return null;
     }
-    return null;
 }
-
-// ============================================================================
-// 🔍 ERROR DETECTION HELPER
-// ============================================================================
 
 function checkForError(data) {
     if (!data || typeof data !== 'object') return null;
-    
-    // Pattern 1: { success: false, error: "..." }
-    if (data.success === false && !data.llm_guidance) {
-        return data.error || data.message || 'Operation failed';
-    }
-    
-    // Pattern 2: { code: false, error: [...] }
-    if (data.code === false) {
-        if (Array.isArray(data.error)) {
-            return data.error.join(', ');
-        }
-        return data.error || data.message || 'API returned error';
-    }
-    
-    // Pattern 3: { error: "..." } without success/code/slots/groups field
+    if (data.success === false && !data.llm_guidance) return data.error || 'Operation failed';
+    if (data.code === false) return Array.isArray(data.error) ? data.error.join(', ') : data.error;
     if (data.error && !data.slots && !data.groups && !data.appointmentGUID && !data.llm_guidance) {
-        if (Array.isArray(data.error)) {
-            return data.error.join(', ');
-        }
-        return data.error;
+        return Array.isArray(data.error) ? data.error.join(', ') : data.error;
     }
-    
     return null;
 }
 
-// ============================================================================
-// 📅 DATE CORRECTION - Auto-correct past dates to future
-// ============================================================================
+function formatDate(date) {
+    const mm = String(date.getMonth() + 1).padStart(2, '0');
+    const dd = String(date.getDate()).padStart(2, '0');
+    const yyyy = date.getFullYear();
+    return `${mm}/${dd}/${yyyy}`;
+}
+
+function parseDate(dateStr) {
+    if (!dateStr) return null;
+    const parts = dateStr.split('/');
+    if (parts.length !== 3) return null;
+    return new Date(parseInt(parts[2]), parseInt(parts[0]) - 1, parseInt(parts[1]));
+}
 
 function correctDate(dateStr) {
     if (!dateStr) return dateStr;
-    
-    // Parse MM/DD/YYYY format
-    const parts = dateStr.split('/');
-    if (parts.length !== 3) return dateStr;
-    
-    const month = parseInt(parts[0], 10);
-    const day = parseInt(parts[1], 10);
-    const year = parseInt(parts[2], 10);
-    
-    const inputDate = new Date(year, month - 1, day);
+    const inputDate = parseDate(dateStr);
+    if (!inputDate) return dateStr;
+
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    
-    // If date is in the past, set to tomorrow
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    let targetDate = inputDate;
     if (inputDate < today) {
-        const tomorrow = new Date(today);
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        const mm = String(tomorrow.getMonth() + 1).padStart(2, '0');
-        const dd = String(tomorrow.getDate()).padStart(2, '0');
-        const yyyy = tomorrow.getFullYear();
-        console.log(`[DATE CORRECTION] ${dateStr} is in the past, correcting to ${mm}/${dd}/${yyyy}`);
-        return `${mm}/${dd}/${yyyy}`;
+        targetDate = tomorrow;
+        console.log('[DATE CORRECTION] ' + dateStr + ' is in the past');
     }
-    
+    if (targetDate < SANDBOX_MIN_DATE) {
+        console.log('[DATE CORRECTION] ' + formatDate(targetDate) + ' is before sandbox availability, using ' + formatDate(SANDBOX_MIN_DATE));
+        targetDate = new Date(SANDBOX_MIN_DATE);
+    }
+    if (targetDate.getTime() !== inputDate.getTime()) {
+        const corrected = formatDate(targetDate);
+        console.log('[DATE CORRECTION] ' + dateStr + ' -> ' + corrected);
+        return corrected;
+    }
     return dateStr;
 }
 
 function correctDateRange(startDate, endDate) {
-    const correctedStart = correctDate(startDate);
+    let correctedStart = correctDate(startDate);
     let correctedEnd = correctDate(endDate);
-    
-    // Ensure end date is after start date
-    if (correctedStart && correctedEnd) {
-        const startParts = correctedStart.split('/');
-        const endParts = correctedEnd.split('/');
-        const start = new Date(parseInt(startParts[2]), parseInt(startParts[0]) - 1, parseInt(startParts[1]));
-        const end = new Date(parseInt(endParts[2]), parseInt(endParts[0]) - 1, parseInt(endParts[1]));
-        
-        if (end <= start) {
-            // Set end date to start + 4 days
+
+    if (!correctedStart) {
+        correctedStart = formatDate(new Date(SANDBOX_MIN_DATE));
+        console.log('[DATE CORRECTION] No start date, using ' + correctedStart);
+    }
+
+    const start = parseDate(correctedStart);
+    const end = parseDate(correctedEnd);
+
+    if (!end || end <= start) {
+        const newEnd = new Date(start);
+        newEnd.setDate(newEnd.getDate() + 14);
+        correctedEnd = formatDate(newEnd);
+        console.log('[DATE CORRECTION] End date adjusted to ' + correctedEnd);
+    } else {
+        const daysDiff = Math.floor((end - start) / (1000 * 60 * 60 * 24));
+        if (daysDiff < 7) {
             const newEnd = new Date(start);
-            newEnd.setDate(newEnd.getDate() + 4);
-            const mm = String(newEnd.getMonth() + 1).padStart(2, '0');
-            const dd = String(newEnd.getDate()).padStart(2, '0');
-            const yyyy = newEnd.getFullYear();
-            correctedEnd = `${mm}/${dd}/${yyyy}`;
-            console.log(`[DATE CORRECTION] End date adjusted to ${correctedEnd}`);
+            newEnd.setDate(newEnd.getDate() + 14);
+            correctedEnd = formatDate(newEnd);
+            console.log('[DATE CORRECTION] End date extended to ' + correctedEnd);
         }
     }
-    
     return { startDate: correctedStart, endDate: correctedEnd };
 }
-
-// ============================================================================
-// 🔧 PARAMETER CLEANER
-// ============================================================================
 
 function cleanParams(params) {
     const cleaned = {};
     for (const [key, value] of Object.entries(params)) {
-        if (value !== null && value !== undefined && value !== '' && 
-            value !== 'NULL' && value !== 'null' && value !== 'None' && 
+        if (value !== null && value !== undefined && value !== '' &&
+            value !== 'NULL' && value !== 'null' && value !== 'None' &&
             value !== 'none' && value !== 'N/A' && value !== 'n/a') {
             cleaned[key] = value;
         }
@@ -222,35 +210,27 @@ function cleanParams(params) {
     return cleaned;
 }
 
-// ============================================================================
-// 🚀 HTTP REQUEST ENGINE
-// ============================================================================
-
 async function executeRequest() {
     const toolName = 'schedule_appointment_ortho';
     const action = $action;
-    const timeout = 60000; // Longer timeout for slot searches with retries
-    
-    console.log(`[${toolName}] v19 - 2026-01-01 - added comprehensive book_child slot field validation`);
-    console.log(`[${toolName}] Action: ${action}`);
-    
-    // Validate action
+    const timeout = 60000;
+
+    console.log('[' + toolName + '] ' + TOOL_VERSION + ' - 2026-01-03 - Removed DEFAULT_SCHEDULE_VIEW_GUID (was empty)');
+    console.log('[' + toolName + '] Action: ' + action);
+
     if (!action || !ACTIONS[action]) {
-        const validActions = Object.keys(ACTIONS).join(', ');
-        throw new Error(`Invalid action '${action}'. Valid actions: ${validActions}`);
+        throw new Error('Invalid action. Valid: ' + Object.keys(ACTIONS).join(', '));
     }
-    
+
     const config = ACTIONS[action];
-    
-    // Get UUI with fallback
+
     let uui;
     if (!$vars || !$vars.c1mg_uui || $vars.c1mg_uui === 'c1mg_uui' || (typeof $vars.c1mg_uui === 'string' && $vars.c1mg_uui.trim() === '')) {
         uui = '765381306-000000000001030525-SR-000-000000000000DAL130-026DE427|333725|421458314VO|2d411063-3769-4618-86d1-925d3578c112|FSV';
     } else {
         uui = $vars.c1mg_uui;
     }
-    
-    // Build params object from Flowise variables
+
     const rawParams = {
         startDate: typeof $startDate !== 'undefined' ? $startDate : null,
         endDate: typeof $endDate !== 'undefined' ? $endDate : null,
@@ -269,118 +249,101 @@ async function executeRequest() {
         childName: typeof $childName !== 'undefined' ? $childName : null
     };
     const params = cleanParams(rawParams);
-    
-    // Apply date correction for slot-related actions (past dates -> tomorrow)
+
+    // Store original dates for debugging
+    const originalDates = { startDate: params.startDate, endDate: params.endDate };
+
     if (action === 'slots' || action === 'grouped_slots') {
         const corrected = correctDateRange(params.startDate, params.endDate);
         if (corrected.startDate) params.startDate = corrected.startDate;
         if (corrected.endDate) params.endDate = corrected.endDate;
     }
-    
+
+    // Store corrected dates for debugging
+    const correctedDates = { startDate: params.startDate, endDate: params.endDate };
+
     try {
-        // Validate required params for this action
         config.validate(params);
-        
         const body = config.buildBody(params, uui);
-        console.log(`[${toolName}] Endpoint: ${config.method} ${config.endpoint}`);
-        console.log(`[${toolName}] Request Body:`, JSON.stringify(body, null, 2));
-        
-        const headers = {
-            'Content-Type': 'application/json'
-        };
-        
+        console.log('[' + toolName + '] Request:', JSON.stringify(body));
+
+        const headers = { 'Content-Type': 'application/json' };
         const authHeader = getAuthHeader();
-        if (authHeader) {
-            headers['Authorization'] = authHeader;
-        }
-        
-        const options = {
+        if (authHeader) headers['Authorization'] = authHeader;
+
+        const response = await fetch(config.endpoint, {
             method: config.method,
             headers: headers,
             body: JSON.stringify(body)
-        };
-        
-        // Add timeout
-        let timeoutId;
-        if (typeof AbortController !== 'undefined') {
-            const controller = new AbortController();
-            timeoutId = setTimeout(() => controller.abort(), timeout);
-            options.signal = controller.signal;
-        }
-        
-        console.log(`[${toolName}] Making request to Node Red...`);
-        const response = await fetch(config.endpoint, options);
-        
-        if (timeoutId) clearTimeout(timeoutId);
-        
-        console.log(`[${toolName}] Response Status: ${response.status} ${response.statusText}`);
-        
-        let data;
-        const contentType = response.headers.get('content-type');
-        if (contentType && contentType.includes('application/json')) {
-            data = await response.json();
-        } else {
-            data = await response.text();
-        }
-        
-        // Check HTTP status
+        });
+
+        let data = await response.json().catch(() => response.text());
+
         if (!response.ok) {
-            console.error(`[${toolName}] HTTP Error ${response.status}:`, data);
-            let errorMsg = `HTTP ${response.status}: ${response.statusText}`;
-            if (data) {
-                const bodyError = checkForError(typeof data === 'string' ? (() => { try { return JSON.parse(data); } catch(e) { return data; } })() : data);
-                if (bodyError) errorMsg = bodyError;
-            }
-            throw new Error(errorMsg);
+            throw new Error('HTTP ' + response.status + ': ' + response.statusText);
         }
-        
-        // Parse response if string
-        let responseData = data;
-        if (typeof data === 'string') {
-            try { responseData = JSON.parse(data); } catch (e) { responseData = data; }
+
+        const errorMessage = checkForError(data);
+        if (errorMessage) throw new Error(errorMessage);
+
+        console.log('[' + toolName + '] ' + config.successLog(data));
+
+        // Limit slots to reduce response size for Flowise
+        if (data && data.slots && data.slots.length > MAX_SLOTS_RETURNED) {
+            console.log('[' + toolName + '] Limiting slots from ' + data.slots.length + ' to ' + MAX_SLOTS_RETURNED);
+            data.slots = data.slots.slice(0, MAX_SLOTS_RETURNED);
+            data.count = MAX_SLOTS_RETURNED;
+            data._truncated = true;
         }
-        
-        // Check for error patterns in successful HTTP response
-        const errorMessage = checkForError(responseData);
-        if (errorMessage) {
-            console.error(`[${toolName}] API Error:`, responseData);
-            throw new Error(errorMessage);
+        if (data && data.groups && data.groups.length > MAX_SLOTS_RETURNED) {
+            console.log('[' + toolName + '] Limiting groups from ' + data.groups.length + ' to ' + MAX_SLOTS_RETURNED);
+            data.groups = data.groups.slice(0, MAX_SLOTS_RETURNED);
+            data.totalGroups = MAX_SLOTS_RETURNED;
+            data._truncated = true;
         }
-        
-        const successMsg = typeof config.successLog === 'function' ? config.successLog(responseData) : config.successLog;
-        console.log(`[${toolName}] ${successMsg}`);
-        
-        return JSON.stringify(responseData);
-        
+
+        // Add version to response for verification
+        if (typeof data === 'object') {
+            data._toolVersion = TOOL_VERSION;
+        }
+
+        var result = JSON.stringify(data);
+        console.log('[' + toolName + '] Response size: ' + result.length + ' bytes');
+        return result;
+
     } catch (error) {
-        console.error(`[${toolName}] Error:`, error.message);
-        
-        if (error.name === 'AbortError') {
-            error.message = `Request timeout after ${timeout}ms`;
+        console.error('[' + toolName + '] Error:', error.message);
+
+        const isMissingSlotFields = error.message.includes('BOOKING FAILED');
+        if (isMissingSlotFields) {
+            return JSON.stringify({
+                success: false,
+                _toolVersion: TOOL_VERSION,
+                llm_guidance: {
+                    error_type: 'missing_slot_data',
+                    voice_response: 'Let me verify that time for you.',
+                    action_required: 'refetch_slots_and_retry',
+                    CRITICAL: 'Do NOT transfer. Re-fetch slots then retry booking.'
+                }
+            });
         }
-        
-        // Check if this is a timeout or network error
-        const isTimeout = ['timeout', 'aborted', 'ETIMEDOUT', 'ECONNRESET'].some(e =>
-            error.message.toLowerCase().includes(e.toLowerCase()));
-        
-        // Return graceful error response with LLM guidance
-        const errorResponse = {
+
+        return JSON.stringify({
             success: false,
+            _toolVersion: TOOL_VERSION,
+            _debug_error: error.message,
+            _debug_dates: {
+                original: originalDates,
+                corrected: correctedDates,
+                action: action
+            },
             llm_guidance: {
-                timestamp: new Date().toISOString(),
-                error_type: isTimeout ? 'timeout' : 'api_error',
-                voice_response: "I want to connect you with a specialist who can assist you. One moment while I transfer your call.",
-                action_required: "transfer_to_agent",
-                transfer_reason: isTimeout ? "scheduling_timeout" : "api_failure",
-                CRITICAL: "Do NOT mention error, timeout, or system problems to caller. Transfer gracefully.",
-                prohibited_responses: [
-                    "error", "timeout", "problem", "issue", "failed",
-                    "system is down", "technical difficulties", "something went wrong"
-                ]
+                error_type: 'api_error',
+                voice_response: 'I want to connect you with a specialist. One moment while I transfer your call.',
+                action_required: 'transfer_to_agent',
+                CRITICAL: 'Do NOT mention error to caller. Transfer gracefully.'
             }
-        };
-        
-        return JSON.stringify(errorResponse);
+        });
     }
 }
 
