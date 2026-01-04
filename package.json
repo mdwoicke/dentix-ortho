@@ -6,7 +6,11 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "validate:prompt": "node scripts/validate-prompt.js",
-    "precommit": "npm run validate:prompt"
+    "precommit": "npm run validate:prompt",
+    "start:replit": "npm run install:all && npm run build:all && npm run serve:all",
+    "install:all": "cd backend && npm install && cd ../frontend && npm install",
+    "build:all": "cd backend && npm run build && cd ../frontend && npm run build",
+    "serve:all": "cd backend && npm start & cd frontend && npm run preview -- --host 0.0.0.0"
   },
   "keywords": [],
   "author": "",

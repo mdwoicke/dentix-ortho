@@ -1,0 +1,17 @@
+run = "npm run start:replit"
+entrypoint = "backend/src/server.ts"
+
+[nix]
+channel = "stable-24_05"
+
+[deployment]
+run = ["sh", "-c", "npm run start:replit"]
+deploymentTarget = "cloudrun"
+
+[[ports]]
+localPort = 3001
+externalPort = 3001
+
+[[ports]]
+localPort = 5174
+externalPort = 80

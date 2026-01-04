@@ -111,9 +111,22 @@ export function clearCredentialsCache(): void {
 // ============================================================================
 
 /**
+ * Check if Replit mode is enabled
+ * When enabled, automatically disables CLI mode and uses API-only
+ */
+export function isReplitMode(): boolean {
+  return process.env.REPLIT_MODE === 'true';
+}
+
+/**
  * Check if Claude CLI mode is enabled
+ * Note: REPLIT_MODE=true automatically disables CLI mode
  */
 export function isClaudeCliEnabled(): boolean {
+  // REPLIT_MODE automatically disables CLI (CLI not available on Replit)
+  if (isReplitMode()) {
+    return false;
+  }
   return process.env.USE_CLAUDE_CLI === 'true';
 }
 
@@ -121,8 +134,13 @@ export function isClaudeCliEnabled(): boolean {
  * Get the full LLM configuration
  */
 export function getLLMConfig(): LLMConfig {
+  // Log Replit mode on first config access
+  if (isReplitMode()) {
+    console.log('[LLMConfig] Replit mode enabled - using API-only mode');
+  }
+
   return {
-    useClaudeCli: process.env.USE_CLAUDE_CLI === 'true',
+    useClaudeCli: isClaudeCliEnabled(), // Respects REPLIT_MODE
     apiKey: getApiKey(),
     defaultModel: 'claude-sonnet-4-20250514',
     timeout: 120000, // 2 minutes
