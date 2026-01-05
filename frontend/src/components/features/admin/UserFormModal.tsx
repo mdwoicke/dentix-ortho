@@ -18,7 +18,7 @@ const ALL_TABS = [
   { key: 'goal_test_generator', label: 'Goal Test Generator' },
   { key: 'history', label: 'History' },
   { key: 'tuning', label: 'Tuning' },
-  { key: 'ab_testing_sandbox', label: 'A/B Testing Sandbox' },
+  { key: 'ab_testing_sandbox', label: 'A/B Testing' },
   { key: 'ai_prompting', label: 'AI Prompting' },
   { key: 'api_testing', label: 'API Testing' },
   { key: 'advanced', label: 'Advanced' },

@@ -30,6 +30,11 @@ export const ROUTES = {
   TEST_MONITOR_AI_PROMPTING: '/test-monitor/ai-prompting',
   TEST_MONITOR_API_TESTING: '/test-monitor/api-testing',
   TEST_MONITOR_RUN_DETAIL: '/test-monitor/run/:runId',
+  // New unified routes (Sprint 2+)
+  TEST_MONITOR_TESTS: '/test-monitor/tests',
+  TEST_MONITOR_ANALYSIS: '/test-monitor/analysis',
+  TEST_MONITOR_SANDBOX_LAB: '/test-monitor/sandbox-lab',
+  TEST_MONITOR_EXPERIMENTS: '/test-monitor/experiments',
 } as const;
 
 /**

@@ -6,6 +6,7 @@
 import { useState, useEffect } from 'react';
 import { Spinner } from '../../ui';
 import { cn } from '../../../utils/cn';
+import { testFlowiseConnection } from '../../../services/api/sandboxApi';
 import type { Sandbox, SelectedSandbox } from '../../../types/sandbox.types';
 
 interface SandboxEndpointConfigProps {
@@ -77,25 +78,15 @@ export function SandboxEndpointConfig({
     setTestResult(null);
 
     try {
-      // Send a simple test message to the endpoint
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (apiKey) {
-        headers['Authorization'] = `Bearer ${apiKey}`;
-      }
-
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ question: 'Hello' }),
+      const result = await testFlowiseConnection(endpoint, apiKey || undefined);
+      setTestResult({
+        success: result.success,
+        message: result.success
+          ? (result.responseTimeMs ? `Endpoint reachable (${result.responseTimeMs}ms)` : 'Endpoint is reachable')
+          : (result.message || 'Connection failed'),
       });
-
-      if (response.ok) {
-        setTestResult({ success: true, message: 'Endpoint is reachable' });
-      } else {
-        setTestResult({ success: false, message: `HTTP ${response.status}: ${response.statusText}` });
-      }
     } catch (error: any) {
-      setTestResult({ success: false, message: error.message || 'Connection failed' });
+      setTestResult({ success: false, message: error.message || 'Connection test failed' });
     } finally {
       setIsTesting(false);
     }

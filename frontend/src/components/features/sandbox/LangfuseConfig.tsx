@@ -135,7 +135,7 @@ export function LangfuseConfig({
           type="url"
           value={host}
           onChange={(e) => handleHostChange(e.target.value)}
-          placeholder="https://us.cloud.langfuse.com"
+          placeholder="https://langfuse-6x3cj-u15194.vm.elestio.app"
           disabled={loading || isSaving}
           className={cn(
             'w-full px-3 py-2 text-sm border rounded-lg transition-colors',

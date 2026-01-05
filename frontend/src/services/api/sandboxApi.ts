@@ -318,3 +318,17 @@ export async function testLangfuseConnection(
   );
   return response.data;
 }
+
+/**
+ * Test a Flowise endpoint connection
+ */
+export async function testFlowiseConnection(
+  endpoint: string,
+  apiKey?: string
+): Promise<TestEndpointResponse> {
+  const response = await post<SandboxApiResponse<TestEndpointResponse>>(
+    '/test-monitor/sandboxes/test-flowise',
+    { endpoint, apiKey }
+  );
+  return response.data;
+}

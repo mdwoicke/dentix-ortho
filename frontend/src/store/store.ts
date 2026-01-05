@@ -15,6 +15,7 @@ import testCasesReducer from './slices/testCasesSlice';
 import goalTestCasesReducer from './slices/goalTestCasesSlice';
 import createGoalTestReducer from './slices/createGoalTestSlice';
 import sandboxReducer from './slices/sandboxSlice';
+import workflowReducer from './slices/workflowSlice';
 
 /**
  * Configure and create the Redux store
@@ -32,6 +33,7 @@ export const store = configureStore({
     goalTestCases: goalTestCasesReducer,
     createGoalTest: createGoalTestReducer,
     sandbox: sandboxReducer,
+    workflow: workflowReducer,
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({

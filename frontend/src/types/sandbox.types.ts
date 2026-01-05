@@ -32,7 +32,7 @@ export interface Sandbox {
 export interface SandboxFile {
   id: number;
   sandboxId: string;
-  fileKey: 'system_prompt' | 'patient_tool' | 'scheduling_tool';
+  fileKey: 'system_prompt' | 'patient_tool' | 'scheduling_tool' | 'nodered_flow';
   fileType: 'markdown' | 'json';
   displayName: string;
   content: string;
@@ -232,9 +232,9 @@ export interface AvailableGoalTest {
 export type SelectedSandbox = 'sandbox_a' | 'sandbox_b';
 
 /**
- * File keys for the three Flowise files
+ * File keys for the Flowise files
  */
-export type SandboxFileKey = 'system_prompt' | 'patient_tool' | 'scheduling_tool';
+export type SandboxFileKey = 'system_prompt' | 'patient_tool' | 'scheduling_tool' | 'nodered_flow';
 
 /**
  * File display configuration
@@ -243,6 +243,7 @@ export const SANDBOX_FILE_CONFIG: Record<SandboxFileKey, { label: string; type: 
   system_prompt: { label: 'System Prompt', type: 'markdown' },
   patient_tool: { label: 'Patient Tool', type: 'json' },
   scheduling_tool: { label: 'Scheduling Tool', type: 'json' },
+  nodered_flow: { label: 'Node Red Flows', type: 'json' },
 };
 
 /**

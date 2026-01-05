@@ -592,6 +592,7 @@ export interface DiagnosisResult {
 
 /**
  * Run failure analysis on a test run and generate fixes
+ * Uses extended timeout for LLM analysis (can take 30-90+ seconds)
  */
 export async function runDiagnosis(
   runId: string,
@@ -599,7 +600,8 @@ export async function runDiagnosis(
 ): Promise<DiagnosisResult> {
   const response = await post<DiagnosisResult>(
     `/test-monitor/runs/${runId}/diagnose`,
-    { useLLM: options?.useLLM ?? true }
+    { useLLM: options?.useLLM ?? true },
+    { timeout: API_CONFIG.AI_TIMEOUT }
   );
   return response;
 }

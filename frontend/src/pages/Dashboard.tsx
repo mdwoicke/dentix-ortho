@@ -7,7 +7,7 @@ import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PageHeader } from '../components/layout';
 import { Card, Button } from '../components/ui';
-import { AppointmentList } from '../components/features';
+import { AppointmentList, TestHealthWidget } from '../components/features';
 import { useAppointments, useAppSelector } from '../hooks';
 import { selectUpcomingAppointments } from '../store/slices/appointmentSlice';
 import { ROUTES } from '../utils/constants';
@@ -63,13 +63,13 @@ export function Dashboard() {
       />
 
       {/* Quick Actions */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
         <Card>
           <div className="text-center py-4">
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">
               Search Patients
             </h3>
-            <p className="text-sm text-gray-600 mb-4">
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
               Find and manage patient records
             </p>
             <Button onClick={() => navigate(ROUTES.PATIENTS)}>
@@ -80,10 +80,10 @@ export function Dashboard() {
 
         <Card>
           <div className="text-center py-4">
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">
               View Appointments
             </h3>
-            <p className="text-sm text-gray-600 mb-4">
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
               Manage and schedule appointments
             </p>
             <Button onClick={() => navigate(ROUTES.APPOINTMENTS)}>
@@ -94,10 +94,10 @@ export function Dashboard() {
 
         <Card>
           <div className="text-center py-4">
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">
               Calendar View
             </h3>
-            <p className="text-sm text-gray-600 mb-4">
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
               See appointments in calendar format
             </p>
             <Button onClick={() => navigate(ROUTES.CALENDAR)}>
@@ -105,12 +105,15 @@ export function Dashboard() {
             </Button>
           </div>
         </Card>
+
+        {/* Test Health Widget */}
+        <TestHealthWidget />
       </div>
 
       {/* Upcoming Appointments */}
       <div>
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-semibold text-gray-900">
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100">
             Upcoming Appointments
           </h2>
           <Button

@@ -318,15 +318,23 @@ const goalTestCasesSlice = createSlice({
     },
     selectAllInCategory: (state, action: PayloadAction<string>) => {
       const categoryTests = state.testCases
-        .filter(tc => tc.category === action.payload)
-        .map(tc => tc.caseId);
+        .filter(tc => tc.category === action.payload && tc.id !== undefined)
+        .map(tc => String(tc.id));
       state.selectedTestCaseIds = [...new Set([...state.selectedTestCaseIds, ...categoryTests])];
+    },
+    deselectAllInCategory: (state, action: PayloadAction<string>) => {
+      const categoryTestIds = state.testCases
+        .filter(tc => tc.category === action.payload && tc.id !== undefined)
+        .map(tc => String(tc.id));
+      state.selectedTestCaseIds = state.selectedTestCaseIds.filter(id => !categoryTestIds.includes(id));
     },
     clearSelection: (state) => {
       state.selectedTestCaseIds = [];
     },
     selectAll: (state) => {
-      state.selectedTestCaseIds = state.testCases.map(tc => tc.caseId);
+      state.selectedTestCaseIds = state.testCases
+        .filter(tc => tc.id !== undefined)
+        .map(tc => String(tc.id));
     },
 
     // Editing
@@ -768,6 +776,7 @@ export const {
   selectTestCase,
   toggleTestCaseSelection,
   selectAllInCategory,
+  deselectAllInCategory,
   clearSelection,
   selectAll,
   startEditing,

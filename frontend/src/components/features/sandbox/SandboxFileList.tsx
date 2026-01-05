@@ -34,6 +34,11 @@ const FILE_ICONS: Record<SandboxFileKey, ReactNode> = {
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
     </svg>
   ),
+  nodered_flow: (
+    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z" />
+    </svg>
+  ),
 };
 
 export function SandboxFileList({
@@ -70,7 +75,7 @@ export function SandboxFileList({
   }
 
   // Create file entries for all expected files (even if not yet created)
-  const fileKeys: SandboxFileKey[] = ['system_prompt', 'patient_tool', 'scheduling_tool'];
+  const fileKeys: SandboxFileKey[] = ['system_prompt', 'patient_tool', 'scheduling_tool', 'nodered_flow'];
   const fileMap = new Map(files.map(f => [f.fileKey as SandboxFileKey, f]));
 
   return (
@@ -80,7 +85,7 @@ export function SandboxFileList({
           Sandbox Files
         </h3>
         <span className="text-xs text-gray-500 dark:text-gray-400">
-          {files.length}/3 configured
+          {files.length}/4 configured
         </span>
       </div>
 
