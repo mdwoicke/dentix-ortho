@@ -131,6 +131,22 @@ export function TestRunDetail() {
     dispatch(fetchPromptFiles());
   }, [dispatch]);
 
+  // Auto-poll test runs list when any run is "running"
+  useEffect(() => {
+    const hasRunningRun = runs.some(run => run.status === 'running');
+    const pollInterval = hasRunningRun ? 3000 : 30000; // 3s when running, 30s otherwise
+
+    const intervalId = setInterval(() => {
+      dispatch(fetchTestRuns({}));
+      // Also refresh the selected run's data if it's running
+      if (selectedRun?.status === 'running') {
+        dispatch(fetchTestRun(selectedRun.runId));
+      }
+    }, pollInterval);
+
+    return () => clearInterval(intervalId);
+  }, [dispatch, runs, selectedRun?.runId, selectedRun?.status]);
+
   // Auto-select run from URL parameter
   useEffect(() => {
     if (runId && !selectedRun) {

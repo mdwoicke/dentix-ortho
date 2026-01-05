@@ -28,6 +28,9 @@ import {
   ABTestingSandbox,
   AIPromptingPage,
   APITestingPage,
+  TestsPage,
+  AnalysisPage,
+  SandboxLabPage,
 } from '../pages/TestMonitor';
 import { NotFound } from '../pages/NotFound';
 import { ROUTES } from '../utils/constants';
@@ -133,6 +136,11 @@ export function AppRouter() {
             }
           >
             <Route index element={<TestMonitorDashboard />} />
+            {/* New unified pages (Sprint 2+) */}
+            <Route path="tests" element={<TestsPage />} />
+            <Route path="analysis" element={<AnalysisPage />} />
+            <Route path="sandbox-lab" element={<SandboxLabPage />} />
+            <Route path="experiments" element={<ABTestingDashboard />} />
             <Route path="cases" element={<TestCasesPage />} />
             <Route path="goal-cases" element={<GoalTestsDashboard />} />
             <Route path="create" element={<CreateGoalTestPage />} />

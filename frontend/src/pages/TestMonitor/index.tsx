@@ -7,16 +7,19 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { ROUTES } from '../../utils/constants';
 
 const tabs = [
-  // { name: 'Dashboard', path: ROUTES.TEST_MONITOR_DASHBOARD, exact: true },
-  // { name: 'Test Cases', path: ROUTES.TEST_MONITOR_CASES },
-  { name: 'Goal Tests', path: ROUTES.TEST_MONITOR_GOAL_CASES, exact: true },
-  { name: 'Goal Test Generator', path: ROUTES.TEST_MONITOR_CREATE },
-  { name: 'History', path: ROUTES.TEST_MONITOR_HISTORY },
-  { name: 'Tuning', path: ROUTES.TEST_MONITOR_TUNING },
-  { name: 'A/B Testing Sandbox', path: ROUTES.TEST_MONITOR_SANDBOX },
-  { name: 'AI Prompting', path: ROUTES.TEST_MONITOR_AI_PROMPTING },
-  { name: 'API Testing', path: ROUTES.TEST_MONITOR_API_TESTING },
-  { name: 'Advanced', path: ROUTES.TEST_MONITOR_AB_TESTING },
+  // Unified tabs (5 total) - Sprint 4 consolidation
+  { name: 'Tests', path: ROUTES.TEST_MONITOR_TESTS, exact: true },
+  { name: 'Analysis', path: ROUTES.TEST_MONITOR_ANALYSIS },
+  { name: 'A/B Testing', path: ROUTES.TEST_MONITOR_SANDBOX_LAB },
+  { name: 'API Explorer', path: ROUTES.TEST_MONITOR_API_TESTING },
+  { name: 'Experiments', path: ROUTES.TEST_MONITOR_EXPERIMENTS },
+  // Legacy tabs (deprecated - routes still work for backwards compatibility)
+  // { name: 'Goal Tests', path: ROUTES.TEST_MONITOR_GOAL_CASES },
+  // { name: 'Goal Test Generator', path: ROUTES.TEST_MONITOR_CREATE },
+  // { name: 'History', path: ROUTES.TEST_MONITOR_HISTORY },
+  // { name: 'Tuning', path: ROUTES.TEST_MONITOR_TUNING },
+  // { name: 'A/B Testing Sandbox', path: ROUTES.TEST_MONITOR_SANDBOX },
+  // { name: 'AI Prompting', path: ROUTES.TEST_MONITOR_AI_PROMPTING },
 ];
 
 export function TestMonitorLayout() {
@@ -77,3 +80,7 @@ export { ABTestingDashboard } from './ABTestingDashboard';
 export { ABTestingSandbox } from './ABTestingSandbox';
 export { default as AIPromptingPage } from './AIPromptingPage';
 export { APITestingPage } from './APITestingPage';
+// New unified pages
+export { TestsPage } from './TestsPage';
+export { AnalysisPage } from './AnalysisPage';
+export { SandboxLabPage } from './SandboxLabPage';

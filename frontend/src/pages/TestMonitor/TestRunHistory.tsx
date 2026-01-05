@@ -39,6 +39,18 @@ export function TestRunHistory() {
     dispatch(fetchTestRuns({}));
   }, [dispatch]);
 
+  // Auto-poll test runs when any run is "running"
+  useEffect(() => {
+    const hasRunningRun = runs.some(run => run.status === 'running');
+    const pollInterval = hasRunningRun ? 3000 : 30000; // 3s when running, 30s otherwise
+
+    const intervalId = setInterval(() => {
+      dispatch(fetchTestRuns({}));
+    }, pollInterval);
+
+    return () => clearInterval(intervalId);
+  }, [dispatch, runs]);
+
   // Prepare trend data
   const trendData = runs
     .slice()
@@ -267,12 +279,18 @@ export function TestRunHistory() {
                           </span>
                         </td>
                         <td className="px-4 py-3">
-                          <span className={`px-2 py-1 text-xs rounded-full ${
+                          <span className={`px-2 py-1 text-xs rounded-full inline-flex items-center gap-1.5 ${
                             run.status === 'completed' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' :
                             run.status === 'running' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' :
                             run.status === 'failed' ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' :
                             'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-400'
                           }`}>
+                            {run.status === 'running' && (
+                              <span className="relative flex h-2 w-2">
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                                <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500"></span>
+                              </span>
+                            )}
                             {run.status}
                           </span>
                         </td>
