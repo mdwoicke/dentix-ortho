@@ -1,26 +1,24 @@
 /**
  * ============================================================================
  * CHORD SCHEDULING DSO - Appointment Scheduling Tool (Node Red Version)
- * Version: v43 | Updated: 2026-01-03
+ * Version: v44 | Updated: 2026-01-04
  * ============================================================================
  * Actions: slots, grouped_slots, book_child, cancel
  *
- * v43 FIX: Removed DEFAULT_SCHEDULE_VIEW_GUID - was pointing to schedule with no slots
- *          Now returns all available slots when no specific schedule view is provided
+ * v44 FIX: Fixed fetch body consumption bug AND removed DEFAULT_SCHEDULE_VIEW_GUID
+ *          - Body stream can only be read once, now reads text first then parses JSON
+ *          - Removed DEFAULT_SCHEDULE_VIEW_GUID which pointed to schedule with no slots
  * v42 FIX: Default numberOfPatients=2 for grouped_slots (LLM often omits it)
  * v41 FIX: Added _debug_error and _debug_dates for API failure diagnosis
- * v40 FIX: Added default timeWindowMinutes=30 for grouped_slots action
  * CRITICAL FIX: SANDBOX_MIN_DATE ensures slot searches start from Jan 13, 2026
- * This version calls Node Red endpoints instead of Cloud9 directly.
  * ============================================================================
  */
 
 const fetch = require('node-fetch');
 
-const TOOL_VERSION = 'v43';
-const MAX_SLOTS_RETURNED = 10; // Limit response size for Flowise
+const TOOL_VERSION = 'v44';
+const MAX_SLOTS_RETURNED = 10;
 const BASE_URL = 'https://c1-aicoe-nodered-lb.prod.c1conversations.io/FabricWorkflow/api/chord';
-// v43: Removed DEFAULT_SCHEDULE_VIEW_GUID - was pointing to schedule with no slots
 
 // SANDBOX MINIMUM DATE: Cloud9 sandbox has no slots before this date
 const SANDBOX_MIN_DATE = new Date(2026, 0, 13); // January 13, 2026
@@ -35,7 +33,7 @@ const ACTIONS = {{
                 startDate: params.startDate,
                 endDate: params.endDate
             }};
-            // v43: Only include scheduleViewGUIDs if explicitly provided
+            // v44: Only include scheduleViewGUIDs if explicitly provided (removed broken default)
             if (params.scheduleViewGUIDs) {{
                 body.scheduleViewGUIDs = params.scheduleViewGUIDs;
             }}
@@ -55,15 +53,13 @@ const ACTIONS = {{
                 numberOfPatients: params.numberOfPatients || 2,
                 timeWindowMinutes: params.timeWindowMinutes || 30
             }};
-            // v43: Only include scheduleViewGUIDs if explicitly provided
+            // v44: Only include scheduleViewGUIDs if explicitly provided (removed broken default)
             if (params.scheduleViewGUIDs) {{
                 body.scheduleViewGUIDs = params.scheduleViewGUIDs;
             }}
             return body;
         }},
-        validate: () => {{
-            // numberOfPatients defaults to 2 in buildBody
-        }},
+        validate: () => {{}},
         successLog: (data) => `Found ${{data.totalGroups || (data.groups ? data.groups.length : 0) || 0}} grouped slot options`
     }},
     book_child: {{
@@ -155,16 +151,12 @@ function correctDate(dateStr) {{
     let targetDate = inputDate;
     if (inputDate < today) {{
         targetDate = tomorrow;
-        console.log('[DATE CORRECTION] ' + dateStr + ' is in the past');
     }}
     if (targetDate < SANDBOX_MIN_DATE) {{
-        console.log('[DATE CORRECTION] ' + formatDate(targetDate) + ' is before sandbox availability, using ' + formatDate(SANDBOX_MIN_DATE));
         targetDate = new Date(SANDBOX_MIN_DATE);
     }}
     if (targetDate.getTime() !== inputDate.getTime()) {{
-        const corrected = formatDate(targetDate);
-        console.log('[DATE CORRECTION] ' + dateStr + ' -> ' + corrected);
-        return corrected;
+        return formatDate(targetDate);
     }}
     return dateStr;
 }}
@@ -175,7 +167,6 @@ function correctDateRange(startDate, endDate) {{
 
     if (!correctedStart) {{
         correctedStart = formatDate(new Date(SANDBOX_MIN_DATE));
-        console.log('[DATE CORRECTION] No start date, using ' + correctedStart);
     }}
 
     const start = parseDate(correctedStart);
@@ -185,14 +176,12 @@ function correctDateRange(startDate, endDate) {{
         const newEnd = new Date(start);
         newEnd.setDate(newEnd.getDate() + 14);
         correctedEnd = formatDate(newEnd);
-        console.log('[DATE CORRECTION] End date adjusted to ' + correctedEnd);
     }} else {{
         const daysDiff = Math.floor((end - start) / (1000 * 60 * 60 * 24));
         if (daysDiff < 7) {{
             const newEnd = new Date(start);
             newEnd.setDate(newEnd.getDate() + 14);
             correctedEnd = formatDate(newEnd);
-            console.log('[DATE CORRECTION] End date extended to ' + correctedEnd);
         }}
     }}
     return {{ startDate: correctedStart, endDate: correctedEnd }};
@@ -213,9 +202,8 @@ function cleanParams(params) {{
 async function executeRequest() {{
     const toolName = 'schedule_appointment_ortho';
     const action = $action;
-    const timeout = 60000;
 
-    console.log('[' + toolName + '] ' + TOOL_VERSION + ' - 2026-01-03 - Removed DEFAULT_SCHEDULE_VIEW_GUID (was empty)');
+    console.log('[' + toolName + '] ' + TOOL_VERSION + ' - 2026-01-04 - Removed DEFAULT_SCHEDULE_VIEW_GUID + fetch fix');
     console.log('[' + toolName + '] Action: ' + action);
 
     if (!action || !ACTIONS[action]) {{
@@ -250,7 +238,6 @@ async function executeRequest() {{
     }};
     const params = cleanParams(rawParams);
 
-    // Store original dates for debugging
     const originalDates = {{ startDate: params.startDate, endDate: params.endDate }};
 
     if (action === 'slots' || action === 'grouped_slots') {{
@@ -259,7 +246,6 @@ async function executeRequest() {{
         if (corrected.endDate) params.endDate = corrected.endDate;
     }}
 
-    // Store corrected dates for debugging
     const correctedDates = {{ startDate: params.startDate, endDate: params.endDate }};
 
     try {{
@@ -277,7 +263,14 @@ async function executeRequest() {{
             body: JSON.stringify(body)
         }});
 
-        let data = await response.json().catch(() => response.text());
+        // v44 FIX: Read body as text first, then parse JSON safely
+        const responseText = await response.text();
+        let data;
+        try {{
+            data = JSON.parse(responseText);
+        }} catch (parseError) {{
+            data = responseText;
+        }}
 
         if (!response.ok) {{
             throw new Error('HTTP ' + response.status + ': ' + response.statusText);
@@ -288,21 +281,17 @@ async function executeRequest() {{
 
         console.log('[' + toolName + '] ' + config.successLog(data));
 
-        // Limit slots to reduce response size for Flowise
         if (data && data.slots && data.slots.length > MAX_SLOTS_RETURNED) {{
-            console.log('[' + toolName + '] Limiting slots from ' + data.slots.length + ' to ' + MAX_SLOTS_RETURNED);
             data.slots = data.slots.slice(0, MAX_SLOTS_RETURNED);
             data.count = MAX_SLOTS_RETURNED;
             data._truncated = true;
         }}
         if (data && data.groups && data.groups.length > MAX_SLOTS_RETURNED) {{
-            console.log('[' + toolName + '] Limiting groups from ' + data.groups.length + ' to ' + MAX_SLOTS_RETURNED);
             data.groups = data.groups.slice(0, MAX_SLOTS_RETURNED);
             data.totalGroups = MAX_SLOTS_RETURNED;
             data._truncated = true;
         }}
 
-        // Add version to response for verification
         if (typeof data === 'object') {{
             data._toolVersion = TOOL_VERSION;
         }}
