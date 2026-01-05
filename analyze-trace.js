@@ -1,9 +1,9 @@
 const https = require('https');
 
 const LANGFUSE_CONFIG = {
-    host: 'us.cloud.langfuse.com',
-    publicKey: 'pk-lf-1f0a05a9-2c72-456d-a033-2e5113084e97',
-    secretKey: 'sk-lf-a1134b7e-2af4-4ab6-a64e-f0ff05fa2750'
+    host: 'langfuse-6x3cj-u15194.vm.elestio.app',
+    publicKey: 'pk-lf-d8ac7be3-a04b-4720-b95f-b96fa98874ed',
+    secretKey: 'sk-lf-04345fa3-887d-4fc5-a386-3d12142202c7'
 };
 
 const authString = Buffer.from(`${LANGFUSE_CONFIG.publicKey}:${LANGFUSE_CONFIG.secretKey}`).toString('base64');

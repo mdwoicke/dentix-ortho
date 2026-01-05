@@ -6,9 +6,9 @@
 const https = require('https');
 
 const LANGFUSE_CONFIG = {
-    host: 'us.cloud.langfuse.com',
-    publicKey: 'pk-lf-1f0a05a9-2c72-456d-a033-2e5113084e97',
-    secretKey: 'sk-lf-a1134b7e-2af4-4ab6-a64e-f0ff05fa2750'
+    host: 'langfuse-6x3cj-u15194.vm.elestio.app',
+    publicKey: 'pk-lf-d8ac7be3-a04b-4720-b95f-b96fa98874ed',
+    secretKey: 'sk-lf-04345fa3-887d-4fc5-a386-3d12142202c7'
 };
 
 // Base64 encode credentials for Basic Auth
@@ -270,12 +270,103 @@ async function analyzeSpecificTrace(traceId) {
     });
 }
 
+/**
+ * Analyze recent failure by searching for test ID in traces
+ * Usage: node langfuse-debug.js analyze GOAL-HAPPY-002
+ */
+async function analyzeRecentFailure(testId) {
+    console.log(`\n🔍 Searching for traces related to: ${testId}\n`);
+
+    const traces = await getRecentTraces(30);
+    const matchingTraces = traces.filter(t => {
+        const content = JSON.stringify(t.input || '') + JSON.stringify(t.output || '') + (t.name || '');
+        return content.includes(testId) ||
+               content.toLowerCase().includes(testId.toLowerCase().replace('goal-', ''));
+    });
+
+    if (matchingTraces.length === 0) {
+        console.log(`⚠️  No traces found matching "${testId}"`);
+        console.log('   Try running the test first, then analyze with Langfuse');
+        return;
+    }
+
+    console.log(`Found ${matchingTraces.length} matching trace(s)\n`);
+
+    for (const trace of matchingTraces.slice(0, 3)) {
+        console.log(`${'═'.repeat(60)}`);
+        console.log(`📍 Trace: ${trace.id}`);
+        console.log(`   Time: ${new Date(trace.timestamp).toLocaleString()}`);
+
+        const observations = await getObservations(trace.id);
+        const toolCalls = observations.filter(o =>
+            o.name?.includes('schedule_appointment') ||
+            o.name?.includes('chord_dso_patient') ||
+            o.name?.includes('tool')
+        );
+
+        if (toolCalls.length > 0) {
+            console.log('\n   Tool Calls:');
+            toolCalls.forEach(tc => {
+                console.log(`   - ${tc.name}: ${tc.status || 'unknown'}`);
+
+                if (tc.output) {
+                    try {
+                        const out = typeof tc.output === 'string' ? JSON.parse(tc.output) : tc.output;
+                        if (out._debug_error) {
+                            console.log(`     ❌ Error: ${out._debug_error}`);
+                        }
+                        if (out.llm_guidance?.error_type) {
+                            console.log(`     ⚠️  Guidance: ${out.llm_guidance.error_type}`);
+                        }
+                        if (out.success === false) {
+                            console.log(`     ❌ Success: false`);
+                        }
+                        if (out.slots?.length > 0) {
+                            console.log(`     ✅ Slots found: ${out.slots.length}`);
+                        }
+                        if (out.groups?.length > 0) {
+                            console.log(`     ✅ Groups found: ${out.groups.length}`);
+                        }
+                    } catch {
+                        console.log(`     Output: ${JSON.stringify(tc.output).substring(0, 200)}`);
+                    }
+                }
+            });
+        }
+
+        // Check for transfer/error
+        observations.forEach(obs => {
+            const content = JSON.stringify(obs.output || '');
+            if (content.includes('transfer') || content.includes('Unable') || content.includes('api_error')) {
+                console.log(`\n   🚨 Failure indicator in ${obs.name}:`);
+                console.log(`      ${content.substring(0, 300)}`);
+            }
+        });
+    }
+}
+
 async function main() {
+    // Check for command line arguments
+    const args = process.argv.slice(2);
+    if (args[0] === 'analyze' && args[1]) {
+        await analyzeRecentFailure(args[1]);
+        return;
+    }
+
+    if (args[0] === 'trace' && args[1]) {
+        await analyzeSpecificTrace(args[1]);
+        return;
+    }
+
     console.log('╔══════════════════════════════════════════════════════════╗');
     console.log('║  LANGFUSE DEBUG - Appointment Booking Analysis           ║');
     console.log('╚══════════════════════════════════════════════════════════╝');
     console.log(`\nProject: Chord-test`);
     console.log(`Host: ${LANGFUSE_CONFIG.host}`);
+    console.log(`\nUsage:`);
+    console.log(`  node langfuse-debug.js                    # Full analysis`);
+    console.log(`  node langfuse-debug.js analyze GOAL-HAPPY-002  # Find traces for test`);
+    console.log(`  node langfuse-debug.js trace <trace-id>   # Analyze specific trace`);
 
     try {
         // Analyze the HAPPY-001 failure trace (slots API failure)
