@@ -12,13 +12,14 @@ import { Database, ABSandbox, ABSandboxFile, ABSandboxFileHistory } from '../../
 import * as promptService from '../../../../backend/src/services/promptService';
 
 // File key mappings
-const SANDBOX_FILE_KEYS = ['system_prompt', 'patient_tool', 'scheduling_tool'] as const;
+const SANDBOX_FILE_KEYS = ['system_prompt', 'patient_tool', 'scheduling_tool', 'nodered_flow'] as const;
 type SandboxFileKey = typeof SANDBOX_FILE_KEYS[number];
 
 const FILE_KEY_CONFIG: Record<SandboxFileKey, { displayName: string; fileType: 'markdown' | 'json' }> = {
   system_prompt: { displayName: 'System Prompt', fileType: 'markdown' },
   patient_tool: { displayName: 'Patient Tool', fileType: 'json' },
   scheduling_tool: { displayName: 'Scheduling Tool', fileType: 'json' },
+  nodered_flow: { displayName: 'Node Red Flows', fileType: 'json' },
 };
 
 export class SandboxService {

@@ -54,8 +54,8 @@ function updateVersion(fileKey, changeDescription) {
     fs.writeFileSync(escapedPath, escaped);
     console.log(`Escaped for Flowise -> ${path.basename(escapedPath)} (${escaped.length} chars)`);
 
-    // USE ESCAPED VERSION for database
-    content = escaped;
+    // USE RAW VERSION for database (tools dont need escaping!)
+    content = rawFunc;
   }
 
   // For system prompt, also create escaped version and use it for DB
@@ -65,8 +65,8 @@ function updateVersion(fileKey, changeDescription) {
     fs.writeFileSync(escapedPath, escaped);
     console.log(`Escaped for Flowise -> system_prompt_escaped.md (${escaped.length} chars)`);
 
-    // USE ESCAPED VERSION for database
-    content = escaped;
+    // USE RAW VERSION for database (tools dont need escaping!)
+    content = rawFunc;
   }
 
   const db = new Database(DB_PATH, { readonly: false });

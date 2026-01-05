@@ -149,7 +149,7 @@ export class VariantService {
   /**
    * Capture current file contents as baseline
    */
-  async captureBaseline(targetFile: string, type: 'prompt' | 'tool' | 'config', content?: string): Promise<Variant> {
+  async captureBaseline(targetFile: string, type: 'prompt' | 'tool' | 'config' | 'flow', content?: string): Promise<Variant> {
     const fileContent = content || await this.readFile(targetFile);
     const fileName = path.basename(targetFile);
     // Use canonical path for storage (e.g., 'docs/...' without '../')
@@ -180,6 +180,7 @@ export class VariantService {
       { path: '../docs/Chord_Cloud9_SystemPrompt.md', type: 'prompt' as const },
       { path: '../docs/chord_dso_scheduling-StepwiseSearch.json', type: 'tool' as const },
       { path: '../docs/chord_dso_patient-FIXED.json', type: 'tool' as const },
+      { path: '../docs/v1/nodered_Cloud9_flows.json', type: 'flow' as const },
     ];
 
     for (const file of filesToCapture) {

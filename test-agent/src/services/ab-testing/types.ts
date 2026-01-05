@@ -10,7 +10,7 @@ import { GeneratedFix } from '../../storage/database';
 // VARIANT TYPES
 // ============================================================================
 
-export type VariantType = 'prompt' | 'tool' | 'config';
+export type VariantType = 'prompt' | 'tool' | 'config' | 'flow';
 export type VariantCreator = 'manual' | 'llm-analysis' | 'auto-generated';
 
 /**

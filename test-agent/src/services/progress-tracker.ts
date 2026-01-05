@@ -89,19 +89,46 @@ export class ProgressTracker {
     this.state.intentHistory.push(agentIntent.primaryIntent);
     this.state.lastAgentIntent = agentIntent.primaryIntent;
 
-    // Map intent to field and record collection
-    const field = this.intentToField(agentIntent.primaryIntent);
-    if (field && !this.state.collectedFields.has(field)) {
-      this.state.collectedFields.set(field, {
-        field,
-        value: userResponse,
-        collectedAtTurn: turnNumber,
-        confirmedByAgent: false,
-        userResponse,
-      });
+    // Handle combined address + parking intent (records both fields)
+    if (agentIntent.primaryIntent === 'providing_address_and_parking') {
+      const fieldsToRecord: CollectableField[] = ['address_provided', 'parking_info'];
+      for (const f of fieldsToRecord) {
+        if (!this.state.collectedFields.has(f)) {
+          this.state.collectedFields.set(f, {
+            field: f,
+            value: userResponse,
+            collectedAtTurn: turnNumber,
+            confirmedByAgent: false,
+            userResponse,
+          });
+          console.log(`[ProgressTracker] ✓ ${f} collected at turn ${turnNumber}: intent=${agentIntent.primaryIntent}`);
+        }
+      }
+      this.state.pendingFields = this.state.pendingFields.filter(f => !fieldsToRecord.includes(f as CollectableField));
+    } else {
+      // Map intent to field and record collection
+      const field = this.intentToField(agentIntent.primaryIntent);
+      if (field && !this.state.collectedFields.has(field)) {
+        this.state.collectedFields.set(field, {
+          field,
+          value: userResponse,
+          collectedAtTurn: turnNumber,
+          confirmedByAgent: false,
+          userResponse,
+        });
 
-      // Remove from pending
-      this.state.pendingFields = this.state.pendingFields.filter(f => f !== field);
+        // Debug logging for special_needs collection
+        if (field === 'special_needs') {
+          console.log(`[ProgressTracker] ✓ special_needs collected at turn ${turnNumber}: intent=${agentIntent.primaryIntent}`);
+        }
+        // Debug logging for parent_phone collection
+        if (field === 'parent_phone') {
+          console.log(`[ProgressTracker] ✓ parent_phone collected at turn ${turnNumber}: intent=${agentIntent.primaryIntent}`);
+        }
+
+        // Remove from pending
+        this.state.pendingFields = this.state.pendingFields.filter(f => f !== field);
+      }
     }
 
     // Update flow state based on intent

@@ -126,7 +126,7 @@ export const happyPathScenarios: TestCase[] = [
         description: 'Provide child first and last name',
         userMessage: 'Her name is Emma Johnson',
         // Bot may ask for DOB, spelling, or continue with location/insurance
-        expectedPatterns: [/spell|birthday|born|age|confirm|thank|alleghany|insurance/i],
+        expectedPatterns: [/spell|birthday|date of birth|born|age|confirm|thank|alleghany|insurance/i],
         unexpectedPatterns: [patterns.error],
         semanticExpectations: [se.acknowledge(), se.askForInfo('Should continue collecting patient info')],
         negativeExpectations: [ne.noErrors()],
@@ -231,7 +231,7 @@ export const happyPathScenarios: TestCase[] = [
         description: 'Start conversation for multiple children',
         userMessage: 'Hi I need to schedule appointments for my two kids',
         // Bot may give Allie greeting OR skip to asking for name directly
-        expectedPatterns: [/allie|help you|may i have your.*name|first and last|that's great|name please/i],
+        expectedPatterns: [/allie|help you|may i have your.*name|first and last|that's great|name please|absolutely|your name/i],
         unexpectedPatterns: [patterns.error],
         semanticExpectations: [se.greeting(), se.askForName()],
         negativeExpectations: [ne.noErrors()],

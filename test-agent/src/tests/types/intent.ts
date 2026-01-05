@@ -50,6 +50,8 @@ export type AgentIntent =
   | 'offering_address'        // Bot asks if caller wants the address
   | 'providing_address'       // Bot provides office address
   | 'providing_parking_info'  // Bot provides parking information
+  | 'providing_address_and_parking' // Bot provides both address and parking info in same message
+  | 'providing_hours_info'    // Bot provides hours of operation
 
   // Transfers & errors
   | 'initiating_transfer'
@@ -81,6 +83,7 @@ export const INTENT_TO_FIELD: Partial<Record<AgentIntent, string>> = {
   'reminding_bring_card': 'card_reminder',
   'providing_address': 'address_provided',
   'providing_parking_info': 'parking_info',
+  'providing_hours_info': 'hours_info',
 };
 
 /**
@@ -237,6 +240,17 @@ export const INTENT_KEYWORDS: Record<AgentIntent, RegExp[]> = {
     /\b(free|ample|plenty of)\s+parking\b/i,                              // "Free parking"
     /\bpark\b.*\b(building|office|lot)\b/i,                               // "You can park..."
   ],
+  'providing_address_and_parking': [
+    // Combined address + parking pattern
+    /\b(Avenue|Ave|Street|St|Road|Rd).+\b(park|parking)\b/i,
+  ],
+  'providing_hours_info': [
+    /\bwe('re| are) open\b/i,                                             // "We're open..."
+    /\bour hours\b/i,                                                     // "Our hours are..."
+    /\bhours (are|of operation)\b/i,                                      // "Hours of operation"
+    /\bopen (from|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i, // "Open Monday..."
+    /\bmonday (through|to) (friday|saturday|sunday)\b/i,                  // "Monday through Friday"
+  ],
 
   'initiating_transfer': [/\b(transfer|connect|live agent|specialist|hold)\b/i],
   'handling_error': [/\b(sorry|apologize|trouble|try again)\b/i],
@@ -258,6 +272,7 @@ const INTENT_PRIORITY_ORDER: AgentIntent[] = [
   // Post-booking info - check BEFORE booking flow to catch address/parking responses
   'providing_address',
   'providing_parking_info',
+  'providing_hours_info',
   'offering_address',
 
   // Booking flow - check searching BEFORE offering

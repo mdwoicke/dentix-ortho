@@ -3886,7 +3886,7 @@ export class Database {
 
 export interface ABVariant {
   variantId: string;
-  variantType: 'prompt' | 'tool' | 'config';
+  variantType: 'prompt' | 'tool' | 'config' | 'flow';
   targetFile: string;
   name: string;
   description: string;
