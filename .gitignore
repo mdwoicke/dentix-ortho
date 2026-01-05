@@ -13,6 +13,8 @@ backend/.env
 backend/dentix.db
 backend/*.db
 *.db
+*.db-wal
+*.db-shm
 
 # Build outputs
 frontend/dist/
