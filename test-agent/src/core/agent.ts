@@ -22,6 +22,11 @@ import {
   createTraceContext,
   scoreTestRun,
 } from '../../../shared/services';
+import {
+  AdaptiveConcurrencyManager,
+  getAdaptiveConcurrencyManager,
+  ConcurrencyConfig,
+} from './adaptive-concurrency';
 
 export interface AgentOptions {
   category?: 'happy-path' | 'edge-case' | 'error-handling';
@@ -30,6 +35,8 @@ export interface AgentOptions {
   failedOnly?: boolean;
   watch?: boolean;
   concurrency?: number; // Number of parallel workers (1-10, default 1)
+  adaptiveScaling?: boolean; // Enable adaptive concurrency (default false)
+  adaptiveConfig?: Partial<ConcurrencyConfig>; // Adaptive scaling configuration
 }
 
 export interface WorkerStatus {
@@ -56,6 +63,7 @@ export interface TestSuiteResult {
   skipped: number;
   duration: number;
   results: TestResult[];
+  langfuseTraceId?: string;
 }
 
 export class TestAgent extends EventEmitter {
@@ -78,6 +86,9 @@ export class TestAgent extends EventEmitter {
     failed: 0,
     skipped: 0,
   };
+
+  // Adaptive concurrency
+  private adaptiveConcurrency: AdaptiveConcurrencyManager | null = null;
 
   constructor() {
     super();
@@ -118,14 +129,28 @@ export class TestAgent extends EventEmitter {
     // Initialize Flowise client with active config from settings
     await this.initializeFlowiseClient();
 
-    const concurrency = Math.min(Math.max(options.concurrency || 1, 1), 10);
+    // Initialize adaptive concurrency if enabled
+    const adaptiveScaling = options.adaptiveScaling ?? false;
+    let concurrency = Math.min(Math.max(options.concurrency || 1, 1), 20);
 
-    console.log('\n=== E2E Test Agent Starting ===\n');
+    if (adaptiveScaling) {
+      this.adaptiveConcurrency = getAdaptiveConcurrencyManager({
+        initialConcurrency: concurrency,
+        maxConcurrency: 20,
+        ...options.adaptiveConfig,
+      });
+      concurrency = this.adaptiveConcurrency.getConcurrency();
+      console.log('\n=== E2E Test Agent Starting (Adaptive Concurrency Enabled) ===\n');
+      console.log(`📈 Adaptive scaling enabled: starting with ${concurrency} workers`);
+      console.log(`   Will scale between ${options.adaptiveConfig?.minConcurrency || 1} and ${options.adaptiveConfig?.maxConcurrency || 20} based on API latency\n`);
+    } else {
+      console.log('\n=== E2E Test Agent Starting ===\n');
 
-    // Warn about rate limits for high concurrency
-    if (concurrency > 3) {
-      console.log(`⚠️  WARNING: Running with ${concurrency} workers may trigger API rate limits.`);
-      console.log('   Consider using concurrency <= 3 for stable execution.\n');
+      // Warn about rate limits for high concurrency
+      if (concurrency > 3) {
+        console.log(`⚠️  WARNING: Running with ${concurrency} workers may trigger API rate limits.`);
+        console.log('   Consider using concurrency <= 3 for stable execution.\n');
+      }
     }
 
     if (concurrency > 1) {
@@ -382,6 +407,11 @@ export class TestAgent extends EventEmitter {
         const result = await workerTestRunner.runTest(scenario, runId);
         results.push(result);
 
+        // Record latency for adaptive concurrency
+        if (this.adaptiveConcurrency && result.durationMs > 0) {
+          this.adaptiveConcurrency.recordLatency(result.durationMs);
+        }
+
         // Update progress
         this.updateProgress(result.status);
 
@@ -390,6 +420,14 @@ export class TestAgent extends EventEmitter {
 
         const statusIcon = result.status === 'passed' ? '✓' : '✗';
         console.log(`[Worker ${workerId}] ${statusIcon} Completed: ${scenario.id} (${result.durationMs}ms)`);
+
+        // Check if this worker should gracefully exit (adaptive scaling down)
+        const activeWorkers = Array.from(this.workerStatuses.values())
+          .filter(w => w.status === 'running' || w.status === 'idle').length;
+        if (this.adaptiveConcurrency?.shouldRemoveWorker(activeWorkers)) {
+          console.log(`[Worker ${workerId}] Exiting due to adaptive scaling down`);
+          break;
+        }
       } catch (error: any) {
         const errorResult: TestResult = {
           runId,

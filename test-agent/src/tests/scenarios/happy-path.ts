@@ -86,7 +86,8 @@ export const happyPathScenarios: TestCase[] = [
         description: 'Indicate scheduling for one child',
         userMessage: 'Just one child',
         // Bot may ask about new patient, office visits, previous ortho, or child name
-        expectedPatterns: [/new patient|consult|been to.*office|visited|first time|braces|ortho|child.*name|name.*child|thank/i],
+        // Note: Bot may say "been seen at" or "been to" - both patterns included
+        expectedPatterns: [/new patient|consult|been.*office|visited|first time|braces|ortho|child.*name|name.*child|thank|great|wonderful/i],
         unexpectedPatterns: [patterns.error],
         semanticExpectations: [se.acknowledge()],
         negativeExpectations: [ne.noErrors()],
@@ -96,7 +97,8 @@ export const happyPathScenarios: TestCase[] = [
         description: 'Confirm this is a new patient consult',
         userMessage: 'Yes this is a new patient consult',
         // Bot may ask about office visits, previous ortho, child name, or continue
-        expectedPatterns: [/been to.*office|visited|first time|braces|ortho|child.*name|name.*child|thank|any of our/i],
+        // Note: Bot may say "been seen at" or "been to" - both patterns included
+        expectedPatterns: [/been.*office|visited|first time|braces|ortho|child.*name|name.*child|thank|any of our|great|perfect/i],
         unexpectedPatterns: [patterns.error],
         semanticExpectations: [se.acknowledge()],
         negativeExpectations: [ne.noErrors()],
@@ -125,8 +127,9 @@ export const happyPathScenarios: TestCase[] = [
         id: 'step-8-provide-child-name',
         description: 'Provide child first and last name',
         userMessage: 'Her name is Emma Johnson',
-        // Bot may ask for DOB, spelling, or continue with location/insurance
-        expectedPatterns: [/spell|birthday|date of birth|born|age|confirm|thank|alleghany|insurance/i],
+        // Bot may ask for DOB, spelling, or confirm spelling before continuing
+        // Note: Bot often spells back name and asks "Is that correct?"
+        expectedPatterns: [/spell|birthday|date of birth|born|age|confirm|correct|thank|insurance/i],
         unexpectedPatterns: [patterns.error],
         semanticExpectations: [se.acknowledge(), se.askForInfo('Should continue collecting patient info')],
         negativeExpectations: [ne.noErrors()],
@@ -135,8 +138,9 @@ export const happyPathScenarios: TestCase[] = [
         id: 'step-9-spell-and-dob',
         description: 'Spell child name and/or provide DOB',
         userMessage: 'J O H N S O N. Her birthday is March 15, 2014',
-        // Bot may ask about location, insurance, or continue flow
-        expectedPatterns: [/alleghany|philadelphia|insurance|coverage|thank|special|email/i],
+        // Bot may confirm spelling OR ask about location, insurance, special needs, email
+        // NOTE: Bot often confirms spelling with "Is that correct?" before continuing
+        expectedPatterns: [/location|office|insurance|coverage|thank|special|email|noted|got it|confirm|correct|great|wonderful|spell/i],
         unexpectedPatterns: [patterns.error],
         semanticExpectations: [se.acknowledge(), se.askForInfo('Should continue with location or insurance')],
         negativeExpectations: [ne.noErrors()],

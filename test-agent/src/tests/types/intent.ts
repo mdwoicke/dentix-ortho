@@ -17,6 +17,7 @@ export type AgentIntent =
   | 'asking_spell_name'
   | 'asking_phone'
   | 'asking_email'
+  | 'asking_parent_dob'  // Parent's own date of birth (not child's)
 
   // Asking for child information
   | 'asking_child_count'
@@ -69,6 +70,7 @@ export const INTENT_TO_FIELD: Partial<Record<AgentIntent, string>> = {
   'asking_spell_name': 'parent_name_spelling',
   'asking_phone': 'parent_phone',
   'asking_email': 'parent_email',
+  'asking_parent_dob': 'parent_dob',
   'asking_child_count': 'child_count',
   'asking_child_name': 'child_names',
   'asking_child_dob': 'child_dob',
@@ -144,6 +146,16 @@ export const INTENT_KEYWORDS: Record<AgentIntent, RegExp[]> = {
     /\bprovide.*(email|e-mail)\b/i,                   // "Please provide your email"
   ],
 
+  'asking_parent_dob': [
+    // PARENT's own DOB - "your date of birth" without child/kid qualifiers
+    /\bmay i have your (date of birth|dob|birth\s*date)\b/i,           // "May I have your date of birth?"
+    /\bwhat('s| is) your (date of birth|dob|birth\s*date)\b/i,         // "What is your date of birth?"
+    /\byour (date of birth|dob|birth\s*date)\s*(please|in)\b/i,        // "your date of birth please"
+    /\bprovide your (date of birth|dob|birth\s*date)\b/i,              // "provide your date of birth"
+    /\bi need your (date of birth|dob|birth\s*date)\b/i,               // "I need your date of birth"
+    /\byour own (date of birth|dob|birth\s*date)\b/i,                  // "your own date of birth"
+  ],
+
   'asking_child_count': [/\b(how many|number of).*child/i, /\bchildren.*coming in\b/i],
   'asking_child_name': [
     /\bchild'?s?\s+(?:\w+\s+){0,4}name\b/i,   // "child's first and last name" - limit to 4 words between
@@ -152,11 +164,21 @@ export const INTENT_KEYWORDS: Record<AgentIntent, RegExp[]> = {
     /\bpatient'?s?\s+(?:\w+\s+){0,3}name\b/i, // "patient's name", "patient's first name"
     /\b(first|second|other)\s+child\b/i,      // "second child", "first child", "other child"
   ],
-  'asking_child_dob': [/\b(birth|birthday|born|date of birth|dob)\b/i],
+  'asking_child_dob': [
+    // CHILD's DOB - requires "child", "kid", "patient" qualifier or possessive context
+    /\bchild'?s?\s+(date of birth|dob|birth\s*date|birthday)\b/i,     // "child's date of birth"
+    /\b(kid'?s?|patient'?s?)\s+(date of birth|dob|birth\s*date)\b/i,  // "kid's/patient's DOB"
+    /\byour (child|kid|patient|son|daughter)('?s)? (date of birth|dob|birth\s*date|birthday)\b/i, // "your child's DOB"
+    /\b(date of birth|dob|birth\s*date) (of|for) (your )?(child|kid|patient|son|daughter)\b/i,    // "DOB of your child"
+  ],
   'asking_child_age': [/\b(how old|age)\b/i],
 
   'asking_new_patient': [/\b(new patient|first time|been here before)\b/i],
-  'asking_previous_visit': [/\b(visited|been to|previous|before)\b/i],
+  'asking_previous_visit': [
+    /\b(visited|been to|previous visit)\b/i,
+    /\b(child|kid|patient|son|daughter).*(been|been seen).*(office|offices|location).*before\b/i,
+    /\b(been seen at|been to).*(our|any of our|this).*(office|offices)\b/i,
+  ],
   'asking_previous_ortho': [/\b(orthodont|braces|retainer|treatment before)\b/i],
 
   'asking_insurance': [
@@ -287,9 +309,12 @@ const INTENT_PRIORITY_ORDER: AgentIntent[] = [
   'asking_time_preference',  // "prefer morning/afternoon" - specific
   'asking_location_preference', // "which location/office" - specific
 
+  // Parent DOB - check BEFORE child DOB to distinguish "your DOB" from "child's DOB"
+  'asking_parent_dob',   // "May I have your date of birth?" - parent's own DOB
+
   // Child questions - must come before phone but after insurance/preferences
   'asking_child_count',  // "how many children" - specific pattern
-  'asking_child_dob',    // "date of birth" - might match confirmations
+  'asking_child_dob',    // "child's date of birth" - requires child qualifier
   'asking_child_age',
   'asking_child_name',
   'asking_spell_name',

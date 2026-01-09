@@ -23,7 +23,12 @@ import type { TestSuiteResult } from './core/agent';
 import * as fs from 'fs';
 import BetterSqlite3 from 'better-sqlite3';
 import path from 'path';
-import { getLangfuseService } from '../../shared/services';
+import {
+  getLangfuseService,
+  runWithTrace,
+  createTraceContext,
+  scoreTestRun,
+} from '../../shared/services';
 
 /**
  * Load goal test cases from database (GOAL-EDGE-* and GOAL-ERR-* tests)
@@ -128,6 +133,40 @@ async function runGoalTests(
   currentRunId = runId;
   currentDb = db;
 
+  // Initialize Langfuse trace for this run
+  const langfuse = getLangfuseService();
+  let trace: any = null;
+  let traceId: string | null = null;
+
+  if (await langfuse.ensureInitialized()) {
+    try {
+      trace = await langfuse.createTrace({
+        name: `goal-test-run-${runId}`,
+        sessionId: runId,
+        userId: 'test-agent',
+        metadata: {
+          totalTests: scenariosToRun.length,
+          concurrency,
+          maxRetries,
+          testIds: scenarioIds.slice(0, 10), // First 10 test IDs for reference
+          environment: process.env.NODE_ENV || 'development',
+        },
+        tags: [
+          'goal-tests',
+          process.env.NODE_ENV || 'development',
+          `concurrency-${concurrency}`,
+        ],
+      });
+      traceId = trace?.id || null;
+      console.log(`[GoalTest] Langfuse trace created: ${traceId || 'unknown'}`);
+    } catch (e: any) {
+      console.warn(`[GoalTest] Langfuse trace creation failed: ${e.message}`);
+    }
+  }
+
+  // Create trace context for propagation to workers
+  const traceContext = trace ? createTraceContext(trace.id, runId) : null;
+
   // Track run counts per scenario for proper indexing when same test runs multiple times
   const runCountPerScenario = new Map<string, number>();
 
@@ -189,7 +228,13 @@ async function runGoalTests(
       console.log(`[Worker ${workerId}] Starting: ${testIdWithRun}${retryLabel} - ${scenario.name}`);
 
       // Create per-test runner with fresh session using active config from settings
-      const flowiseClient = await FlowiseClient.forActiveConfig();
+      // Pass the persona's phone number as a session variable to simulate telephony caller ID
+      const sessionVars: Record<string, string> = {};
+      if (scenario.persona?.inventory?.parentPhone) {
+        sessionVars.c1mg_variable_caller_id_number = scenario.persona.inventory.parentPhone;
+        console.log(`[Worker ${workerId}] Using caller ID: ${scenario.persona.inventory.parentPhone}`);
+      }
+      const flowiseClient = await FlowiseClient.forActiveConfig(undefined, sessionVars);
       const intentDetector = new IntentDetector();
       const runner = new GoalTestRunner(flowiseClient, db, intentDetector);
 
@@ -270,14 +315,22 @@ async function runGoalTests(
       console.log(`[GoalTest] Starting ${actualConcurrency} parallel workers...\n`);
     }
 
-    // Create and start all workers in parallel
-    const workerPromises: Promise<TestResult[]>[] = [];
-    for (let i = 0; i < actualConcurrency; i++) {
-      workerPromises.push(runWorker(i));
-    }
+    // Execute workers with or without trace context
+    const executeWorkers = async () => {
+      const workerPromises: Promise<TestResult[]>[] = [];
+      for (let i = 0; i < actualConcurrency; i++) {
+        workerPromises.push(runWorker(i));
+      }
+      return Promise.all(workerPromises);
+    };
 
-    // Wait for all workers to complete
-    const workerResults = await Promise.all(workerPromises);
+    // Run with trace context if available
+    let workerResults: TestResult[][];
+    if (traceContext) {
+      workerResults = await runWithTrace(traceContext, executeWorkers);
+    } else {
+      workerResults = await executeWorkers();
+    }
 
     // Flatten results from all workers
     for (const workerResult of workerResults) {
@@ -293,15 +346,38 @@ async function runGoalTests(
       skipped: results.filter(r => r.status === 'skipped').length,
       duration,
       results,
+      langfuseTraceId: traceId || undefined,
     };
 
     // Update run record
     db.completeTestRun(runId, summary);
     runCompleted = true;
 
+    // Score the test run in Langfuse
+    if (trace && traceId) {
+      try {
+        // Map TestResult[] to TestResultForScoring[] for Langfuse scoring
+        const resultsForScoring = results.map(r => ({
+          passed: r.status === 'passed',
+          status: r.status,
+          durationMs: r.durationMs,
+          transcript: r.transcript?.map(t => ({ responseTimeMs: t.responseTimeMs })),
+          findings: r.findings,
+          errorMessage: r.errorMessage,
+        }));
+        await scoreTestRun(traceId, resultsForScoring);
+        console.log(`[GoalTest] Langfuse run scored: ${traceId}`);
+      } catch (e: any) {
+        console.warn(`[GoalTest] Langfuse scoring failed: ${e.message}`);
+      }
+    }
+
     console.log('\n=== Goal Test Results ===');
     console.log(`Passed: ${summary.passed}, Failed: ${summary.failed}, Total: ${summary.totalTests}`);
     console.log(`Duration: ${(duration / 1000).toFixed(1)}s\n`);
+    if (traceId) {
+      console.log(`Langfuse Trace: ${traceId}\n`);
+    }
 
     return summary;
   } finally {
@@ -418,8 +494,9 @@ program
   .option('--scenarios <ids>', 'Run multiple scenarios by comma-separated IDs (e.g., HAPPY-001,HAPPY-002)')
   .option('-f, --failed', 'Re-run only previously failed tests')
   .option('-w, --watch', 'Watch mode - show real-time output')
-  .option('-n, --concurrency <number>', 'Number of parallel workers (1-10, default: 1)', '1')
+  .option('-n, --concurrency <number>', 'Number of parallel workers (1-20, default: 1)', '1')
   .option('-r, --retries <number>', 'Number of retries for flaky tests (0-3, default: 0)', '0')
+  .option('--adaptive', 'Enable adaptive concurrency scaling based on API latency')
   .action(async (options) => {
     try {
       // Cleanup stale runs at startup
@@ -464,9 +541,19 @@ program
       const maxRetries = Math.min(3, Math.max(0, parseInt(options.retries, 10) || 0));
 
       // Check if any scenario IDs are goal-oriented tests (start with "GOAL-")
-      const hasGoalTests = scenarioIds?.some(id => id.startsWith('GOAL-')) || false;
-      const goalScenarioIds = scenarioIds?.filter(id => id.startsWith('GOAL-')) || [];
+      let hasGoalTests = scenarioIds?.some(id => id.startsWith('GOAL-')) || false;
+      let goalScenarioIds = scenarioIds?.filter(id => id.startsWith('GOAL-')) || [];
       const regularScenarioIds = scenarioIds?.filter(id => !id.startsWith('GOAL-'));
+
+      // If category is specified but no specific scenarios, default to running goal tests for that category
+      if (options.category && !scenarioIds?.length) {
+        const categoryGoalTests = allGoalTests.filter(t => t.category === options.category);
+        if (categoryGoalTests.length > 0) {
+          goalScenarioIds = categoryGoalTests.map(t => t.id);
+          hasGoalTests = true;
+          console.log(`[GoalTest] Defaulting to goal tests for category '${options.category}': ${goalScenarioIds.join(', ')}`);
+        }
+      }
 
       let result;
 
@@ -486,6 +573,7 @@ program
             failedOnly: options.failed,
             watch: options.watch,
             concurrency,
+            adaptiveScaling: options.adaptive,
           });
 
           // Combine results
@@ -507,6 +595,7 @@ program
           failedOnly: options.failed,
           watch: options.watch,
           concurrency,
+          adaptiveScaling: options.adaptive,
         });
       }
 
@@ -1190,6 +1279,11 @@ program
         }
       }
 
+      // Close database to ensure WAL is checkpointed before exiting
+      // This is critical for the backend to see the newly saved fixes
+      db.close();
+      console.log('[Analyze] Database closed, WAL checkpointed');
+
       // Output JSON for backend parsing
       console.log('\n__RESULT_JSON__');
       console.log(JSON.stringify({
@@ -1199,6 +1293,9 @@ program
         totalFailures: report.totalFailures,
         summary: report.summary,
       }));
+
+      // Explicit exit to ensure clean shutdown
+      process.exit(0);
 
     } catch (error: any) {
       console.error(`\n Error: ${error.message}\n`);
@@ -1375,7 +1472,12 @@ program
           }
 
           // Create runner using active config from settings
-          const flowiseClient = await FlowiseClient.forActiveConfig();
+          // Pass the persona's phone number as a session variable to simulate telephony caller ID
+          const sessionVars: Record<string, string> = {};
+          if (scenario.persona?.inventory?.parentPhone) {
+            sessionVars.c1mg_variable_caller_id_number = scenario.persona.inventory.parentPhone;
+          }
+          const flowiseClient = await FlowiseClient.forActiveConfig(undefined, sessionVars);
           const intentDetector = new IntentDetector();
           const runner = new GoalTestRunner(flowiseClient, db, intentDetector);
 
@@ -1652,6 +1754,100 @@ program
 
     } catch (error: any) {
       reporter.printError(error.message);
+      process.exit(1);
+    }
+  });
+
+// Retention/Cleanup command - Clean up old test data
+program
+  .command('cleanup')
+  .description('Clean up old test runs and reclaim database space')
+  .option('-d, --days <number>', 'Number of days to keep (default: 30)', '30')
+  .option('--no-archive', 'Skip archiving transcripts before deletion')
+  .option('--no-vacuum', 'Skip database vacuum after cleanup')
+  .option('--dry-run', 'Preview what would be deleted without actually deleting')
+  .option('--stats', 'Just show database statistics without cleaning')
+  .action(async (options) => {
+    try {
+      // Import retention service
+      const { RetentionService } = await import('./storage/retention-service');
+      const db = new Database();
+      db.initialize();
+      const rawDb = (db as any).db;  // Access underlying better-sqlite3 instance
+
+      const retentionService = new RetentionService(rawDb, {
+        daysToKeep: parseInt(options.days),
+        archiveTranscripts: options.archive !== false,
+        vacuum: options.vacuum !== false,
+        dryRun: options.dryRun === true,
+      });
+
+      if (options.stats) {
+        const stats = retentionService.getDatabaseStats();
+        console.log('\n DATABASE STATISTICS\n');
+        console.log('═'.repeat(50));
+        console.log(`\n Total Runs: ${stats.totalRuns}`);
+        console.log(` Total Results: ${stats.totalResults}`);
+        console.log(` Total Transcripts: ${stats.totalTranscripts}`);
+        console.log(`\n Oldest Run: ${stats.oldestRun || 'N/A'}`);
+        console.log(` Newest Run: ${stats.newestRun || 'N/A'}`);
+        console.log(`\n Database Size: ${(stats.dbSizeBytes / 1024 / 1024).toFixed(2)} MB`);
+        console.log('\n' + '═'.repeat(50) + '\n');
+        return;
+      }
+
+      console.log('\n RETENTION CLEANUP\n');
+      console.log('═'.repeat(50));
+
+      // Show preview
+      const preview = retentionService.getCleanupPreview();
+      console.log(`\n Will delete data older than ${options.days} days:`);
+      console.log(`   Runs: ${preview.runsToDelete}`);
+      console.log(`   Results: ${preview.resultsToDelete}`);
+      console.log(`   Transcripts: ${preview.transcriptsToDelete}`);
+      console.log(`   Findings: ${preview.findingsToDelete}`);
+      console.log(`   API Calls: ${preview.apiCallsToDelete}`);
+
+      if (preview.oldestRun) {
+        console.log(`\n   Oldest run in DB: ${preview.oldestRun}`);
+      }
+      if (preview.newestRunToDelete) {
+        console.log(`   Newest run to delete: ${preview.newestRunToDelete}`);
+      }
+
+      if (preview.runsToDelete === 0) {
+        console.log('\n No data to clean up!\n');
+        console.log('═'.repeat(50) + '\n');
+        return;
+      }
+
+      if (options.dryRun) {
+        console.log('\n DRY RUN - No data was deleted\n');
+        console.log('═'.repeat(50) + '\n');
+        return;
+      }
+
+      // Execute cleanup
+      console.log('\n Executing cleanup...\n');
+      const result = await retentionService.cleanup();
+
+      console.log(' CLEANUP COMPLETE:');
+      console.log(`   Runs deleted: ${result.runsDeleted}`);
+      console.log(`   Results deleted: ${result.resultsDeleted}`);
+      console.log(`   Transcripts deleted: ${result.transcriptsDeleted}`);
+      console.log(`   Findings deleted: ${result.findingsDeleted}`);
+      console.log(`   API calls deleted: ${result.apiCallsDeleted}`);
+      console.log(`   Space saved: ${(result.spaceSavedBytes / 1024 / 1024).toFixed(2)} MB`);
+      console.log(`   Duration: ${result.durationMs}ms`);
+
+      if (result.archiveCreated && result.archivePath) {
+        console.log(`\n Archive created: ${result.archivePath}`);
+      }
+
+      console.log('\n' + '═'.repeat(50) + '\n');
+
+    } catch (error: any) {
+      console.error(`Error: ${error.message}`);
       process.exit(1);
     }
   });

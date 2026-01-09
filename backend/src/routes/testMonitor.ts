@@ -33,6 +33,9 @@ router.get('/execution/active', testMonitorController.getActiveExecution);
 // GET /api/test-monitor/execution/:runId/stream - SSE for execution status
 router.get('/execution/:runId/stream', testMonitorController.streamExecution);
 
+// GET /api/test-monitor/execution/:runId/conversation/:testId - Get live conversation
+router.get('/execution/:runId/conversation/:testId', testMonitorController.getLiveConversation);
+
 // POST /api/test-monitor/runs/:runId/stop - Stop execution
 router.post('/runs/:runId/stop', testMonitorController.stopExecution);
 
@@ -72,6 +75,12 @@ router.get('/runs/:runId/fixes', testMonitorController.getFixesForRun);
 // POST /api/test-monitor/runs/:runId/diagnose - Run failure analysis and generate fixes
 router.post('/runs/:runId/diagnose', testMonitorController.runDiagnosis);
 
+// GET /api/test-monitor/runs/:runId/error-clusters - Get error clusters for a run
+router.get('/runs/:runId/error-clusters', testMonitorController.getErrorClusters);
+
+// GET /api/test-monitor/error-clusters/aggregate - Get aggregated error clusters across runs
+router.get('/error-clusters/aggregate', testMonitorController.getAggregateErrorClusters);
+
 // GET /api/test-monitor/runs/:runId - Get single test run with results
 router.get('/runs/:runId', testMonitorController.getTestRun);
 
@@ -95,6 +104,18 @@ router.post('/fixes/verify', testMonitorController.verifyFixes);
 
 // PUT /api/test-monitor/fixes/:fixId/status - Update fix status
 router.put('/fixes/:fixId/status', testMonitorController.updateFixStatus);
+
+// POST /api/test-monitor/fixes/:fixId/preview - Preview a fix before applying
+router.post('/fixes/:fixId/preview', testMonitorController.previewFix);
+
+// GET /api/test-monitor/fixes/pending/conflicts - Get pending fixes with conflict analysis
+router.get('/fixes/pending/conflicts', testMonitorController.getPendingFixesWithConflicts);
+
+// POST /api/test-monitor/fixes/:fixId/rollback - Rollback an applied fix
+router.post('/fixes/:fixId/rollback', testMonitorController.rollbackFix);
+
+// POST /api/test-monitor/fixes/:fixId/verify - Run auto-verification pipeline
+router.post('/fixes/:fixId/verify', testMonitorController.runVerificationPipeline);
 
 // ============================================================================
 // PROMPT VERSION MANAGEMENT ROUTES
@@ -440,5 +461,36 @@ router.post('/langfuse-configs/:id/set-default', testMonitorController.setLangfu
 
 // POST /api/test-monitor/langfuse-configs/:id/test - Test connection
 router.post('/langfuse-configs/:id/test', testMonitorController.testLangfuseConfig);
+
+// GET /api/test-monitor/langfuse/session/:sessionId/agent-executor - Get Agent Executor observation ID
+router.get('/langfuse/session/:sessionId/agent-executor', testMonitorController.getLangfuseAgentExecutorId);
+
+// ============================================================================
+// PRODUCTION CALLS (LANGFUSE TRACES) ROUTES
+// ============================================================================
+
+// GET /api/test-monitor/production-calls - List imported traces
+router.get('/production-calls', testMonitorController.getProductionTraces);
+
+// GET /api/test-monitor/production-calls/sessions - List sessions (grouped conversations)
+router.get('/production-calls/sessions', testMonitorController.getProductionSessions);
+
+// POST /api/test-monitor/production-calls/sessions/rebuild - Rebuild session aggregates
+router.post('/production-calls/sessions/rebuild', testMonitorController.rebuildProductionSessions);
+
+// GET /api/test-monitor/production-calls/sessions/:sessionId - Get single session with all traces
+router.get('/production-calls/sessions/:sessionId', testMonitorController.getProductionSession);
+
+// GET /api/test-monitor/production-calls/import-history - Get import history
+router.get('/production-calls/import-history', testMonitorController.getImportHistory);
+
+// GET /api/test-monitor/production-calls/last-import/:configId - Get last import date
+router.get('/production-calls/last-import/:configId', testMonitorController.getLastImportDate);
+
+// POST /api/test-monitor/production-calls/import - Import traces
+router.post('/production-calls/import', testMonitorController.importProductionTraces);
+
+// GET /api/test-monitor/production-calls/:traceId - Get single trace with observations
+router.get('/production-calls/:traceId', testMonitorController.getProductionTrace);
 
 export default router;

@@ -5,7 +5,7 @@
  * API calls are shown inline with the conversation flow
  */
 
-import { useMemo, useState, useEffect, useCallback } from 'react';
+import { useMemo, useState, useEffect, useCallback, useRef, forwardRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import { Spinner } from '../../ui';
@@ -27,6 +27,14 @@ interface TranscriptViewerProps {
   testId?: string;
   runId?: string;
   dbId?: number;  // Database row ID from test_results table
+  // Langfuse integration
+  langfuseTraceId?: string;
+  langfuseHost?: string;
+  langfuseProjectId?: string;
+  // Flowise session ID (UUID) - used for Langfuse session URL
+  flowiseSessionId?: string;
+  // Live session indicator - when true, auto-scrolls to bottom on new messages
+  isLive?: boolean;
 }
 
 /**
@@ -127,6 +135,62 @@ function getToolDisplayName(call: ApiCall): string {
     }
   }
   return call.toolName;
+}
+
+/**
+ * Check if an API call has an error based on status or response payload
+ */
+function hasApiCallError(call: ApiCall): { hasError: boolean; errorMessage?: string } {
+  // Check status field first
+  if (call.status === 'failed') {
+    return { hasError: true, errorMessage: 'Call failed' };
+  }
+
+  // Check response payload for error indicators
+  if (call.responsePayload) {
+    const payload = call.responsePayload;
+
+    // Check explicit success: false field (common in tool responses)
+    if (payload.success === false) {
+      // Try to extract error message from common fields
+      const errorMsg = payload._debug_error || payload.error || payload.errorMessage || payload.message || 'Operation failed';
+      return { hasError: true, errorMessage: typeof errorMsg === 'string' ? errorMsg : 'Operation failed' };
+    }
+
+    // Check for _debug_error field (contains HTTP errors like "HTTP 502: Bad Gateway")
+    if (payload._debug_error) {
+      return { hasError: true, errorMessage: payload._debug_error };
+    }
+
+    // Check common error fields
+    if (payload.error) {
+      return { hasError: true, errorMessage: typeof payload.error === 'string' ? payload.error : 'Error in response' };
+    }
+    if (payload.errorMessage) {
+      return { hasError: true, errorMessage: payload.errorMessage };
+    }
+    if (payload.ErrorCode && payload.ErrorCode !== '0') {
+      return { hasError: true, errorMessage: `Error code: ${payload.ErrorCode}` };
+    }
+    // Cloud 9 API specific error
+    if (payload.ResponseStatus === 'Error' || payload.responseStatus === 'Error') {
+      return { hasError: true, errorMessage: payload.ErrorMessage || payload.errorMessage || 'API returned error status' };
+    }
+    // HTTP status codes
+    if (payload.statusCode && payload.statusCode >= 400) {
+      return { hasError: true, errorMessage: `HTTP ${payload.statusCode}` };
+    }
+    if (payload.status && typeof payload.status === 'number' && payload.status >= 400) {
+      return { hasError: true, errorMessage: `HTTP ${payload.status}` };
+    }
+  }
+
+  // No response at all could indicate failure (but not always)
+  if (call.status !== 'completed' && !call.responsePayload) {
+    return { hasError: true, errorMessage: 'No response received' };
+  }
+
+  return { hasError: false };
 }
 
 /**
@@ -242,6 +306,7 @@ function ApiCallModal({
 }) {
   const patients = extractPatientsFromApiCall(call);
   const displayName = getToolDisplayName(call);
+  const errorInfo = hasApiCallError(call);
 
   // Handle escape key
   useEffect(() => {
@@ -260,7 +325,10 @@ function ApiCallModal({
     };
   }, []);
 
-  const statusColor = call.status === 'completed'
+  // Status color - check for payload errors even if status is "completed"
+  const statusColor = errorInfo.hasError
+    ? 'text-red-500'
+    : call.status === 'completed'
     ? 'text-green-500'
     : call.status === 'failed'
     ? 'text-red-500'
@@ -287,6 +355,15 @@ function ApiCallModal({
             <span className={cn('text-sm font-medium', statusColor)}>
               [{call.status || 'unknown'}]
             </span>
+            {/* Error badge in modal */}
+            {errorInfo.hasError && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 rounded text-sm font-medium">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                {errorInfo.errorMessage || 'Error'}
+              </span>
+            )}
             {call.durationMs !== undefined && (
               <span className="text-sm text-gray-500 dark:text-gray-400">
                 {call.durationMs}ms
@@ -422,27 +499,32 @@ function getRequestPreview(payload: Record<string, unknown> | undefined): string
 
 /**
  * Inline API Call component - compact expandable card for showing API calls in conversation
+ * Uses forwardRef to allow parent components to scroll to this element
  */
-function InlineApiCall({
-  call,
-  isExpanded,
-  onToggle,
-}: {
+interface InlineApiCallProps {
   call: ApiCall;
   isExpanded: boolean;
   onToggle: () => void;
-}) {
+}
+
+const InlineApiCall = forwardRef<HTMLDivElement, InlineApiCallProps>(
+  function InlineApiCall({ call, isExpanded, onToggle }, ref) {
   const [showModal, setShowModal] = useState(false);
 
-  const statusColor = call.status === 'completed'
+  const patients = extractPatientsFromApiCall(call);
+  const displayName = getToolDisplayName(call);
+  const errorInfo = hasApiCallError(call);
+  const requestPreview = getRequestPreview(call.requestPayload);
+
+  // Status dot color - check for payload errors even if status is "completed"
+  // This catches cases like success:false or HTTP 502 errors in the response
+  const statusColor = errorInfo.hasError
+    ? 'bg-red-500'
+    : call.status === 'completed'
     ? 'bg-green-500'
     : call.status === 'failed'
     ? 'bg-red-500'
     : 'bg-gray-500';
-
-  const patients = extractPatientsFromApiCall(call);
-  const displayName = getToolDisplayName(call);
-  const requestPreview = getRequestPreview(call.requestPayload);
 
   const handlePopout = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
@@ -451,7 +533,7 @@ function InlineApiCall({
 
   return (
     <>
-      <div className="my-2 ml-4 border-l-2 border-purple-400 dark:border-purple-600">
+      <div ref={ref} className="my-2 ml-4 border-l-2 border-purple-400 dark:border-purple-600 transition-all duration-200">
         {/* Collapsed header */}
         <div
           onClick={onToggle}
@@ -482,6 +564,19 @@ function InlineApiCall({
 
           {/* Status dot */}
           <span className={cn('w-2 h-2 rounded-full flex-shrink-0', statusColor)} title={call.status || 'unknown'} />
+
+          {/* Error badge */}
+          {errorInfo.hasError && (
+            <span
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 rounded text-xs font-medium flex-shrink-0"
+              title={errorInfo.errorMessage || 'Error'}
+            >
+              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              Error
+            </span>
+          )}
 
           {/* Request preview (in collapsed view) */}
           {!isExpanded && requestPreview && (
@@ -609,7 +704,7 @@ function InlineApiCall({
       )}
     </>
   );
-}
+});
 
 /**
  * Group API calls by the conversation turn they belong to
@@ -673,6 +768,38 @@ function groupApiCallsByTurn(
   return grouped;
 }
 
+/**
+ * Represents an API call error with its details
+ */
+interface ApiCallError {
+  callId: number;
+  toolName: string;
+  errorMessage: string;
+  timestamp: string;
+}
+
+/**
+ * Collect all errors from API calls
+ */
+function collectApiCallErrors(apiCalls: ApiCall[]): ApiCallError[] {
+  const errors: ApiCallError[] = [];
+
+  for (const call of apiCalls) {
+    const errorInfo = hasApiCallError(call);
+    if (errorInfo.hasError) {
+      errors.push({
+        callId: call.id,
+        toolName: getToolDisplayName(call),
+        errorMessage: errorInfo.errorMessage || 'Error',
+        timestamp: call.timestamp,
+      });
+    }
+  }
+
+  // Sort by timestamp
+  return errors.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+}
+
 export function TranscriptViewer({
   transcript,
   apiCalls = [],
@@ -680,12 +807,77 @@ export function TranscriptViewer({
   testId,
   runId,
   dbId,
+  langfuseTraceId,
+  langfuseHost = 'https://langfuse-6x3cj-u15194.vm.elestio.app',
+  langfuseProjectId,
+  flowiseSessionId,
+  isLive = false,
 }: TranscriptViewerProps) {
   // Track which API calls are expanded
   const [expandedApiCalls, setExpandedApiCalls] = useState<Record<number, boolean>>({});
   // Track if IDs are copied
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [copyErrorField, setCopyErrorField] = useState<string | null>(null);
+  // Agent Executor observation ID from Langfuse (for peek parameter in URL)
+  const [agentExecutorId, setAgentExecutorId] = useState<string | null>(null);
+
+  // Ref for auto-scrolling during live sessions
+  const containerRef = useRef<HTMLDivElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  // Refs for each API call element (for scrolling to errors)
+  const apiCallRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+
+  // Collect all API call errors
+  const apiCallErrors = useMemo(() => collectApiCallErrors(apiCalls), [apiCalls]);
+
+  // Scroll to a specific API call by ID
+  const scrollToApiCall = useCallback((callId: number) => {
+    const element = apiCallRefs.current.get(callId);
+    if (element) {
+      element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // Expand the API call so user can see details
+      setExpandedApiCalls(prev => ({ ...prev, [callId]: true }));
+      // Flash highlight effect
+      element.classList.add('ring-2', 'ring-red-500', 'ring-offset-2');
+      setTimeout(() => {
+        element.classList.remove('ring-2', 'ring-red-500', 'ring-offset-2');
+      }, 2000);
+    }
+  }, []);
+
+  // Fetch Agent Executor ID from Langfuse when we have a flowiseSessionId
+  useEffect(() => {
+    if (!flowiseSessionId) {
+      setAgentExecutorId(null);
+      return;
+    }
+
+    const fetchAgentExecutorId = async () => {
+      try {
+        const response = await fetch(
+          `/api/test-monitor/langfuse/session/${encodeURIComponent(flowiseSessionId)}/agent-executor`
+        );
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success && data.data?.agentExecutorId) {
+            setAgentExecutorId(data.data.agentExecutorId);
+          }
+        }
+      } catch (err) {
+        console.warn('[TranscriptViewer] Failed to fetch agent executor ID:', err);
+      }
+    };
+
+    fetchAgentExecutorId();
+  }, [flowiseSessionId]);
+
+  // Auto-scroll to bottom when new messages arrive during live sessions
+  useEffect(() => {
+    if (isLive && bottomRef.current) {
+      bottomRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }
+  }, [isLive, transcript.length, apiCalls.length]);
 
   // Copy to clipboard helper
   const copyToClipboard = useCallback(async (text: string, field: string) => {
@@ -748,7 +940,48 @@ export function TranscriptViewer({
   }
 
   return (
-    <div className="space-y-4 p-2">
+    <div ref={containerRef} className="space-y-4 p-2">
+      {/* Langfuse Session Link - displayed prominently at top */}
+      {/* Use flowiseSessionId if available, otherwise fall back to runId */}
+      {/* Include peek parameter with agentExecutorId to open the trace directly */}
+      {(flowiseSessionId || runId) && langfuseProjectId && (
+        <div className="flex items-center gap-2 pb-2 border-b border-orange-200 dark:border-orange-800">
+          <a
+            href={`${langfuseHost}/project/${langfuseProjectId}/sessions/${flowiseSessionId || runId}${agentExecutorId ? `?peek=${agentExecutorId}` : ''}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-2 px-3 py-1.5 bg-orange-50 dark:bg-orange-900/30 hover:bg-orange-100 dark:hover:bg-orange-900/50 border border-orange-200 dark:border-orange-700 rounded-lg font-mono text-sm text-orange-700 dark:text-orange-300 transition-colors"
+            title={agentExecutorId ? "View Agent Executor trace in Langfuse" : "View session in Langfuse"}
+          >
+            {/* Langfuse-style icon */}
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+            </svg>
+            <span className="text-orange-500 dark:text-orange-400">Langfuse:</span>
+            <span className="font-semibold">{flowiseSessionId || runId}</span>
+            {/* External link icon */}
+            <svg className="w-3.5 h-3.5 opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+            </svg>
+          </a>
+          <button
+            onClick={() => copyToClipboard(flowiseSessionId || runId || '', 'langfuseSessionId')}
+            className="p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+            title="Copy session ID"
+          >
+            {copiedField === 'langfuseSessionId' ? (
+              <svg className="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            ) : (
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+              </svg>
+            )}
+          </button>
+        </div>
+      )}
+
       {/* Database IDs for troubleshooting */}
       {(testId || runId || dbId) && (
         <div className="flex flex-wrap items-center gap-3 pb-2 border-b border-gray-200 dark:border-gray-700 text-sm">
@@ -841,6 +1074,37 @@ export function TranscriptViewer({
         </div>
       )}
 
+      {/* Error Summary - clickable pills that scroll to the error location */}
+      {apiCallErrors.length > 0 && (
+        <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+          <div className="flex items-center gap-2 mb-2">
+            <svg className="w-5 h-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+            <span className="font-medium text-red-700 dark:text-red-300">
+              {apiCallErrors.length} Error{apiCallErrors.length !== 1 ? 's' : ''} Detected
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {apiCallErrors.map((error, idx) => (
+              <button
+                key={`${error.callId}-${idx}`}
+                onClick={() => scrollToApiCall(error.callId)}
+                className="inline-flex items-center gap-1.5 px-2 py-1 bg-red-100 dark:bg-red-900/40 hover:bg-red-200 dark:hover:bg-red-900/60 text-red-700 dark:text-red-300 rounded text-xs font-medium transition-colors cursor-pointer"
+                title={`Click to scroll to error: ${error.errorMessage}`}
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <span className="font-mono">{error.toolName}</span>
+                <span className="text-red-500 dark:text-red-400">-</span>
+                <span className="max-w-[200px] truncate">{error.errorMessage}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {transcript.map((turn, index) => {
         const isUser = turn.role === 'user';
         const turnApiCalls = apiCallsByTurn.get(index) || [];
@@ -864,6 +1128,13 @@ export function TranscriptViewer({
                 {turnApiCalls.map((apiCall) => (
                   <InlineApiCall
                     key={apiCall.id}
+                    ref={(el) => {
+                      if (el) {
+                        apiCallRefs.current.set(apiCall.id, el);
+                      } else {
+                        apiCallRefs.current.delete(apiCall.id);
+                      }
+                    }}
                     call={apiCall}
                     isExpanded={expandedApiCalls[apiCall.id] || false}
                     onToggle={() => toggleApiCall(apiCall.id)}
@@ -932,6 +1203,8 @@ export function TranscriptViewer({
           </div>
         );
       })}
+      {/* Invisible element at bottom for auto-scroll targeting */}
+      <div ref={bottomRef} />
     </div>
   );
 }

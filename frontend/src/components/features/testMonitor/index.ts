@@ -12,3 +12,8 @@ export { FixesPanel } from './FixesPanel';
 export { AnalysisBadge } from './AnalysisBadge';
 export { ExpandablePanel } from './ExpandablePanel';
 export { PromptVersionPanel } from './PromptVersionPanel';
+export { ErrorClusteringPanel } from './ErrorClusteringPanel';
+export { PerformanceWaterfall } from './PerformanceWaterfall';
+export { ConversationDiffViewer } from './ConversationDiffViewer';
+export { FixPreviewModal } from './FixPreviewModal';
+export { LangfuseConnectionsManager } from './LangfuseConnectionsManager';

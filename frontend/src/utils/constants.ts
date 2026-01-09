@@ -35,6 +35,7 @@ export const ROUTES = {
   TEST_MONITOR_ANALYSIS: '/test-monitor/analysis',
   TEST_MONITOR_SANDBOX_LAB: '/test-monitor/sandbox-lab',
   TEST_MONITOR_EXPERIMENTS: '/test-monitor/experiments',
+  TEST_MONITOR_PRODUCTION_CALLS: '/test-monitor/production-calls',
 } as const;
 
 /**

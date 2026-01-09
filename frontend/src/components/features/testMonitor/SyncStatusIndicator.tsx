@@ -12,8 +12,9 @@
 import { useState, useCallback } from 'react';
 import { Card } from '../../ui';
 import { Spinner } from '../../ui';
-import type { PromptFile } from '../../../types/testMonitor.types';
+import type { PromptFile, PromptContext } from '../../../types/testMonitor.types';
 import { cn } from '../../../utils/cn';
+import { EnvironmentBadge } from './EnvironmentSelector';
 
 interface PromptSyncStatus {
   fileKey: string;
@@ -39,6 +40,8 @@ interface SyncStatusIndicatorProps {
   hasRecentlyAppliedFixes?: boolean;
   /** Number of bot fixes applied (for display) */
   appliedBotFixesCount?: number;
+  /** Current environment context (for display) */
+  environment?: PromptContext;
 }
 
 const statusStyles = {
@@ -82,6 +85,7 @@ export function SyncStatusIndicator({
   loading = false,
   hasRecentlyAppliedFixes = false,
   appliedBotFixesCount = 0,
+  environment = 'production',
 }: SyncStatusIndicatorProps) {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [copyingKey, setCopyingKey] = useState<string | null>(null);
@@ -223,6 +227,7 @@ export function SyncStatusIndicator({
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>
             Flowise Sync Status
+            <EnvironmentBadge environment={environment} />
             {pendingCount > 0 && (
               <span className="px-2 py-0.5 text-xs bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400 rounded-full">
                 {pendingCount} pending

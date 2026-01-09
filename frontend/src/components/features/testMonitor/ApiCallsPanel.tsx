@@ -40,6 +40,61 @@ function getToolDisplayName(call: ApiCall): string {
 }
 
 /**
+ * Check if an API call has an error based on status or response payload
+ */
+function hasApiCallError(call: ApiCall): { hasError: boolean; errorMessage?: string } {
+  // Check status field first
+  if (call.status === 'failed') {
+    return { hasError: true, errorMessage: 'Call failed' };
+  }
+
+  // Check response payload for error indicators
+  if (call.responsePayload) {
+    const payload = call.responsePayload;
+
+    // Check explicit success: false field (common in tool responses)
+    if (payload.success === false) {
+      const errorMsg = payload._debug_error || payload.error || payload.errorMessage || payload.message || 'Operation failed';
+      return { hasError: true, errorMessage: typeof errorMsg === 'string' ? errorMsg : 'Operation failed' };
+    }
+
+    // Check for _debug_error field (contains HTTP errors like "HTTP 502: Bad Gateway")
+    if (payload._debug_error) {
+      return { hasError: true, errorMessage: payload._debug_error };
+    }
+
+    // Check common error fields
+    if (payload.error) {
+      return { hasError: true, errorMessage: typeof payload.error === 'string' ? payload.error : 'Error in response' };
+    }
+    if (payload.errorMessage) {
+      return { hasError: true, errorMessage: payload.errorMessage };
+    }
+    if (payload.ErrorCode && payload.ErrorCode !== '0') {
+      return { hasError: true, errorMessage: `Error code: ${payload.ErrorCode}` };
+    }
+    // Cloud 9 API specific error
+    if (payload.ResponseStatus === 'Error' || payload.responseStatus === 'Error') {
+      return { hasError: true, errorMessage: payload.ErrorMessage || payload.errorMessage || 'API returned error status' };
+    }
+    // HTTP status codes
+    if (payload.statusCode && payload.statusCode >= 400) {
+      return { hasError: true, errorMessage: `HTTP ${payload.statusCode}` };
+    }
+    if (payload.status && typeof payload.status === 'number' && payload.status >= 400) {
+      return { hasError: true, errorMessage: `HTTP ${payload.status}` };
+    }
+  }
+
+  // No response at all could indicate failure (but not always)
+  if (call.status !== 'completed' && !call.responsePayload) {
+    return { hasError: true, errorMessage: 'No response received' };
+  }
+
+  return { hasError: false };
+}
+
+/**
  * Patient Badge Component - Shows clickable patient name
  */
 function PatientBadge({ patient }: { patient: ExtractedPatient }) {
@@ -177,7 +232,12 @@ export function ApiCallsPanel({ apiCalls, loading }: ApiCallsPanelProps) {
     <div className="space-y-2">
       {apiCalls.map((call) => {
         const isExpanded = expanded[call.id];
-        const statusColor = call.status === 'completed'
+        const errorInfo = hasApiCallError(call);
+
+        // Status color - check for payload errors even if status is "completed"
+        const statusColor = errorInfo.hasError
+          ? 'text-red-600 dark:text-red-400'
+          : call.status === 'completed'
           ? 'text-green-600 dark:text-green-400'
           : 'text-red-600 dark:text-red-400';
 
@@ -216,6 +276,18 @@ export function ApiCallsPanel({ apiCalls, loading }: ApiCallsPanelProps) {
                 <span className={cn('text-xs font-medium', statusColor)}>
                   [{call.status || 'unknown'}]
                 </span>
+                {/* Error badge - shown when response indicates failure */}
+                {errorInfo.hasError && (
+                  <span
+                    className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 rounded text-xs font-medium"
+                    title={errorInfo.errorMessage || 'Error'}
+                  >
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    Error
+                  </span>
+                )}
                 {/* Show patient badge if found */}
                 {patients.length > 0 && (
                   <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>

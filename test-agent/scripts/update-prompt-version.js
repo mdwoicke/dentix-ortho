@@ -58,15 +58,13 @@ function updateVersion(fileKey, changeDescription) {
     content = rawFunc;
   }
 
-  // For system prompt, also create escaped version and use it for DB
+  // For system prompt, also create escaped version
   if (fileKey === 'system_prompt') {
     const escaped = content.split('{').join('{{').split('}').join('}}');
     const escapedPath = path.join(V1_DIR, 'system_prompt_escaped.md');
     fs.writeFileSync(escapedPath, escaped);
     console.log(`Escaped for Flowise -> system_prompt_escaped.md (${escaped.length} chars)`);
-
-    // USE RAW VERSION for database (tools dont need escaping!)
-    content = rawFunc;
+    // content remains unchanged (raw version for DB)
   }
 
   const db = new Database(DB_PATH, { readonly: false });

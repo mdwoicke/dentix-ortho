@@ -73,6 +73,18 @@ const CONFIRMATION_RESPONSES: Record<ConfirmationSubject, Record<'yes' | 'no', R
       verbose: ["Oh, I'm sorry but that's not quite right. Let me clarify..."],
     },
   },
+  phone_number_correct: {
+    yes: {
+      terse: ['Yes', 'Correct'],
+      normal: ["Yes, that's correct", "Yes, that's the best number"],
+      verbose: ["Yes, that's exactly right! That's the best number to reach me at."],
+    },
+    no: {
+      terse: ['No', 'Actually...'],
+      normal: ["Actually, let me give you a different number", "No, use this number instead"],
+      verbose: ["Oh, actually that's not the best number. Let me give you a better one..."],
+    },
+  },
   proceed_anyway: {
     yes: {
       terse: ['Yes', 'OK', 'Proceed'],
@@ -145,6 +157,90 @@ const CONFIRMATION_RESPONSES: Record<ConfirmationSubject, Record<'yes' | 'no', R
       verbose: ["Got it, thank you for the reminder!"],
     },
   },
+  previous_visit: {
+    yes: {
+      terse: ['Yes'],
+      normal: ['Yes, she has', "Yes, we've been there before"],
+      verbose: ["Yes, she has been seen at one of your offices before."],
+    },
+    no: {
+      terse: ['No'],
+      normal: ['No, this is our first visit', "No, she hasn't"],
+      verbose: ["No, this will be her first time visiting your office."],
+    },
+  },
+  previous_treatment: {
+    yes: {
+      terse: ['Yes'],
+      normal: ['Yes, she has', 'Yes, some treatment before'],
+      verbose: ["Yes, she has had orthodontic treatment in the past."],
+    },
+    no: {
+      terse: ['No'],
+      normal: ['No previous treatment', "No, she hasn't"],
+      verbose: ["No, she has never had any orthodontic treatment before."],
+    },
+  },
+  has_insurance: {
+    yes: {
+      terse: ['Yes'],
+      normal: ['Yes, we have insurance', 'Yes, we do'],
+      verbose: ["Yes, we do have dental/orthodontic insurance coverage."],
+    },
+    no: {
+      terse: ['No'],
+      normal: ["No, we don't have insurance", 'No insurance'],
+      verbose: ["No, unfortunately we don't have dental insurance at this time."],
+    },
+  },
+  wants_time_slot: {
+    yes: {
+      terse: ['Yes', 'Works'],
+      normal: ['Yes, that works', 'That time is perfect'],
+      verbose: ["Yes, that time slot works perfectly for us!"],
+    },
+    no: {
+      terse: ['No', "Doesn't work"],
+      normal: ["No, that doesn't work", 'Is there another time?'],
+      verbose: ["Unfortunately that time doesn't work for us. Do you have any other options?"],
+    },
+  },
+  ready_to_book: {
+    yes: {
+      terse: ['Yes', 'Book it'],
+      normal: ['Yes, please book it', "Yes, let's book that"],
+      verbose: ["Yes, please go ahead and book that appointment for us!"],
+    },
+    no: {
+      terse: ['Wait', 'Hold on'],
+      normal: ['Actually, let me check first', "Can I get back to you?"],
+      verbose: ["Actually, let me check my calendar first before we finalize the booking."],
+    },
+  },
+  medical_conditions: {
+    yes: {
+      terse: ['Yes'],
+      normal: ['Yes, she does', 'Yes, there are some'],
+      verbose: ["Yes, she does have some medical conditions I should mention."],
+    },
+    no: {
+      terse: ['No'],
+      normal: ['No, none', 'No medical conditions'],
+      verbose: ["No, she doesn't have any medical conditions to note."],
+    },
+  },
+  special_needs: {
+    yes: {
+      terse: ['Yes'],
+      normal: ['Yes, she has some', 'Yes, there are some needs'],
+      verbose: ["Yes, she does have some special needs I should let you know about."],
+    },
+    no: {
+      terse: ['No'],
+      normal: ['No special needs', 'No, none'],
+      verbose: ["No, she doesn't have any special needs to be aware of."],
+    },
+  },
   general: {
     yes: {
       terse: ['Yes', 'OK'],
@@ -207,6 +303,13 @@ export class ResponseFormatter {
    */
   formatDataResponse(data: string | string[]): string {
     const dataStr = Array.isArray(data) ? data.join(', ') : data;
+
+    // Don't add prefix if data already starts with Yes/No/Sure/That (avoid "Yes, No, ...")
+    const startsWithConfirmation = /^(yes|no|sure|that|correct|right|actually|ok|okay)\b/i.test(dataStr.trim());
+    if (startsWithConfirmation) {
+      return dataStr;
+    }
+
     const prefix = this.pickRandom(CATEGORY_PREFIXES.provide_data[this.traits.verbosity]);
     return this.combine(prefix, dataStr);
   }

@@ -36,6 +36,9 @@ export interface TestResult {
   errorMessage?: string;
   transcript: ConversationTurn[];
   findings: Finding[];
+  langfuseTraceId?: string;
+  // Flowise session ID (UUID) - used for Langfuse session URL
+  flowiseSessionId?: string;
 }
 
 export interface ApiCall {
@@ -217,6 +220,10 @@ export interface GoalTestResultRecord {
   // Dynamic data resolution fields
   resolvedPersonaJson?: string;
   generationSeed?: number;
+  // Langfuse tracing
+  langfuseTraceId?: string;
+  // Flowise session ID (UUID) - used for Langfuse session URL
+  flowiseSessionId?: string;
 }
 
 export interface GoalProgressSnapshot {
@@ -434,6 +441,13 @@ export class Database {
       CREATE INDEX IF NOT EXISTS idx_findings_run_id ON findings(run_id);
       CREATE INDEX IF NOT EXISTS idx_api_calls_run_id ON api_calls(run_id);
       CREATE INDEX IF NOT EXISTS idx_api_calls_test_id ON api_calls(test_id);
+
+      -- Performance optimization indexes (added for faster queries)
+      CREATE INDEX IF NOT EXISTS idx_test_runs_status_started ON test_runs(status, started_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_test_results_status_run ON test_results(status, run_id);
+      CREATE INDEX IF NOT EXISTS idx_findings_severity_status ON findings(severity, status);
+      CREATE INDEX IF NOT EXISTS idx_transcripts_run_created ON transcripts(run_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_api_calls_timestamp ON api_calls(run_id, timestamp);
 
       -- ========================================================================
       -- DYNAMIC AGENT TUNING SYSTEM TABLES
@@ -964,6 +978,103 @@ export class Database {
       );
 
       CREATE INDEX IF NOT EXISTS idx_parallel_metrics_run ON parallel_execution_metrics(run_id);
+
+      -- Production Traces: Store imported Langfuse traces for viewing production calls
+      CREATE TABLE IF NOT EXISTS production_traces (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        trace_id TEXT UNIQUE NOT NULL,
+        langfuse_config_id INTEGER NOT NULL,
+        session_id TEXT,
+        user_id TEXT,
+        name TEXT,
+        input TEXT,
+        output TEXT,
+        metadata_json TEXT,
+        tags_json TEXT,
+        release TEXT,
+        version TEXT,
+        total_cost REAL,
+        latency_ms INTEGER,
+        started_at TEXT NOT NULL,
+        ended_at TEXT,
+        environment TEXT,
+        imported_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (langfuse_config_id) REFERENCES langfuse_configs(id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_prod_traces_config ON production_traces(langfuse_config_id);
+      CREATE INDEX IF NOT EXISTS idx_prod_traces_session ON production_traces(session_id);
+      CREATE INDEX IF NOT EXISTS idx_prod_traces_started ON production_traces(started_at DESC);
+
+      -- Production Trace Observations: Stores generations/spans from traces
+      CREATE TABLE IF NOT EXISTS production_trace_observations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        observation_id TEXT UNIQUE NOT NULL,
+        trace_id TEXT NOT NULL,
+        parent_observation_id TEXT,
+        type TEXT CHECK(type IN ('GENERATION', 'SPAN', 'EVENT')),
+        name TEXT,
+        model TEXT,
+        input TEXT,
+        output TEXT,
+        metadata_json TEXT,
+        started_at TEXT,
+        ended_at TEXT,
+        completion_start_time TEXT,
+        latency_ms INTEGER,
+        usage_input_tokens INTEGER,
+        usage_output_tokens INTEGER,
+        usage_total_tokens INTEGER,
+        cost REAL,
+        level TEXT,
+        status_message TEXT,
+        FOREIGN KEY (trace_id) REFERENCES production_traces(trace_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_prod_trace_obs_trace ON production_trace_observations(trace_id);
+
+      -- Import History: Track import operations per config
+      CREATE TABLE IF NOT EXISTS langfuse_import_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        langfuse_config_id INTEGER NOT NULL,
+        import_started_at TEXT NOT NULL,
+        import_completed_at TEXT,
+        status TEXT CHECK(status IN ('running', 'completed', 'failed')) DEFAULT 'running',
+        traces_imported INTEGER DEFAULT 0,
+        traces_skipped INTEGER DEFAULT 0,
+        error_message TEXT,
+        from_date TEXT NOT NULL,
+        to_date TEXT,
+        FOREIGN KEY (langfuse_config_id) REFERENCES langfuse_configs(id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_import_history_config ON langfuse_import_history(langfuse_config_id);
+
+      -- Production Sessions: Aggregate view of conversations (grouped by session_id)
+      -- Each session contains multiple traces representing a full conversation
+      CREATE TABLE IF NOT EXISTS production_sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        langfuse_config_id INTEGER NOT NULL,
+        user_id TEXT,
+        environment TEXT,
+        first_trace_at TEXT NOT NULL,
+        last_trace_at TEXT NOT NULL,
+        trace_count INTEGER DEFAULT 1,
+        total_cost REAL,
+        total_latency_ms INTEGER,
+        input_preview TEXT,  -- First user message (preview)
+        tags_json TEXT,
+        metadata_json TEXT,
+        imported_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(session_id, langfuse_config_id),
+        FOREIGN KEY (langfuse_config_id) REFERENCES langfuse_configs(id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_prod_sessions_config ON production_sessions(langfuse_config_id);
+      CREATE INDEX IF NOT EXISTS idx_prod_sessions_last_trace ON production_sessions(last_trace_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_prod_sessions_user ON production_sessions(user_id);
     `);
 
     // Migration: Add agent_question column if it doesn't exist
@@ -1002,6 +1113,14 @@ export class Database {
 
     // Migration: Add is_enabled field to reference_documents (for selective inclusion in enhancements)
     this.addColumnIfNotExists('reference_documents', 'is_enabled', 'INTEGER DEFAULT 1');
+
+    // Migration: Add langfuse_trace_id column to test_results and goal_test_results
+    this.addColumnIfNotExists('test_results', 'langfuse_trace_id', 'TEXT');
+    this.addColumnIfNotExists('goal_test_results', 'langfuse_trace_id', 'TEXT');
+
+    // Migration: Add flowise_session_id column (UUID used for Langfuse session URL)
+    this.addColumnIfNotExists('goal_test_results', 'flowise_session_id', 'TEXT');
+    this.addColumnIfNotExists('test_results', 'flowise_session_id', 'TEXT');
 
     // Migration: Add context columns to ai_enhancement_history for sandbox support
     this.addColumnIfNotExists('ai_enhancement_history', 'context', "TEXT DEFAULT 'production'");
@@ -1461,8 +1580,8 @@ export class Database {
 
     const info = db.prepare(`
       INSERT OR REPLACE INTO test_results
-      (run_id, test_id, test_name, category, status, started_at, completed_at, duration_ms, error_message)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (run_id, test_id, test_name, category, status, started_at, completed_at, duration_ms, error_message, langfuse_trace_id, flowise_session_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       result.runId,
       result.testId,
@@ -1472,7 +1591,9 @@ export class Database {
       result.startedAt,
       result.completedAt,
       result.durationMs,
-      result.errorMessage
+      result.errorMessage,
+      result.langfuseTraceId || null,
+      result.flowiseSessionId || null
     );
 
     const resultId = info.lastInsertRowid as number;
@@ -1614,7 +1735,7 @@ export class Database {
     const db = this.getDb();
 
     const rows = db.prepare(`
-      SELECT id, run_id, test_id, test_name, category, status, started_at, completed_at, duration_ms, error_message
+      SELECT id, run_id, test_id, test_name, category, status, started_at, completed_at, duration_ms, error_message, langfuse_trace_id
       FROM test_results
       WHERE run_id = ?
     `).all(runId) as any[];
@@ -1632,6 +1753,7 @@ export class Database {
       errorMessage: row.error_message,
       transcript: [],
       findings: [],
+      langfuseTraceId: row.langfuse_trace_id,
     }));
   }
 
@@ -2521,8 +2643,8 @@ export class Database {
       INSERT OR REPLACE INTO goal_test_results
       (run_id, test_id, passed, turn_count, duration_ms, started_at, completed_at,
        goal_results_json, constraint_violations_json, summary_text,
-       resolved_persona_json, generation_seed)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       resolved_persona_json, generation_seed, langfuse_trace_id, flowise_session_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       result.runId,
       result.testId,
@@ -2535,7 +2657,9 @@ export class Database {
       result.constraintViolationsJson,
       result.summaryText,
       result.resolvedPersonaJson,
-      result.generationSeed
+      result.generationSeed,
+      result.langfuseTraceId || null,
+      result.flowiseSessionId || null
     );
 
     return info.lastInsertRowid as number;
@@ -2550,7 +2674,7 @@ export class Database {
     const rows = db.prepare(`
       SELECT id, run_id, test_id, passed, turn_count, duration_ms, started_at, completed_at,
              goal_results_json, constraint_violations_json, summary_text,
-             resolved_persona_json, generation_seed
+             resolved_persona_json, generation_seed, langfuse_trace_id, flowise_session_id
       FROM goal_test_results
       WHERE run_id = ?
     `).all(runId) as any[];
@@ -2569,6 +2693,8 @@ export class Database {
       summaryText: row.summary_text,
       resolvedPersonaJson: row.resolved_persona_json,
       generationSeed: row.generation_seed,
+      langfuseTraceId: row.langfuse_trace_id,
+      flowiseSessionId: row.flowise_session_id,
     }));
   }
 
@@ -2581,7 +2707,7 @@ export class Database {
     const row = db.prepare(`
       SELECT id, run_id, test_id, passed, turn_count, duration_ms, started_at, completed_at,
              goal_results_json, constraint_violations_json, summary_text,
-             resolved_persona_json, generation_seed
+             resolved_persona_json, generation_seed, langfuse_trace_id, flowise_session_id
       FROM goal_test_results
       WHERE run_id = ? AND test_id = ?
     `).get(runId, testId) as any;
@@ -2602,6 +2728,8 @@ export class Database {
       summaryText: row.summary_text,
       resolvedPersonaJson: row.resolved_persona_json,
       generationSeed: row.generation_seed,
+      langfuseTraceId: row.langfuse_trace_id,
+      flowiseSessionId: row.flowise_session_id,
     };
   }
 

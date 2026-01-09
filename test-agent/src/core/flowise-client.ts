@@ -41,17 +41,20 @@ export class FlowiseClient {
   private sessionId: string;
   private endpoint: string;
   private apiKey?: string;
+  private sessionVars: Record<string, string>;
 
   /**
    * Create a new FlowiseClient
    * @param sessionId - Optional session ID (generates UUID if not provided)
    * @param endpoint - Optional endpoint URL override (uses config default if not provided)
    * @param apiKey - Optional API key for authentication
+   * @param sessionVars - Optional session variables (e.g., c1mg_variable_caller_id_number)
    */
-  constructor(sessionId?: string, endpoint?: string, apiKey?: string) {
+  constructor(sessionId?: string, endpoint?: string, apiKey?: string, sessionVars?: Record<string, string>) {
     this.sessionId = sessionId || uuidv4();
     this.endpoint = endpoint || config.flowise.endpoint;
     this.apiKey = apiKey;
+    this.sessionVars = sessionVars || {};
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -79,31 +82,40 @@ export class FlowiseClient {
   /**
    * Create a FlowiseClient for a specific sandbox endpoint
    */
-  static forSandbox(endpoint: string, sessionId?: string, apiKey?: string): FlowiseClient {
-    return new FlowiseClient(sessionId, endpoint, apiKey);
+  static forSandbox(endpoint: string, sessionId?: string, apiKey?: string, sessionVars?: Record<string, string>): FlowiseClient {
+    return new FlowiseClient(sessionId, endpoint, apiKey, sessionVars);
   }
 
   /**
    * Create a FlowiseClient using the default production endpoint from hardcoded config
    * @deprecated Use forActiveConfig() instead to use settings from the app
    */
-  static forProduction(sessionId?: string): FlowiseClient {
-    return new FlowiseClient(sessionId, config.flowise.endpoint);
+  static forProduction(sessionId?: string, sessionVars?: Record<string, string>): FlowiseClient {
+    return new FlowiseClient(sessionId, config.flowise.endpoint, undefined, sessionVars);
   }
 
   /**
    * Create a FlowiseClient using the active configuration from app settings
    * Falls back to hardcoded config if settings unavailable
+   * @param sessionId - Optional session ID
+   * @param sessionVars - Optional session variables (e.g., { c1mg_variable_caller_id_number: '5551234567' })
    */
-  static async forActiveConfig(sessionId?: string): Promise<FlowiseClient> {
+  static async forActiveConfig(sessionId?: string, sessionVars?: Record<string, string>): Promise<FlowiseClient> {
     try {
       const settings = await getFlowiseEndpoint();
       console.log(`[FlowiseClient] Using active config: ${settings.url.substring(0, 60)}...`);
-      return new FlowiseClient(sessionId, settings.url, settings.apiKey);
+      return new FlowiseClient(sessionId, settings.url, settings.apiKey, sessionVars);
     } catch (error: any) {
       console.warn(`[FlowiseClient] Failed to get active config, using fallback: ${error.message}`);
-      return new FlowiseClient(sessionId, config.flowise.endpoint);
+      return new FlowiseClient(sessionId, config.flowise.endpoint, undefined, sessionVars);
     }
+  }
+
+  /**
+   * Set session variables (for use after construction)
+   */
+  setSessionVars(vars: Record<string, string>): void {
+    this.sessionVars = { ...this.sessionVars, ...vars };
   }
 
   /**
@@ -117,6 +129,8 @@ export class FlowiseClient {
       question,
       overrideConfig: {
         sessionId: this.sessionId,
+        // Pass session variables (e.g., c1mg_variable_caller_id_number for telephony simulation)
+        ...(Object.keys(this.sessionVars).length > 0 && { vars: this.sessionVars }),
       },
     };
 

@@ -12,7 +12,6 @@
 import { Langfuse, LangfuseTraceClient, LangfuseSpanClient, LangfuseGenerationClient } from 'langfuse';
 import type {
   LangfuseConfig,
-  TraceContext,
   TraceOptions,
   SpanOptions,
   GenerationOptions,
@@ -80,8 +79,15 @@ export function getErrorSeverityScore(errorType: string): number {
 export class LangfuseService {
   private client: Langfuse | null = null;
   private initPromise: Promise<boolean> | null = null;
-  private config: LangfuseConfig | null = null;
+  private storedConfig: LangfuseConfig | null = null;
   private enabled: boolean = true;
+
+  /**
+   * Get the stored configuration (for debugging/inspection)
+   */
+  getConfig(): LangfuseConfig | null {
+    return this.storedConfig;
+  }
 
   // Track active observations for context
   private activeTraces: Map<string, LangfuseTraceClient> = new Map();
@@ -117,7 +123,7 @@ export class LangfuseService {
         return false;
       }
 
-      this.config = config;
+      this.storedConfig = config;
       this.client = new Langfuse({
         publicKey: config.publicKey,
         secretKey: config.secretKey,

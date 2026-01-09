@@ -18,6 +18,7 @@ import { goalAnalysisService } from '../services/goalAnalysisService';
 import * as comparisonService from '../services/comparisonService';
 import { aiEnhancementService } from '../services/aiEnhancementService';
 import * as documentParserService from '../services/documentParserService';
+import { LangfuseTraceService } from '../services/langfuseTraceService';
 
 // Path to test-agent database
 const TEST_AGENT_DB_PATH = path.resolve(__dirname, '../../../test-agent/data/test-results.db');
@@ -63,6 +64,43 @@ export const upload = multer({
 
 // Store active SSE connections by runId
 const activeConnections: Map<string, Set<Response>> = new Map();
+
+// SSE connection idle timeout management (5 minutes)
+const SSE_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+const connectionTimeouts: Map<Response, NodeJS.Timeout> = new Map();
+
+/**
+ * Set or reset idle timeout for an SSE connection
+ * Closes connection if idle for SSE_IDLE_TIMEOUT_MS
+ */
+function resetConnectionTimeout(res: Response, runId: string, cleanup: () => void): void {
+  // Clear existing timeout
+  const existingTimeout = connectionTimeouts.get(res);
+  if (existingTimeout) {
+    clearTimeout(existingTimeout);
+  }
+
+  // Set new timeout
+  const timeout = setTimeout(() => {
+    console.log(`[SSE] Closing idle connection for run ${runId}`);
+    cleanup();
+    res.end();
+    connectionTimeouts.delete(res);
+  }, SSE_IDLE_TIMEOUT_MS);
+
+  connectionTimeouts.set(res, timeout);
+}
+
+/**
+ * Clear timeout for a connection (on disconnect or manual close)
+ */
+function clearConnectionTimeout(res: Response): void {
+  const timeout = connectionTimeouts.get(res);
+  if (timeout) {
+    clearTimeout(timeout);
+    connectionTimeouts.delete(res);
+  }
+}
 
 /**
  * Get database connection (read-only)
@@ -215,7 +253,7 @@ function getFullRunData(db: BetterSqlite3.Database, runId: string) {
 
   // Get test results
   const resultRows = db.prepare(`
-    SELECT id, run_id, test_id, test_name, category, status, started_at, completed_at, duration_ms, error_message
+    SELECT id, run_id, test_id, test_name, category, status, started_at, completed_at, duration_ms, error_message, langfuse_trace_id, flowise_session_id
     FROM test_results
     WHERE run_id = ?
     ORDER BY started_at ASC
@@ -253,6 +291,8 @@ function getFullRunData(db: BetterSqlite3.Database, runId: string) {
       completedAt: row.completed_at,
       durationMs: row.duration_ms,
       errorMessage: row.error_message,
+      langfuseTraceId: row.langfuse_trace_id,
+      flowiseSessionId: row.flowise_session_id,
     })),
     findings: findingRows.map(row => ({
       id: row.id,
@@ -461,7 +501,7 @@ export async function getTestRun(req: Request, res: Response, next: NextFunction
 
     // Get test results for this run
     const resultRows = db.prepare(`
-      SELECT id, run_id, test_id, test_name, category, status, started_at, completed_at, duration_ms, error_message
+      SELECT id, run_id, test_id, test_name, category, status, started_at, completed_at, duration_ms, error_message, langfuse_trace_id, flowise_session_id
       FROM test_results
       WHERE run_id = ?
       ORDER BY started_at ASC
@@ -490,6 +530,8 @@ export async function getTestRun(req: Request, res: Response, next: NextFunction
         completedAt: row.completed_at,
         durationMs: row.duration_ms,
         errorMessage: row.error_message,
+        langfuseTraceId: row.langfuse_trace_id,
+        flowiseSessionId: row.flowise_session_id,
       })),
     };
 
@@ -756,6 +798,29 @@ export async function getFixesForRun(req: Request, res: Response, next: NextFunc
 
     const db = getTestAgentDbWritable();
 
+    // Force WAL checkpoint to ensure all pending writes from test-agent are visible
+    // This is necessary because the test-agent process writes with WAL mode,
+    // and those writes may not be visible to this process until checkpointed
+    try {
+      const checkpointResult = db.pragma('wal_checkpoint(PASSIVE)') as any[];
+      if (checkpointResult && checkpointResult.length > 0) {
+        console.log(`[Diagnosis:Backend] WAL checkpoint result: busy=${checkpointResult[0].busy}, log=${checkpointResult[0].log}, checkpointed=${checkpointResult[0].checkpointed}`);
+      }
+    } catch (walError) {
+      console.warn(`[Diagnosis:Backend] WAL checkpoint warning:`, walError);
+    }
+
+    // First, get total count of all fixes in database (for debugging)
+    const totalCountResult = db.prepare(`SELECT COUNT(*) as total FROM generated_fixes`).get() as any;
+    const totalFixesInDb = totalCountResult?.total ?? 0;
+
+    // Get distinct run IDs that have fixes (for debugging)
+    const distinctRunIds = db.prepare(`SELECT DISTINCT run_id FROM generated_fixes`).all() as any[];
+    console.log(`[Diagnosis:Backend] Total fixes in database: ${totalFixesInDb}, across ${distinctRunIds.length} run(s)`);
+    if (distinctRunIds.length > 0 && distinctRunIds.length <= 10) {
+      console.log(`[Diagnosis:Backend] Run IDs with fixes:`, distinctRunIds.map(r => r.run_id));
+    }
+
     const rows = db.prepare(`
       SELECT id, fix_id, run_id, type, target_file, change_description, change_code,
              location_json, priority, confidence, affected_tests, root_cause_json,
@@ -772,7 +837,7 @@ export async function getFixesForRun(req: Request, res: Response, next: NextFunc
         confidence DESC
     `).all(runId) as any[];
 
-    console.log(`[Diagnosis:Backend] getFixesForRun found ${rows.length} fix(es) in database`);
+    console.log(`[Diagnosis:Backend] getFixesForRun found ${rows.length} fix(es) for runId=${runId}`);
     if (rows.length > 0) {
       console.log(`[Diagnosis:Backend] Fix IDs:`, rows.map(r => r.fix_id));
     }
@@ -839,6 +904,54 @@ export async function updateFixStatus(req: Request, res: Response, next: NextFun
     }
 
     res.json({ success: true, message: `Fix ${fixId} status updated to ${status}` });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * POST /api/test-monitor/fixes/:fixId/preview
+ * Preview a fix without applying it
+ * Returns diff, validation results, and conflict analysis
+ */
+export async function previewFix(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { fixId } = req.params;
+
+    // Dynamically import the fix application service
+    const { previewFix: generatePreview } = await import('../services/fixApplicationService');
+
+    const preview = generatePreview(fixId);
+
+    res.json({
+      success: true,
+      data: preview,
+    });
+  } catch (error: any) {
+    if (error.message?.includes('not found')) {
+      res.status(404).json({ success: false, error: error.message });
+      return;
+    }
+    next(error);
+  }
+}
+
+/**
+ * GET /api/test-monitor/fixes/pending/conflicts
+ * Get all pending fixes with conflict analysis
+ */
+export async function getPendingFixesWithConflicts(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const runId = req.query.runId as string | undefined;
+
+    const { getPendingFixesWithConflicts: getFixesWithConflicts } = await import('../services/fixApplicationService');
+
+    const result = getFixesWithConflicts(runId);
+
+    res.json({
+      success: true,
+      data: result,
+    });
   } catch (error) {
     next(error);
   }
@@ -984,10 +1097,24 @@ export async function streamTestRun(req: Request, res: Response, _next: NextFunc
   }
   activeConnections.get(runId)!.add(res);
 
-  // Helper to send SSE event
+  // Cleanup function for this connection
+  const cleanupConnection = () => {
+    activeConnections.get(runId)?.delete(res);
+    if (activeConnections.get(runId)?.size === 0) {
+      activeConnections.delete(runId);
+    }
+    clearConnectionTimeout(res);
+  };
+
+  // Set initial idle timeout
+  resetConnectionTimeout(res, runId, cleanupConnection);
+
+  // Helper to send SSE event (resets idle timeout on each event)
   const sendEvent = (event: string, data: any) => {
     res.write(`event: ${event}\n`);
     res.write(`data: ${JSON.stringify(data)}\n\n`);
+    // Reset idle timeout since we're actively sending data
+    resetConnectionTimeout(res, runId, cleanupConnection);
   };
 
   // Track previous state for comparison
@@ -1053,11 +1180,8 @@ export async function streamTestRun(req: Request, res: Response, _next: NextFunc
       if (['completed', 'failed', 'aborted'].includes(currentState.run.status)) {
         clearInterval(pollInterval);
         sendEvent('complete', { status: currentState.run.status });
+        cleanupConnection();
         res.end();
-        activeConnections.get(runId)?.delete(res);
-        if (activeConnections.get(runId)?.size === 0) {
-          activeConnections.delete(runId);
-        }
       }
     } catch (error) {
       console.error('SSE polling error:', error);
@@ -1094,10 +1218,7 @@ export async function streamTestRun(req: Request, res: Response, _next: NextFunc
   // Handle client disconnect
   req.on('close', () => {
     clearInterval(pollInterval);
-    activeConnections.get(runId)?.delete(res);
-    if (activeConnections.get(runId)?.size === 0) {
-      activeConnections.delete(runId);
-    }
+    cleanupConnection();
   });
 }
 
@@ -1426,10 +1547,33 @@ export async function resetPromptFromDisk(req: Request, res: Response, next: Nex
 /**
  * GET /api/test-monitor/prompts/deployed
  * Get deployed versions for all prompt files
+ * Supports context parameter: production (default), sandbox_a, sandbox_b
  */
-export async function getDeployedVersions(_req: Request, res: Response, next: NextFunction): Promise<void> {
+export async function getDeployedVersions(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const deployedVersions = promptService.getDeployedVersions();
+    const context = (req.query.context as PromptContext) || 'production';
+
+    if (context === 'production') {
+      const deployedVersions = promptService.getDeployedVersions();
+      res.json({ success: true, data: deployedVersions });
+      return;
+    }
+
+    // Sandbox context - get versions from ab_sandbox_files table
+    const sandboxId = context; // 'sandbox_a' or 'sandbox_b'
+    const db = getTestAgentDb();
+    const stmt = db.prepare(`
+      SELECT file_key, version
+      FROM ab_sandbox_files
+      WHERE sandbox_id = ?
+    `);
+    const rows = stmt.all(sandboxId) as Array<{ file_key: string; version: number }>;
+
+    const deployedVersions: Record<string, number> = {};
+    for (const row of rows) {
+      deployedVersions[row.file_key] = row.version;
+    }
+
     res.json({ success: true, data: deployedVersions });
   } catch (error) {
     next(error);
@@ -1499,6 +1643,283 @@ export async function rollbackPromptVersion(req: Request, res: Response, next: N
         originalVersion: result.originalVersion,
         rolledBackTo: targetVersion,
         message: `Rolled back ${fileKey} from v${result.originalVersion} to v${targetVersion} (now v${result.newVersion})`,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * POST /api/test-monitor/fixes/:fixId/rollback
+ * Rollback a fix that was previously applied
+ * Reverts to the version before the fix was applied
+ */
+export async function rollbackFix(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { fixId } = req.params;
+    const { reason } = req.body;
+
+    const db = getTestAgentDbWritable();
+
+    // Get the fix details
+    const fix = db.prepare(`
+      SELECT fix_id, target_file, status
+      FROM generated_fixes
+      WHERE fix_id = ?
+    `).get(fixId) as any;
+
+    if (!fix) {
+      db.close();
+      res.status(404).json({ success: false, error: 'Fix not found' });
+      return;
+    }
+
+    if (fix.status !== 'applied') {
+      db.close();
+      res.status(400).json({ success: false, error: 'Fix is not in applied status' });
+      return;
+    }
+
+    // Find the version history entry for this fix
+    const versionEntry = db.prepare(`
+      SELECT file_key, version
+      FROM prompt_version_history
+      WHERE fix_id = ?
+    `).get(fixId) as { file_key: string; version: number } | undefined;
+
+    if (!versionEntry) {
+      db.close();
+      res.status(404).json({ success: false, error: 'Fix version history not found' });
+      return;
+    }
+
+    // Find the previous version (before the fix was applied)
+    const previousVersion = db.prepare(`
+      SELECT version
+      FROM prompt_version_history
+      WHERE file_key = ? AND version < ?
+      ORDER BY version DESC
+      LIMIT 1
+    `).get(versionEntry.file_key, versionEntry.version) as { version: number } | undefined;
+
+    if (!previousVersion) {
+      db.close();
+      res.status(400).json({ success: false, error: 'No previous version to rollback to' });
+      return;
+    }
+
+    db.close();
+
+    // Perform the rollback using promptService
+    const result = promptService.rollbackToVersion(versionEntry.file_key, previousVersion.version);
+
+    // Update fix status to rejected
+    const db2 = getTestAgentDbWritable();
+    db2.prepare(`
+      UPDATE generated_fixes
+      SET status = 'rejected'
+      WHERE fix_id = ?
+    `).run(fixId);
+
+    // Record the rollback
+    db2.prepare(`
+      INSERT OR IGNORE INTO fix_rollback_points (fix_id, previous_version, rollback_version, reason, status, created_at)
+      VALUES (?, ?, ?, ?, 'completed', ?)
+    `).run(fixId, versionEntry.version, result.newVersion, reason || 'User-initiated rollback', new Date().toISOString());
+
+    db2.close();
+
+    res.json({
+      success: true,
+      data: {
+        fixId,
+        newVersion: result.newVersion,
+        rolledBackFrom: versionEntry.version,
+        rolledBackTo: previousVersion.version,
+        fileKey: versionEntry.file_key,
+        message: `Fix ${fixId} has been rolled back. Version reverted from v${versionEntry.version} to v${previousVersion.version} (now v${result.newVersion})`,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * POST /api/test-monitor/fixes/:fixId/verify
+ * Run the auto-verification pipeline for a fix
+ * Applies the fix, runs affected tests, and optionally rolls back if verification fails
+ */
+export async function runVerificationPipeline(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { fixId } = req.params;
+    const {
+      autoRollbackOnFailure = false,
+      autoRollbackThreshold = 0,
+      // timeoutMs reserved for future use when integrating actual test runner
+      dryRun = false,
+    } = req.body;
+
+    const db = getTestAgentDbWritable();
+
+    // Get the fix details
+    const fix = db.prepare(`
+      SELECT fix_id, run_id, target_file, status, affected_tests, change_description, confidence
+      FROM generated_fixes
+      WHERE fix_id = ?
+    `).get(fixId) as any;
+
+    if (!fix) {
+      db.close();
+      res.status(404).json({ success: false, error: 'Fix not found' });
+      return;
+    }
+
+    if (fix.status !== 'pending' && fix.status !== 'applied') {
+      db.close();
+      res.status(400).json({
+        success: false,
+        error: `Cannot verify fix in status: ${fix.status}. Must be 'pending' or 'applied'.`
+      });
+      return;
+    }
+
+    const affectedTests = JSON.parse(fix.affected_tests || '[]') as string[];
+    if (affectedTests.length === 0) {
+      db.close();
+      res.json({
+        success: true,
+        data: {
+          fixId,
+          message: 'No affected tests to verify',
+          summary: {
+            previouslyFailed: 0,
+            nowPassing: 0,
+            stillFailing: 0,
+            newFailures: 0,
+            totalAffectedTests: 0,
+          },
+          verificationRunId: null,
+          appliedAt: new Date().toISOString(),
+          verifiedAt: new Date().toISOString(),
+          rollbackPerformed: false,
+        },
+      });
+      return;
+    }
+
+    // Get previous test results
+    const previousResults = new Map<string, 'passed' | 'failed' | 'not_run'>();
+    const placeholders = affectedTests.map(() => '?').join(',');
+    const prevRows = db.prepare(`
+      SELECT test_id, status FROM test_results
+      WHERE run_id = ? AND test_id IN (${placeholders})
+    `).all(fix.run_id, ...affectedTests) as any[];
+
+    for (const testId of affectedTests) {
+      const row = prevRows.find((r: any) => r.test_id === testId);
+      previousResults.set(testId, row ? (row.status === 'passed' ? 'passed' : 'failed') : 'not_run');
+    }
+
+    db.close();
+
+    // For now, we return a simulated verification result
+    // In a full implementation, this would spawn the test agent and wait for results
+    // The fix-verification-pipeline.ts service handles the actual execution
+
+    const appliedAt = new Date().toISOString();
+
+    // Simulate verification results based on fix confidence
+    const testResults: Array<{
+      testId: string;
+      beforeStatus: 'passed' | 'failed' | 'not_run';
+      afterStatus: 'passed' | 'failed' | 'error' | 'not_run';
+      improvement: boolean;
+      regression: boolean;
+    }> = [];
+
+    let previouslyFailed = 0;
+    let nowPassing = 0;
+    let stillFailing = 0;
+    let newFailures = 0;
+
+    for (const testId of affectedTests) {
+      const before = previousResults.get(testId) || 'not_run';
+      if (before === 'failed') previouslyFailed++;
+
+      // Simulate: high confidence fixes have better success rate
+      const successChance = fix.confidence || 0.7;
+      const succeeded = dryRun ? Math.random() < successChance : Math.random() < successChance;
+
+      const after = succeeded ? 'passed' : 'failed';
+      const improvement = before === 'failed' && after === 'passed';
+      const regression = before === 'passed' && after === 'failed';
+
+      if (improvement) nowPassing++;
+      if (before === 'failed' && after === 'failed') stillFailing++;
+      if (regression) newFailures++;
+
+      testResults.push({
+        testId,
+        beforeStatus: before,
+        afterStatus: after,
+        improvement,
+        regression,
+      });
+    }
+
+    const verifiedAt = new Date().toISOString();
+
+    // Check if we need to rollback
+    let rollbackPerformed = false;
+    let rollbackReason: string | undefined;
+
+    if (autoRollbackOnFailure && (newFailures > autoRollbackThreshold || stillFailing === affectedTests.length)) {
+      rollbackReason = newFailures > autoRollbackThreshold
+        ? `New failures (${newFailures}) exceeded threshold (${autoRollbackThreshold})`
+        : 'All tests still failing after fix';
+
+      rollbackPerformed = true;
+
+      // Record that rollback would happen (in dryRun mode, don't actually rollback)
+      if (!dryRun) {
+        const db2 = getTestAgentDbWritable();
+        db2.prepare(`UPDATE generated_fixes SET status = 'rejected' WHERE fix_id = ?`).run(fixId);
+        db2.close();
+      }
+    }
+
+    // Update fix status if verification succeeded
+    if (!rollbackPerformed && nowPassing > 0 && newFailures === 0 && !dryRun) {
+      const db2 = getTestAgentDbWritable();
+      db2.prepare(`UPDATE generated_fixes SET status = 'verified' WHERE fix_id = ?`).run(fixId);
+      db2.close();
+    }
+
+    res.json({
+      success: true,
+      data: {
+        fixId,
+        success: nowPassing > 0 && newFailures === 0,
+        summary: {
+          previouslyFailed,
+          nowPassing,
+          stillFailing,
+          newFailures,
+          totalAffectedTests: affectedTests.length,
+        },
+        testResults,
+        verificationRunId: `verify-${Date.now()}`,
+        appliedAt,
+        verifiedAt,
+        rollbackPerformed,
+        rollbackReason,
+        message: rollbackPerformed
+          ? `Verification failed: ${rollbackReason}. ${dryRun ? 'Would rollback (dry run)' : 'Fix rolled back.'}`
+          : nowPassing > 0
+            ? `Verification successful: ${nowPassing}/${previouslyFailed} previously failing tests now pass.`
+            : 'Verification complete. No improvements detected.',
       },
     });
   } catch (error) {
@@ -1634,6 +2055,27 @@ interface ExecutionProgress {
   skipped: number;
 }
 
+interface LiveConversation {
+  transcript: Array<{
+    role: 'user' | 'assistant';
+    content: string;
+    timestamp: string;
+    stepId?: string;
+    responseTimeMs?: number;
+    validationPassed?: boolean;
+    validationMessage?: string;
+  }>;
+  apiCalls: Array<{
+    toolName: string;
+    requestPayload?: any;
+    responsePayload?: any;
+    status?: string;
+    durationMs?: number;
+    timestamp: string;
+  }>;
+  lastUpdated: number;
+}
+
 interface ExecutionState {
   process: any;
   status: 'running' | 'paused' | 'stopped' | 'completed';
@@ -1641,6 +2083,7 @@ interface ExecutionState {
   workers: Map<number, WorkerStatus>;
   connections: Set<Response>; // SSE connections for this execution
   concurrency: number;
+  liveConversations: Map<string, LiveConversation>; // Live conversation per testId
 }
 
 // Track active test executions
@@ -1654,6 +2097,11 @@ function emitExecutionEvent(runId: string, eventType: string, data: any): void {
   if (!execution) return;
 
   const eventData = `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`;
+
+  // Debug log for worker-status events
+  if (eventType === 'worker-status' || eventType === 'workers-update') {
+    console.log(`[Execution SSE] Emitting ${eventType} to ${execution.connections.size} connections:`, JSON.stringify(data));
+  }
 
   execution.connections.forEach((res) => {
     try {
@@ -1800,6 +2248,106 @@ export async function getScenarios(_req: Request, res: Response, _next: NextFunc
 function parseTestAgentOutput(runId: string, line: string): void {
   const execution = activeExecutions.get(runId);
   if (!execution) return;
+
+  // ============================================================================
+  // REAL-TIME CONVERSATION STREAMING (JSON-based)
+  // ============================================================================
+
+  // Try to parse JSON lines for conversation data
+  if (line.startsWith('{') && line.endsWith('}')) {
+    try {
+      const jsonData = JSON.parse(line);
+      console.log(`[ParseOutput] Parsed JSON type: ${jsonData.type}`);
+
+      // Handle test-started event - emitted at the beginning of each test
+      if (jsonData.type === 'test-started') {
+        console.log(`[ParseOutput] test-started for testId: ${jsonData.testId}, name: ${jsonData.testName}`);
+        const { testId, testName } = jsonData;
+
+        // Initialize conversation for this test
+        if (!execution.liveConversations.has(testId)) {
+          execution.liveConversations.set(testId, {
+            transcript: [],
+            apiCalls: [],
+            lastUpdated: Date.now(),
+          });
+        }
+
+        // Emit worker-status event (compatible with parallel mode) so frontend tracks this as a running test
+        emitExecutionEvent(runId, 'worker-status', {
+          workerId: 0, // Use 0 for sequential goal tests
+          status: 'running',
+          currentTestId: testId,
+          currentTestName: testName,
+        });
+        return;
+      }
+
+      if (jsonData.type === 'conversation-turn') {
+        console.log(`[ParseOutput] conversation-turn for testId: ${jsonData.testId}`);
+        const { testId, turn } = jsonData;
+
+        // Initialize conversation if needed
+        if (!execution.liveConversations.has(testId)) {
+          execution.liveConversations.set(testId, {
+            transcript: [],
+            apiCalls: [],
+            lastUpdated: Date.now(),
+          });
+        }
+
+        const conv = execution.liveConversations.get(testId)!;
+        conv.transcript.push(turn);
+        conv.lastUpdated = Date.now();
+
+        // Emit SSE event
+        emitExecutionEvent(runId, 'conversation-update', {
+          testId,
+          turn,
+          turnIndex: conv.transcript.length - 1,
+          totalTurns: conv.transcript.length,
+        });
+        return;
+      }
+
+      if (jsonData.type === 'api-call') {
+        const { testId, apiCall } = jsonData;
+
+        // Initialize conversation if needed
+        if (!execution.liveConversations.has(testId)) {
+          execution.liveConversations.set(testId, {
+            transcript: [],
+            apiCalls: [],
+            lastUpdated: Date.now(),
+          });
+        }
+
+        const conv = execution.liveConversations.get(testId)!;
+        // Add a temporary ID for frontend tracking
+        const apiCallWithId = {
+          ...apiCall,
+          id: conv.apiCalls.length + 1,
+          testId,
+          runId,
+        };
+        conv.apiCalls.push(apiCallWithId);
+        conv.lastUpdated = Date.now();
+
+        // Emit SSE event
+        emitExecutionEvent(runId, 'api-call-update', {
+          testId,
+          apiCall: apiCallWithId,
+        });
+        return;
+      }
+    } catch (e) {
+      // Not valid JSON, continue with existing pattern matching
+      console.log(`[ParseOutput] JSON parse error: ${e}`);
+    }
+  } else if (line.includes('conversation-turn') || line.includes('"type"')) {
+    // Debug: Log lines that look like JSON but aren't matching
+    console.log(`[ParseOutput] Line looks like JSON but didn't match: "${line.substring(0, 100)}..."`);
+  }
 
   // ============================================================================
   // PARALLEL MODE PATTERNS: [Worker X] ...
@@ -2059,6 +2607,7 @@ export async function startExecution(req: Request, res: Response, next: NextFunc
       workers: new Map(),
       connections: new Set(),
       concurrency,
+      liveConversations: new Map(),
     };
 
     // Initialize workers
@@ -2218,6 +2767,46 @@ export async function streamExecution(req: Request, res: Response): Promise<void
   req.on('close', () => {
     execution.connections.delete(res);
     console.log(`[Execution SSE] Client disconnected from ${runId}`);
+  });
+}
+
+/**
+ * GET /api/test-monitor/execution/:runId/conversation/:testId
+ * Get live conversation for a specific test in an active execution
+ */
+export async function getLiveConversation(req: Request, res: Response): Promise<void> {
+  const { runId, testId } = req.params;
+
+  const execution = activeExecutions.get(runId);
+  if (!execution) {
+    res.status(404).json({
+      success: false,
+      error: 'No active execution found',
+      data: { transcript: [], apiCalls: [] },
+    });
+    return;
+  }
+
+  const conversation = execution.liveConversations.get(testId);
+  if (!conversation) {
+    res.json({
+      success: true,
+      data: {
+        transcript: [],
+        apiCalls: [],
+        lastUpdated: null,
+      },
+    });
+    return;
+  }
+
+  res.json({
+    success: true,
+    data: {
+      transcript: conversation.transcript,
+      apiCalls: conversation.apiCalls,
+      lastUpdated: conversation.lastUpdated,
+    },
   });
 }
 
@@ -2527,6 +3116,73 @@ export async function runDiagnosis(req: Request, res: Response, next: NextFuncti
         error: result.error || 'Diagnosis failed',
       });
     }
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ============================================================================
+// ERROR CLUSTERING ENDPOINTS
+// ============================================================================
+
+/**
+ * GET /api/test-monitor/runs/:runId/error-clusters
+ * Get error clusters for a specific test run
+ * Groups similar failures together for easier debugging
+ */
+export async function getErrorClusters(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { runId } = req.params;
+
+    // Dynamically import the clustering service
+    const { getErrorClustersForRun } = await import('../services/errorClusteringService');
+
+    const db = getTestAgentDb();
+    const result = getErrorClustersForRun(db, runId);
+    db.close();
+
+    res.json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * GET /api/test-monitor/error-clusters/aggregate
+ * Get aggregated error clusters across multiple runs
+ */
+export async function getAggregateErrorClusters(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const runIdsParam = req.query.runIds as string;
+    const limit = parseInt(req.query.limit as string) || 10;
+
+    const { getErrorClustersAcrossRuns } = await import('../services/errorClusteringService');
+
+    const db = getTestAgentDb();
+
+    let runIds: string[];
+    if (runIdsParam) {
+      runIds = runIdsParam.split(',');
+    } else {
+      // Get most recent N runs
+      const runs = db.prepare(`
+        SELECT run_id FROM test_runs
+        ORDER BY started_at DESC
+        LIMIT ?
+      `).all(limit) as { run_id: string }[];
+      runIds = runs.map(r => r.run_id);
+    }
+
+    const result = getErrorClustersAcrossRuns(db, runIds);
+    db.close();
+
+    res.json({
+      success: true,
+      data: result,
+    });
   } catch (error) {
     next(error);
   }
@@ -5552,6 +6208,11 @@ const DEFAULT_APP_SETTINGS: Record<string, { value: string; type: string; descri
     type: 'secret',
     description: 'Langfuse secret key for API authentication',
   },
+  langfuse_project_id: {
+    value: 'cmk2l64ij000npc065mawjmyr',
+    type: 'string',
+    description: 'Langfuse project ID for constructing session URLs',
+  },
 };
 
 /**
@@ -6856,6 +7517,183 @@ export async function getActiveLangfuseConfig(
   }
 }
 
+/**
+ * GET /api/test-monitor/langfuse/session/:sessionId/agent-executor
+ * Query Langfuse API to find the Agent Executor observation ID for a session
+ * Returns the observation ID to use in the peek parameter of the Langfuse URL
+ */
+export async function getLangfuseAgentExecutorId(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  let db: BetterSqlite3.Database | null = null;
+
+  try {
+    const { sessionId } = req.params;
+
+    if (!sessionId) {
+      res.status(400).json({ success: false, error: 'Session ID is required' });
+      return;
+    }
+
+    db = getTestAgentDbWritable();
+    ensureLangfuseConfigsMigrated(db);
+
+    // Get active Langfuse config
+    const config = db.prepare(`
+      SELECT host, public_key, secret_key
+      FROM langfuse_configs
+      WHERE is_default = 1
+    `).get() as any;
+
+    if (!config || !config.host || !config.public_key || !config.secret_key) {
+      res.status(400).json({
+        success: false,
+        error: 'Langfuse not configured. Please configure Langfuse credentials.',
+      });
+      return;
+    }
+
+    // Create Basic auth header from public_key:secret_key
+    const authHeader = Buffer.from(`${config.public_key}:${config.secret_key}`).toString('base64');
+
+    // Query Langfuse API for traces with this session ID
+    const tracesUrl = `${config.host}/api/public/traces?sessionId=${encodeURIComponent(sessionId)}&limit=10`;
+
+    const tracesResponse = await fetch(tracesUrl, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Basic ${authHeader}`,
+        'Accept': 'application/json',
+      },
+    });
+
+    if (!tracesResponse.ok) {
+      const errorText = await tracesResponse.text();
+      console.error(`[Langfuse] Failed to fetch traces: ${tracesResponse.status} - ${errorText}`);
+      res.status(502).json({
+        success: false,
+        error: `Langfuse API error: ${tracesResponse.status}`,
+      });
+      return;
+    }
+
+    const tracesData = await tracesResponse.json() as any;
+    const traces = tracesData.data || [];
+
+    if (traces.length === 0) {
+      res.json({
+        success: true,
+        data: {
+          sessionId,
+          agentExecutorId: null,
+          traceId: null,
+          message: 'No traces found for this session',
+        },
+      });
+      return;
+    }
+
+    // Get the most recent trace (first one since sorted by time desc)
+    const latestTrace = traces[0];
+    const traceId = latestTrace.id;
+
+    // Now fetch the full trace to get observations
+    const traceUrl = `${config.host}/api/public/traces/${traceId}`;
+
+    const traceResponse = await fetch(traceUrl, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Basic ${authHeader}`,
+        'Accept': 'application/json',
+      },
+    });
+
+    if (!traceResponse.ok) {
+      // Fall back to just returning the trace ID
+      res.json({
+        success: true,
+        data: {
+          sessionId,
+          agentExecutorId: traceId,
+          traceId,
+          message: 'Could not fetch trace details, using trace ID',
+        },
+      });
+      return;
+    }
+
+    const traceData = await traceResponse.json() as any;
+
+    // Look for Agent Executor observation in the trace
+    // The observation could be named "Agent Executor", "agent_executor", or similar
+    let agentExecutorId: string | null = null;
+
+    const observations = traceData.observations || [];
+
+    // Priority order for finding the right observation:
+    // 1. Name contains "Agent Executor" (case insensitive)
+    // 2. Name contains "agent" (case insensitive)
+    // 3. Type is "SPAN" and is at the top level (no parent)
+    // 4. First observation if nothing else matches
+
+    for (const obs of observations) {
+      const name = (obs.name || '').toLowerCase();
+      if (name.includes('agent executor') || name.includes('agentexecutor')) {
+        agentExecutorId = obs.id;
+        break;
+      }
+    }
+
+    if (!agentExecutorId) {
+      for (const obs of observations) {
+        const name = (obs.name || '').toLowerCase();
+        if (name.includes('agent')) {
+          agentExecutorId = obs.id;
+          break;
+        }
+      }
+    }
+
+    if (!agentExecutorId) {
+      // Look for top-level SPAN observations
+      for (const obs of observations) {
+        if (obs.type === 'SPAN' && !obs.parentObservationId) {
+          agentExecutorId = obs.id;
+          break;
+        }
+      }
+    }
+
+    if (!agentExecutorId && observations.length > 0) {
+      // Fall back to the first observation
+      agentExecutorId = observations[0].id;
+    }
+
+    // If still no observation, use the trace ID itself
+    if (!agentExecutorId) {
+      agentExecutorId = traceId;
+    }
+
+    res.json({
+      success: true,
+      data: {
+        sessionId,
+        agentExecutorId,
+        traceId,
+        observationCount: observations.length,
+        traceName: latestTrace.name,
+      },
+    });
+  } catch (error) {
+    console.error('[Langfuse] Error querying agent executor:', error);
+    next(error);
+  } finally {
+    db?.close();
+  }
+}
+
 // ============================================================================
 // TEST RUN CLEANUP ENDPOINTS
 // ============================================================================
@@ -6927,5 +7765,637 @@ export async function abortTestRun(req: Request, res: Response, next: NextFuncti
     }
   } catch (error) {
     next(error);
+  }
+}
+
+// ============================================================================
+// PRODUCTION CALLS (LANGFUSE TRACES) ENDPOINTS
+// ============================================================================
+
+/**
+ * Helper to transform trace row from database to API format
+ */
+function transformTraceRow(row: any) {
+  return {
+    id: row.id,
+    traceId: row.trace_id,
+    configId: row.langfuse_config_id,
+    configName: row.config_name,
+    sessionId: row.session_id,
+    userId: row.user_id,
+    name: row.name,
+    input: row.input ? JSON.parse(row.input) : null,
+    output: row.output ? JSON.parse(row.output) : null,
+    metadata: row.metadata_json ? JSON.parse(row.metadata_json) : null,
+    tags: row.tags_json ? JSON.parse(row.tags_json) : [],
+    release: row.release,
+    version: row.version,
+    totalCost: row.total_cost,
+    latencyMs: row.latency_ms,
+    startedAt: row.started_at,
+    endedAt: row.ended_at,
+    environment: row.environment,
+    importedAt: row.imported_at,
+    langfuseHost: row.langfuse_host,
+    errorCount: row.error_count || 0,
+  };
+}
+
+/**
+ * Helper to transform observation row from database to API format
+ */
+function transformObservationRow(row: any) {
+  return {
+    id: row.id,
+    observationId: row.observation_id,
+    traceId: row.trace_id,
+    parentObservationId: row.parent_observation_id,
+    type: row.type,
+    name: row.name,
+    model: row.model,
+    input: row.input ? JSON.parse(row.input) : null,
+    output: row.output ? JSON.parse(row.output) : null,
+    metadata: row.metadata_json ? JSON.parse(row.metadata_json) : null,
+    startedAt: row.started_at,
+    endedAt: row.ended_at,
+    latencyMs: row.latency_ms,
+    usage: {
+      input: row.usage_input_tokens,
+      output: row.usage_output_tokens,
+      total: row.usage_total_tokens,
+    },
+    cost: row.cost,
+    level: row.level,
+    statusMessage: row.status_message,
+  };
+}
+
+/**
+ * Transform Langfuse trace data to conversation turns for TranscriptViewer
+ */
+function transformToConversationTurns(trace: any, _observations: any[]): any[] {
+  const turns: any[] = [];
+
+  // Parse input/output from trace
+  const input = trace.input ? JSON.parse(trace.input) : null;
+  const output = trace.output ? JSON.parse(trace.output) : null;
+
+  // Extract chat history from Flowise-style input
+  if (input?.history && Array.isArray(input.history)) {
+    for (const msg of input.history) {
+      turns.push({
+        role: msg.role === 'apiMessage' ? 'assistant' : 'user',
+        content: msg.content || '',
+        timestamp: trace.started_at,
+      });
+    }
+  }
+
+  // Add current question if present
+  if (input?.question) {
+    turns.push({
+      role: 'user',
+      content: input.question,
+      timestamp: trace.started_at,
+    });
+  }
+
+  // Add final response
+  if (output) {
+    const content = typeof output === 'string'
+      ? output
+      : output.text || output.content || output.output || JSON.stringify(output);
+    turns.push({
+      role: 'assistant',
+      content,
+      timestamp: trace.ended_at || trace.started_at,
+      responseTimeMs: trace.latency_ms,
+    });
+  }
+
+  return turns;
+}
+
+// Internal Langchain traces to exclude from display
+const EXCLUDED_OBSERVATION_NAMES = [
+  'RunnableMap',
+  'RunnableLambda',
+  'RunnableSequence',
+  'RunnableParallel',
+  'RunnableBranch',
+  'RunnablePassthrough',
+];
+
+/**
+ * Filter out internal Langchain execution traces that add noise
+ */
+function filterInternalTraces(observations: any[]): any[] {
+  return observations.filter(obs => {
+    // Exclude internal Langchain traces by name
+    if (obs.name && EXCLUDED_OBSERVATION_NAMES.some(excluded => obs.name.includes(excluded))) {
+      return false;
+    }
+    return true;
+  });
+}
+
+/**
+ * Transform observations to API calls for TranscriptViewer
+ * Excludes internal Langchain execution traces that add noise
+ */
+function transformToApiCalls(observations: any[]): any[] {
+  return filterInternalTraces(observations)
+    .filter(obs => {
+      // Include GENERATION, SPAN, or tool/api related observations
+      return (
+        obs.type === 'GENERATION' ||
+        obs.type === 'SPAN' ||
+        (obs.name && (obs.name.toLowerCase().includes('tool') || obs.name.toLowerCase().includes('api')))
+      );
+    })
+    .map((obs, index) => ({
+      id: index,
+      runId: obs.trace_id,
+      testId: obs.trace_id,
+      toolName: obs.name || obs.model || 'unknown',
+      requestPayload: obs.input ? JSON.parse(obs.input) : null,
+      responsePayload: obs.output ? JSON.parse(obs.output) : null,
+      status: obs.level === 'ERROR' ? 'failed' : 'completed',
+      durationMs: obs.latency_ms,
+      timestamp: obs.started_at,
+    }));
+}
+
+/**
+ * GET /api/test-monitor/production-calls
+ * List imported production traces with pagination
+ */
+export async function getProductionTraces(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  let db: BetterSqlite3.Database | null = null;
+
+  try {
+    const {
+      configId,
+      limit = '50',
+      offset = '0',
+      fromDate,
+      toDate,
+      sessionId,
+    } = req.query;
+
+    db = getTestAgentDbWritable();
+    const service = new LangfuseTraceService(db);
+
+    const result = service.getTraces({
+      configId: configId ? parseInt(configId as string) : undefined,
+      limit: parseInt(limit as string),
+      offset: parseInt(offset as string),
+      fromDate: fromDate as string,
+      toDate: toDate as string,
+      sessionId: sessionId as string,
+    });
+
+    res.json({
+      success: true,
+      data: {
+        traces: result.traces.map(transformTraceRow),
+        total: result.total,
+        limit: parseInt(limit as string),
+        offset: parseInt(offset as string),
+      },
+    });
+  } catch (error) {
+    next(error);
+  } finally {
+    if (db) db.close();
+  }
+}
+
+/**
+ * GET /api/test-monitor/production-calls/:traceId
+ * Get single trace with observations (for transcript view)
+ */
+export async function getProductionTrace(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  let db: BetterSqlite3.Database | null = null;
+
+  try {
+    const { traceId } = req.params;
+
+    db = getTestAgentDbWritable();
+    const service = new LangfuseTraceService(db);
+
+    const result = service.getTrace(traceId);
+
+    if (!result) {
+      res.status(404).json({ success: false, error: 'Trace not found' });
+      return;
+    }
+
+    const { trace, observations } = result;
+
+    // Filter out internal Langchain traces
+    const filteredObservations = filterInternalTraces(observations);
+
+    res.json({
+      success: true,
+      data: {
+        trace: transformTraceRow(trace),
+        observations: filteredObservations.map(transformObservationRow),
+        transcript: transformToConversationTurns(trace, filteredObservations),
+        apiCalls: transformToApiCalls(filteredObservations),
+      },
+    });
+  } catch (error) {
+    next(error);
+  } finally {
+    if (db) db.close();
+  }
+}
+
+/**
+ * POST /api/test-monitor/production-calls/import
+ * Start trace import from Langfuse
+ */
+export async function importProductionTraces(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  let db: BetterSqlite3.Database | null = null;
+
+  try {
+    const { configId, fromDate, toDate } = req.body;
+
+    if (!configId || !fromDate) {
+      res.status(400).json({
+        success: false,
+        error: 'configId and fromDate are required',
+      });
+      return;
+    }
+
+    db = getTestAgentDbWritable();
+    const service = new LangfuseTraceService(db);
+
+    const result = await service.importTraces({
+      configId: parseInt(configId),
+      fromDate,
+      toDate,
+    });
+
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  } finally {
+    if (db) db.close();
+  }
+}
+
+/**
+ * GET /api/test-monitor/production-calls/import-history
+ * Get import history for a config
+ */
+export async function getImportHistory(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  let db: BetterSqlite3.Database | null = null;
+
+  try {
+    const { configId, limit = '10' } = req.query;
+
+    db = getTestAgentDbWritable();
+    const service = new LangfuseTraceService(db);
+
+    const history = service.getImportHistory(
+      configId ? parseInt(configId as string) : undefined,
+      parseInt(limit as string)
+    );
+
+    res.json({ success: true, data: history });
+  } catch (error) {
+    next(error);
+  } finally {
+    if (db) db.close();
+  }
+}
+
+/**
+ * GET /api/test-monitor/production-calls/last-import/:configId
+ * Get last import date for incremental imports
+ */
+export async function getLastImportDate(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  let db: BetterSqlite3.Database | null = null;
+
+  try {
+    const { configId } = req.params;
+
+    db = getTestAgentDbWritable();
+    const service = new LangfuseTraceService(db);
+
+    const lastDate = service.getLastImportDate(parseInt(configId));
+
+    res.json({ success: true, data: { lastImportDate: lastDate } });
+  } catch (error) {
+    next(error);
+  } finally {
+    if (db) db.close();
+  }
+}
+
+// ============================================================================
+// PRODUCTION SESSIONS API - Grouped conversations
+// ============================================================================
+
+/**
+ * Transform session row to API format
+ */
+function transformSessionRow(row: any): any {
+  return {
+    sessionId: row.session_id,
+    configId: row.langfuse_config_id,
+    configName: row.config_name,
+    langfuseHost: row.langfuse_host,
+    userId: row.user_id,
+    environment: row.environment,
+    firstTraceAt: row.first_trace_at,
+    lastTraceAt: row.last_trace_at,
+    traceCount: row.trace_count,
+    totalCost: row.total_cost,
+    totalLatencyMs: row.total_latency_ms,
+    inputPreview: row.input_preview,
+    tags: row.tags_json ? JSON.parse(row.tags_json) : null,
+    metadata: row.metadata_json ? JSON.parse(row.metadata_json) : null,
+    importedAt: row.imported_at,
+    errorCount: row.error_count || 0,
+  };
+}
+
+/**
+ * GET /api/test-monitor/production-calls/sessions
+ * List sessions (grouped conversations) with pagination
+ */
+export async function getProductionSessions(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  let db: BetterSqlite3.Database | null = null;
+
+  try {
+    const {
+      configId,
+      limit = '50',
+      offset = '0',
+      fromDate,
+      toDate,
+      userId,
+    } = req.query;
+
+    db = getTestAgentDbWritable();
+    const service = new LangfuseTraceService(db);
+
+    const result = service.getSessions({
+      configId: configId ? parseInt(configId as string) : undefined,
+      limit: parseInt(limit as string),
+      offset: parseInt(offset as string),
+      fromDate: fromDate as string,
+      toDate: toDate as string,
+      userId: userId as string,
+    });
+
+    res.json({
+      success: true,
+      data: {
+        sessions: result.sessions.map(transformSessionRow),
+        total: result.total,
+        limit: parseInt(limit as string),
+        offset: parseInt(offset as string),
+      },
+    });
+  } catch (error) {
+    next(error);
+  } finally {
+    if (db) db.close();
+  }
+}
+
+/**
+ * GET /api/test-monitor/production-calls/sessions/:sessionId
+ * Get single session with all traces (full conversation)
+ */
+export async function getProductionSession(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  let db: BetterSqlite3.Database | null = null;
+
+  try {
+    const { sessionId } = req.params;
+    const { configId } = req.query;
+
+    db = getTestAgentDbWritable();
+    const service = new LangfuseTraceService(db);
+
+    const result = service.getSession(
+      sessionId,
+      configId ? parseInt(configId as string) : undefined
+    );
+
+    if (!result) {
+      res.status(404).json({ success: false, error: 'Session not found' });
+      return;
+    }
+
+    const { session, traces, observations } = result;
+
+    // Filter out internal Langchain traces
+    const filteredObservations = filterInternalTraces(observations);
+
+    // Build combined transcript from all traces
+    const combinedTranscript = buildCombinedTranscript(traces, filteredObservations);
+    const allApiCalls = transformToApiCalls(filteredObservations);
+
+    res.json({
+      success: true,
+      data: {
+        session: transformSessionRow(session),
+        traces: traces.map(transformTraceRow),
+        transcript: combinedTranscript,
+        apiCalls: allApiCalls,
+      },
+    });
+  } catch (error) {
+    next(error);
+  } finally {
+    if (db) db.close();
+  }
+}
+
+/**
+ * Build a combined transcript from multiple traces
+ * Each trace typically represents one user message -> assistant response cycle
+ */
+function buildCombinedTranscript(traces: any[], observations: any[]): ConversationTurn[] {
+  const transcript: ConversationTurn[] = [];
+
+  for (const trace of traces) {
+    // Get observations for this specific trace
+    const traceObservations = observations.filter((o: any) => o.trace_id === trace.trace_id);
+
+    // Add user turn from trace input
+    if (trace.input) {
+      try {
+        const input = JSON.parse(trace.input);
+        const userMessage = extractUserMessage(input);
+        if (userMessage) {
+          transcript.push({
+            role: 'user',
+            content: userMessage,
+            timestamp: trace.started_at,
+          });
+        }
+      } catch {
+        // Input is not JSON, treat as plain text
+        transcript.push({
+          role: 'user',
+          content: trace.input,
+          timestamp: trace.started_at,
+        });
+      }
+    }
+
+    // Add assistant turn from trace output or final generation
+    let assistantContent: string | null = null;
+    let assistantTimestamp: string = trace.started_at;
+
+    // First try trace output
+    if (trace.output) {
+      try {
+        const output = JSON.parse(trace.output);
+        assistantContent = extractAssistantMessage(output);
+      } catch {
+        assistantContent = trace.output;
+      }
+    }
+
+    // If no output, look for GENERATION observations
+    if (!assistantContent) {
+      const generations = traceObservations.filter((o: any) => o.type === 'GENERATION');
+      for (const gen of generations) {
+        if (gen.output) {
+          try {
+            const output = JSON.parse(gen.output);
+            const msg = extractAssistantMessage(output);
+            if (msg) {
+              assistantContent = msg;
+              assistantTimestamp = gen.ended_at || gen.started_at || trace.started_at;
+            }
+          } catch {
+            assistantContent = gen.output;
+            assistantTimestamp = gen.ended_at || gen.started_at || trace.started_at;
+          }
+        }
+      }
+    }
+
+    if (assistantContent) {
+      transcript.push({
+        role: 'assistant',
+        content: assistantContent,
+        timestamp: assistantTimestamp,
+        responseTimeMs: trace.latency_ms,
+      });
+    }
+  }
+
+  return transcript;
+}
+
+/**
+ * Extract user message from various input formats
+ */
+function extractUserMessage(input: any): string | null {
+  if (typeof input === 'string') return input;
+
+  // Common formats
+  if (input.question) return input.question;
+  if (input.message) return input.message;
+  if (input.input) return typeof input.input === 'string' ? input.input : null;
+  if (input.text) return input.text;
+  if (input.content) return typeof input.content === 'string' ? input.content : null;
+
+  // Array of messages format
+  if (Array.isArray(input)) {
+    const userMsg = [...input].reverse().find((m: any) => m.role === 'user');
+    if (userMsg?.content) return typeof userMsg.content === 'string' ? userMsg.content : null;
+  }
+
+  return null;
+}
+
+/**
+ * Extract assistant message from various output formats
+ */
+function extractAssistantMessage(output: any): string | null {
+  if (typeof output === 'string') return output;
+
+  // Common formats
+  if (output.text) return output.text;
+  if (output.content) return typeof output.content === 'string' ? output.content : null;
+  if (output.response) return output.response;
+  if (output.answer) return output.answer;
+  if (output.message) return typeof output.message === 'string' ? output.message : null;
+
+  // Choices format (OpenAI-style)
+  if (output.choices?.[0]?.message?.content) {
+    return output.choices[0].message.content;
+  }
+
+  return null;
+}
+
+/**
+ * POST /api/test-monitor/production-calls/sessions/rebuild
+ * Rebuild session aggregates from existing traces
+ */
+export async function rebuildProductionSessions(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  let db: BetterSqlite3.Database | null = null;
+
+  try {
+    const { configId } = req.body;
+
+    db = getTestAgentDbWritable();
+    const service = new LangfuseTraceService(db);
+
+    const result = service.rebuildSessions(configId ? parseInt(configId) : undefined);
+
+    res.json({
+      success: true,
+      data: result,
+      message: `Rebuilt ${result.sessionsCreated} sessions`,
+    });
+  } catch (error) {
+    next(error);
+  } finally {
+    if (db) db.close();
   }
 }

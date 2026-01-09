@@ -192,6 +192,24 @@ const PATTERN_RULES: PatternRule[] = [
   // ==========================================================================
   // CONFIRM_OR_DENY (High Priority)
   // ==========================================================================
+  // Phone number confirmation - HIGHER priority than generic information_correct
+  // This ensures phone confirmations are tracked for parent_phone collection
+  {
+    category: 'confirm_or_deny',
+    patterns: [
+      /\bis\s+[\d\-().\s]+\s+the best number\b/i,
+      /\bthe best number to reach you\b/i,
+      /\bis that the (right|correct|best) (number|phone)\b/i,
+      /\bis this the (right|correct|best) (number|phone)\b/i,
+      /\bcalling from\b.*\bis that the best number\b/i,
+      /\bbest number for the account\b/i,
+    ],
+    confidence: 0.92,
+    priority: 82,  // Higher than generic information_correct (80)
+    extractors: {
+      confirmationSubject: () => 'phone_number_correct',
+    },
+  },
   {
     category: 'confirm_or_deny',
     patterns: [
@@ -199,11 +217,6 @@ const PATTERN_RULES: PatternRule[] = [
       /\bdoes that (sound|look) (correct|right|good)\b/i,
       /\bcan you confirm\b/i,
       /\bjust to confirm\b/i,
-      // Phone number confirmation patterns
-      /\bis\s+[\d\-().\s]+\s+the best number\b/i,
-      /\bthe best number to reach you\b/i,
-      /\bis that the (right|correct|best) (number|phone)\b/i,
-      /\bis this the (right|correct|best) (number|phone)\b/i,
     ],
     confidence: 0.90,
     priority: 80,
@@ -396,16 +409,35 @@ const PATTERN_RULES: PatternRule[] = [
     },
   },
   {
-    // Spelling request - higher priority than caller_name to avoid "Can you spell your full name" matching caller_name
+    // CHILD name spelling request - HIGHEST priority to avoid matching caller_name_spelling
+    // Patterns: "spell Jake's name", "spell your son's name", "spell your child's name"
     category: 'provide_data',
     patterns: [
-      /\b(spell|spelling)\b.*\bname\b/i,
-      /\bhow do you spell\b/i,
-      /\bcan you spell that\b/i,
+      // Using child's actual name: "Could you please spell Jake's first and last name"
+      /\bspell \w+'s (first )?(and last )?(full )?name\b/i,
+      // "spell your child's/son's/daughter's name"
+      /\bspell (your )?(child'?s?|son'?s?|daughter'?s?|kid'?s?|patient'?s?) (first )?(and last )?(full )?name\b/i,
+      // "spell [Name]'s name letter by letter"
+      /\bspell \w+'s.*letter by letter\b/i,
+      // "how do you spell your child's/son's name"
+      /\bhow do you spell (your )?(child'?s?|son'?s?|daughter'?s?) name\b/i,
+    ],
+    confidence: 0.92,
+    priority: 63, // HIGHER than caller_name_spelling (61) to catch child spelling first
+    extractors: {
+      dataFields: () => ['child_name_spelling'],
+    },
+  },
+  {
+    // Parent/caller spelling request - lower priority than child name spelling
+    category: 'provide_data',
+    patterns: [
       /\bcan you spell your (full |last |first )?name\b/i,
+      // Generic "spell name" - only if no child context
+      /\bhow do you spell your name\b/i,
     ],
     confidence: 0.90,
-    priority: 61, // Higher than caller_name (60)
+    priority: 61, // Lower than child_name_spelling (63)
     extractors: {
       dataFields: () => ['caller_name_spelling'],
     },
@@ -471,16 +503,38 @@ const PATTERN_RULES: PatternRule[] = [
   {
     category: 'provide_data',
     patterns: [
-      /\b(what('s| is)|may I have)\s+(the\s+)?(child'?s?|patient'?s?|son'?s?|daughter'?s?)\s+(first\s+)?(and\s+last\s+)?(full\s+)?name\b/i,
-      /\bname of (the\s+)?(child|patient|son|daughter)\b/i,
-      /\b(child|son|daughter)('?s)? (full\s+)?name\b/i,
-      /\b(your\s+)?(son'?s?|daughter'?s?)\s+(full\s+)?name\b/i,
-      /\bwhat'?s\s+(your\s+)?(son'?s?|daughter'?s?)\s+name\b/i,
+      // Primary pattern - handles "What is your son's first and last name?" and "What is the first child's full name?"
+      /\b(what('s| is)|may I have)\s+(the\s+|your\s+)?(first\s+|second\s+|third\s+)?(child'?s?|patient'?s?|son'?s?|daughter'?s?|kid'?s?)\s+(first\s+)?(and\s+last\s+)?(full\s+)?name\b/i,
+      /\bname of (the\s+|your\s+)?(first\s+|second\s+)?(child|patient|son|daughter|kid)\b/i,
+      /\b(first\s+|second\s+)?(child|son|daughter|kid)('?s)? (first\s+)?(and\s+last\s+)?(full\s+)?name\b/i,
+      /\b(your\s+)?(first\s+|second\s+)?(son'?s?|daughter'?s?|child'?s?|kid'?s?)\s+(first\s+)?(and\s+last\s+)?(full\s+)?name\b/i,
+      /\bwhat'?s\s+(your\s+)?(first\s+|second\s+)?(son'?s?|daughter'?s?|child'?s?)\s+(first\s+)?(and\s+last\s+)?name\b/i,
+      // More specific patterns to capture child name questions with "first and last name"
+      /\b(first\s+|second\s+)?(child'?s?|kid'?s?|patient'?s?|son'?s?|daughter'?s?).*(first\s+)?and\s+last\s+name\b/i,
+      /\byour (first\s+|second\s+)?(child|kid|patient|son|daughter).*(first\s+)?(and\s+last\s+)?name\b/i,
     ],
     confidence: 0.90,
-    priority: 55, // Higher priority to ensure son/daughter name questions match correctly
+    priority: 62, // MUST be higher than caller_name (60) to correctly classify child name questions
     extractors: {
       dataFields: () => ['child_name'],
+    },
+  },
+  {
+    // PARENT's own DOB - "your date of birth" without child/patient qualifiers
+    // This MUST have higher priority than child_dob to correctly distinguish
+    category: 'provide_data',
+    patterns: [
+      /\bmay i have your (date of birth|dob|birth\s*date)\b/i,
+      /\bwhat('s| is) your (date of birth|dob|birth\s*date)\b/i,
+      /\byour (date of birth|dob|birth\s*date)\s*(please|in)\b/i,
+      /\bprovide your (date of birth|dob|birth\s*date)\b/i,
+      /\bi need your (date of birth|dob|birth\s*date)\b/i,
+      /\byour own (date of birth|dob|birth\s*date)\b/i,
+    ],
+    confidence: 0.92,
+    priority: 56, // HIGHER than child_dob (54) to capture parent DOB questions
+    extractors: {
+      dataFields: () => ['parent_dob'],
     },
   },
   {
@@ -489,12 +543,15 @@ const PATTERN_RULES: PatternRule[] = [
       /\b(what('s| is)|when is)\s+(the\s+)?(child'?s?|patient'?s?|son'?s?|daughter'?s?)?\s*(date of birth|dob|birthday|birth date)\b/i,
       /\bwhen (was|were) (the\s+)?(child|patient|son|daughter|they|he|she) born\b/i,
       /\b(child|son|daughter)('?s)? (date of birth|birthday|dob)\b/i,
-      /\bwhat('s| is)\s+\w+'?s?\s+(date of birth|dob|birthday|birth date)\b/i,
-      /\b\w+'?s\s+(date of birth|dob|birthday)\b/i,
       /\b(your\s+)?(son'?s?|daughter'?s?)\s+(date of birth|birthday|dob)\b/i,
+      // Pattern for using child's actual name: "What is Emma's date of birth?"
+      // Matches: "[Name]'s date of birth" (any name followed by possessive + DOB phrase)
+      /\bwhat('s| is)\s+\w+['']s\s+(date of birth|dob|birthday|birth\s*date)\b/i,
+      // Pattern for "when was [Name] born"
+      /\bwhen (was|were)\s+\w+\s+born\b/i,
     ],
     confidence: 0.90,
-    priority: 54, // Slightly lower than child_name (55)
+    priority: 54, // Lower than parent_dob (56) - child DOB requires child qualifier
     extractors: {
       dataFields: () => ['child_dob'],
     },
@@ -535,16 +592,24 @@ const PATTERN_RULES: PatternRule[] = [
       /\bhave (you|they) visited (this|our) (office|location) before\b/i,
       /\bprevious visit\b/i,
       /\bbeen here before\b/i,
-      // Additional patterns for child/patient visit questions
+      // Additional patterns for child/patient visit questions (singular)
       /\bhas (your|the) (child|patient|son|daughter) been (to|at) (our|this|the) office before\b/i,
       /\b(child|patient|kid) (been|visited) (here|our office|this office) before\b/i,
       /\bvisited (us|this office|our office) before\b/i,
+      // Pattern for singular child with "been seen at" and "any of our offices"
+      /\bhas (your )?(child|kid|patient|son|daughter) (ever )?(been |been seen )(to |at )?(our |this |the |any of our )?(offices?|location) before\b/i,
       // Patterns for multiple children - updated to handle "been seen at" and "any of our offices"
       /\bhave (either of |any of )?(your )?(children|kids) (ever )?(been |been seen )(to |at )?(our |this |the |any of our )?(offices?|location) before\b/i,
       /\bhas (either of |any of )?(your )?(children|kids) (ever )?(been |been seen )(to |at )?(our |this |the |any of our )?(offices?|location) before\b/i,
       /\b(children|kids) (ever )?(been|been seen) (here|to our office|at our office|at any of our offices) before\b/i,
       // "them" as pronoun reference to children
       /\bhave (any of )?them (ever )?(been|been seen) (to )?(our |this |the |any of our )?(offices?|location)? before\b/i,
+      // Pattern for child's actual name: "Has Emma ever been seen at any of our offices before?"
+      /\bhas \w+ (ever )?(been |been seen )(to |at )?(our |this |the |any of our )?(offices?|locations?) before\b/i,
+      // Pattern for "Has either [Name] or your [other child]..." pattern
+      /\bhas (either )?\w+ (or )?(your )?(child|second child|other child) (ever )?(been |been seen )(to |at )?(our |this |the |any of our )?(offices?|locations?) before\b/i,
+      // Pattern for TWO child names: "Has either Michael or Lily ever been seen at any of our offices before?"
+      /\bhas (either )?\w+ or \w+ (ever )?(been |been seen )(to |at )?(our |this |the |any of our )?(offices?|locations?) before\b/i,
     ],
     confidence: 0.88,
     priority: 49,
@@ -586,6 +651,23 @@ const PATTERN_RULES: PatternRule[] = [
     priority: 45,
     extractors: {
       dataFields: () => ['insurance_info'],
+    },
+  },
+  {
+    // Insurance member ID and group number - asked after carrier name
+    category: 'provide_data',
+    patterns: [
+      /\bmember\s*id\s*(and|&)?\s*(group\s*(number|#)?)?/i,  // "member ID and group number"
+      /\bgroup\s*(number|#)?\s*(and|&)?\s*(member\s*id)?/i,  // "group number and member ID"
+      /\binsurance\s*(member\s*)?id/i,                       // "insurance ID", "insurance member ID"
+      /\b(provide|tell me|give me)\s*(the\s+)?(member\s*id|group\s*(number|#))/i,
+      /\b(do you have|what is)\s*(the\s+)?(member\s*id|group\s*(number|#))/i,
+      /\bpolicy\s*number/i,                                  // "policy number"
+    ],
+    confidence: 0.90,
+    priority: 46, // Slightly higher than insurance_info (45) to be checked first
+    extractors: {
+      dataFields: () => ['insurance_member_id'],
     },
   },
   {
@@ -981,7 +1063,7 @@ The key difference: A confirmation means the action is DONE, not that it's being
 
 ## Data Field Values
 caller_name, caller_name_spelling, caller_phone, caller_email,
-child_count, child_name, child_dob, child_age,
+child_count, child_name, child_name_spelling, child_dob, child_age,
 new_patient_status, previous_visit, previous_ortho_treatment,
 insurance_info, special_needs, time_preference, location_preference
 
@@ -1027,10 +1109,10 @@ Return ONLY the JSON, no markdown.`;
    */
   private sanitizeLlmResponse(parsed: any): any {
     const validCategories = ['provide_data', 'confirm_or_deny', 'select_from_options', 'acknowledge', 'clarify_request', 'express_preference'];
-    const validConfirmationSubjects = ['information_correct', 'proceed_anyway', 'booking_details', 'wants_address', 'wants_parking_info', 'spelling_correct', 'insurance_card_reminder', 'general'];
+    const validConfirmationSubjects = ['information_correct', 'phone_number_correct', 'proceed_anyway', 'booking_details', 'wants_address', 'wants_parking_info', 'spelling_correct', 'insurance_card_reminder', 'previous_visit', 'previous_treatment', 'has_insurance', 'wants_time_slot', 'ready_to_book', 'medical_conditions', 'special_needs', 'general'];
     const validExpectedAnswers = ['yes', 'no', 'either'];
     const validTerminalStates = ['booking_confirmed', 'transfer_initiated', 'conversation_ended', 'error_terminal', 'none'];
-    const validDataFields = ['caller_name', 'caller_name_spelling', 'caller_phone', 'caller_email', 'child_count', 'child_name', 'child_dob', 'child_age', 'new_patient_status', 'previous_visit', 'previous_ortho_treatment', 'insurance_info', 'special_needs', 'time_preference', 'location_preference', 'day_preference', 'other', 'unknown'];
+    const validDataFields = ['caller_name', 'caller_name_spelling', 'caller_phone', 'caller_email', 'parent_dob', 'child_count', 'child_name', 'child_name_spelling', 'child_dob', 'child_age', 'new_patient_status', 'previous_visit', 'previous_ortho_treatment', 'insurance_info', 'insurance_member_id', 'special_needs', 'medical_conditions', 'card_reminder', 'time_preference', 'location_preference', 'day_preference', 'other', 'unknown'];
 
     // Sanitize category
     if (!validCategories.includes(parsed.category)) {
@@ -1112,6 +1194,11 @@ Return ONLY the JSON, no markdown.`;
     const shouldPreserveBookingIntent = result.bookingConfirmedThisTurn === true;
     if (result.category === 'confirm_or_deny' && !isTerminalIntent && !shouldPreserveBookingIntent) {
       switch (result.confirmationSubject) {
+        case 'phone_number_correct':
+          // Phone confirmation = asking_phone for progress tracking
+          // This ensures parent_phone gets marked as collected
+          primaryIntent = 'asking_phone';
+          break;
         case 'spelling_correct':
           primaryIntent = 'confirming_spelling';
           break;

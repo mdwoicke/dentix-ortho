@@ -71,6 +71,17 @@ const RESPONSE_TEMPLATES: Partial<Record<AgentIntent, ResponseTemplate>> = {
   'asking_email': (inv) =>
     inv.parentEmail || 'I don\'t have an email',
 
+  'asking_parent_dob': (inv) => {
+    if (!inv.parentDateOfBirth) {
+      // Fallback: generate a reasonable adult DOB (30-50 years old)
+      const currentYear = new Date().getFullYear();
+      const parentYear = currentYear - 40; // Default to ~40 years old
+      return `January 15, ${parentYear}`;
+    }
+    const dob = new Date(inv.parentDateOfBirth);
+    return dob.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+  },
+
   // Child info
   'asking_child_count': (inv) => {
     const count = inv.children.length;
@@ -177,9 +188,119 @@ const RESPONSE_TEMPLATES: Partial<Record<AgentIntent, ResponseTemplate>> = {
   // Greeting (usually we initiate, but in case agent greets)
   'greeting': () => 'Hi, I need to schedule an orthodontic appointment for my child',
 
-  // Unknown
-  'unknown': () => 'Yes',
+  // Unknown - handled by smartFallback instead
+  'unknown': () => 'Yes',  // Fallback only if smartFallback also fails
 };
+
+/**
+ * Keyword patterns for smart fallback when intent classification fails.
+ * Maps keywords in agent's message to the data field to provide.
+ */
+const SMART_FALLBACK_PATTERNS: Array<{
+  pattern: RegExp;
+  getResponse: (inv: DataInventory, ctx: ResponseContext) => string;
+}> = [
+  // Child name patterns
+  {
+    pattern: /\b(child|kid|patient|son|daughter)('s)?\s+(first\s+)?(name|called)\b/i,
+    getResponse: (inv, ctx) => {
+      const child = inv.children[ctx.currentChildIndex] || inv.children[0];
+      return child ? `${child.firstName} ${child.lastName}` : 'Sorry, I don\'t have that information';
+    },
+  },
+  {
+    pattern: /\bwhat.*name.*child\b/i,
+    getResponse: (inv, ctx) => {
+      const child = inv.children[ctx.currentChildIndex] || inv.children[0];
+      return child ? `${child.firstName} ${child.lastName}` : 'Sorry, I don\'t have that information';
+    },
+  },
+  {
+    pattern: /\bfirst\s+name\b/i,
+    getResponse: (inv, ctx) => {
+      const child = inv.children[ctx.currentChildIndex] || inv.children[0];
+      return child?.firstName || inv.parentFirstName;
+    },
+  },
+  {
+    pattern: /\blast\s+name\b/i,
+    getResponse: (inv, ctx) => {
+      const child = inv.children[ctx.currentChildIndex] || inv.children[0];
+      return child?.lastName || inv.parentLastName;
+    },
+  },
+  // Date of birth patterns
+  {
+    pattern: /\b(date\s+of\s+birth|dob|birth\s*date|birthday|born)\b/i,
+    getResponse: (inv, ctx) => {
+      const child = inv.children[ctx.currentChildIndex] || inv.children[0];
+      if (!child) return 'I\'m not sure';
+      const dob = new Date(child.dateOfBirth);
+      return dob.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+    },
+  },
+  // Age patterns
+  {
+    pattern: /\b(how\s+old|age|years\s+old)\b/i,
+    getResponse: (inv, ctx) => {
+      const child = inv.children[ctx.currentChildIndex] || inv.children[0];
+      if (!child) return 'I\'m not sure';
+      const dob = new Date(child.dateOfBirth);
+      const age = Math.floor((Date.now() - dob.getTime()) / (365.25 * 24 * 60 * 60 * 1000));
+      return `${age} years old`;
+    },
+  },
+  // Phone patterns
+  {
+    pattern: /\b(phone|number|call.*back|reach\s+you)\b/i,
+    getResponse: (inv) => inv.parentPhone,
+  },
+  // Email patterns
+  {
+    pattern: /\b(email|e-mail)\b/i,
+    getResponse: (inv) => inv.parentEmail || 'I don\'t have an email',
+  },
+  // Your/caller name patterns
+  {
+    pattern: /\b(your|caller|parent)\s*(full\s*)?(name|called)\b/i,
+    getResponse: (inv) => `${inv.parentFirstName} ${inv.parentLastName}`,
+  },
+  {
+    pattern: /\bwho\s+(am\s+i|are\s+you)\s+(speaking|talking)\b/i,
+    getResponse: (inv) => `${inv.parentFirstName} ${inv.parentLastName}`,
+  },
+  // Insurance patterns
+  {
+    pattern: /\b(insurance|coverage|plan|provider)\b/i,
+    getResponse: (inv) => {
+      if (!inv.insuranceProvider && inv.hasInsurance === false) return 'No insurance';
+      return inv.insuranceProvider || 'I\'m not sure about insurance';
+    },
+  },
+  // New patient patterns
+  {
+    pattern: /\b(new\s+patient|first\s+time|been\s+here|visited\s+(before|us))\b/i,
+    getResponse: (inv, ctx) => {
+      const child = inv.children[ctx.currentChildIndex] || inv.children[0];
+      if (child?.isNewPatient) return 'Yes, this would be our first visit';
+      return inv.previousVisitToOffice ? 'No, we\'ve been here before' : 'Yes, this is our first time';
+    },
+  },
+  // Location/time preferences
+  {
+    pattern: /\b(which\s+location|prefer.*location|office)\b/i,
+    getResponse: (inv) => inv.preferredLocation || 'Either location is fine',
+  },
+  {
+    pattern: /\b(what\s+time|prefer.*time|morning|afternoon|best\s+time)\b/i,
+    getResponse: (inv) => {
+      if (inv.preferredTimeOfDay && inv.preferredTimeOfDay !== 'any') {
+        return `${inv.preferredTimeOfDay} works best`;
+      }
+      return 'Any time works for us';
+    },
+  },
+];
 
 /**
  * Response Generator Service
@@ -334,6 +455,10 @@ export class ResponseGenerator {
         this.markProvided('parent_email');
         return { email: inv.parentEmail };
 
+      case 'asking_parent_dob':
+        this.markProvided('parent_dob');
+        return { dob: inv.parentDateOfBirth };
+
       case 'asking_child_count':
         this.markProvided('child_count');
         return { count: inv.children.length };
@@ -404,8 +529,13 @@ export class ResponseGenerator {
   private generateTemplateResponse(intent: AgentIntent, data: Record<string, any>): string {
     const template = RESPONSE_TEMPLATES[intent];
 
-    if (!template) {
-      // No template for this intent, return generic response
+    // For unknown intents, try smart fallback first
+    if (!template || intent === 'unknown') {
+      const smartResponse = this.smartFallback();
+      if (smartResponse) {
+        return smartResponse;
+      }
+      // No template and smart fallback failed
       return 'Yes';
     }
 
@@ -413,8 +543,44 @@ export class ResponseGenerator {
       return template(this.persona.inventory, this.context);
     } catch (error) {
       console.warn('[ResponseGenerator] Template error for', intent, error);
-      return 'Yes';
+      // Try smart fallback before giving up
+      const smartResponse = this.smartFallback();
+      return smartResponse || 'Yes';
     }
+  }
+
+  /**
+   * Smart fallback for when intent classification fails.
+   * Analyzes the agent's last message for keywords and provides appropriate data.
+   */
+  private smartFallback(): string | null {
+    // Get the last agent message from conversation history
+    const lastAgentTurn = [...this.context.conversationHistory]
+      .reverse()
+      .find(t => t.role === 'assistant');
+
+    if (!lastAgentTurn) {
+      return null;
+    }
+
+    const agentMessage = lastAgentTurn.content;
+
+    // Check each smart fallback pattern
+    for (const { pattern, getResponse } of SMART_FALLBACK_PATTERNS) {
+      if (pattern.test(agentMessage)) {
+        try {
+          const response = getResponse(this.persona.inventory, this.context);
+          console.log(`[ResponseGenerator] Smart fallback matched: ${pattern.source} -> "${response}"`);
+          return response;
+        } catch (error) {
+          console.warn('[ResponseGenerator] Smart fallback error for pattern', pattern.source, error);
+        }
+      }
+    }
+
+    // No pattern matched
+    console.log(`[ResponseGenerator] Smart fallback: no pattern matched for "${agentMessage.substring(0, 100)}..."`);
+    return null;
   }
 
   /**

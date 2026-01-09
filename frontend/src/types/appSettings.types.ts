@@ -24,6 +24,7 @@ export interface AppSettings {
   langfuseHost: AppSettingValue;
   langfusePublicKey: AppSettingValue;
   langfuseSecretKey: AppSettingValue;
+  langfuseProjectId: AppSettingValue;
   [key: string]: AppSettingValue;
 }
 
@@ -36,6 +37,7 @@ export interface UpdateAppSettingsRequest {
   langfuseHost?: string;
   langfusePublicKey?: string;
   langfuseSecretKey?: string;
+  langfuseProjectId?: string;
   [key: string]: string | undefined;
 }
 
@@ -74,6 +76,7 @@ export interface LangfuseConfig {
   host: string;
   publicKey: string;
   secretKey: string;
+  projectId?: string;
 }
 
 // ============================================================================

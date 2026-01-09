@@ -9,6 +9,7 @@ import { Spinner } from '../../ui';
 import type { GeneratedFix, PromptFile } from '../../../types/testMonitor.types';
 import { cn } from '../../../utils/cn';
 import { FixClassificationBadge } from './FixClassificationBadge';
+import { FixPreviewModal } from './FixPreviewModal';
 
 // Classification filter type (by issue location: who needs to fix it)
 export type ClassificationFilter = 'all' | 'bot' | 'both' | 'test-agent';
@@ -765,6 +766,8 @@ export function FixesPanel({
   const [applying, setApplying] = useState(false);
   const [conflictModalOpen, setConflictModalOpen] = useState<ConflictGroup | null>(null);
   const [popoutFix, setPopoutFix] = useState<GeneratedFix | null>(null);
+  const [previewFixId, setPreviewFixId] = useState<string | null>(null);
+  const [previewFixDescription, setPreviewFixDescription] = useState<string>('');
   const [internalFilter, setInternalFilter] = useState<ClassificationFilter>('all');
   const [internalTargetFilter, setInternalTargetFilter] = useState<TargetCategoryFilter>('all');
 
@@ -1682,6 +1685,20 @@ export function FixesPanel({
                 {/* Action Buttons */}
                 {fix.status === 'pending' && (onUpdateStatus || onApplyFix) && (
                   <div className="flex gap-3 pt-2">
+                    {/* Preview Button */}
+                    <button
+                      onClick={() => {
+                        setPreviewFixId(fix.fixId);
+                        setPreviewFixDescription(fix.changeDescription);
+                      }}
+                      className="flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-100 dark:bg-blue-900/30 hover:bg-blue-200 dark:hover:bg-blue-800/40 text-blue-700 dark:text-blue-300 text-sm font-medium rounded-lg transition-colors"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                      </svg>
+                      Preview
+                    </button>
                     {onApplyFix && promptFiles.length > 0 ? (
                       <button
                         onClick={() => openApplyModal(fix.fixId, fix)}
@@ -1706,7 +1723,7 @@ export function FixesPanel({
                     {onUpdateStatus && (
                       <button
                         onClick={() => onUpdateStatus(fix.fixId, 'rejected')}
-                        className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 text-sm font-medium rounded-lg transition-colors"
+                        className="flex items-center justify-center gap-2 px-4 py-2.5 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 text-sm font-medium rounded-lg transition-colors"
                       >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -1835,6 +1852,26 @@ export function FixesPanel({
           onClose={() => setPopoutFix(null)}
           conflicts={conflicts}
           fixIndex={fixes.findIndex(f => f.fixId === popoutFix.fixId)}
+        />
+      )}
+
+      {/* Fix Preview Modal */}
+      {previewFixId && (
+        <FixPreviewModal
+          fixId={previewFixId}
+          fixDescription={previewFixDescription}
+          onClose={() => {
+            setPreviewFixId(null);
+            setPreviewFixDescription('');
+          }}
+          onApply={async (fixId) => {
+            // If onApplyFix is available, use it with the first prompt file
+            if (onApplyFix && promptFiles.length > 0) {
+              await onApplyFix(fixId, promptFiles[0].fileKey);
+            } else if (onUpdateStatus) {
+              onUpdateStatus(fixId, 'applied');
+            }
+          }}
         />
       )}
     </div>

@@ -3,7 +3,8 @@
  * Simulates a full conversation to book an appointment
  */
 
-const FLOWISE_URL = 'https://app.c1elly.ai/api/v1/prediction/5f1fa57c-e6fd-463c-ac6e-c73fd5fb578b';
+const FLOWISE_URL = 'https://app.c1elly.ai/api/v1/prediction/7814809c-a3b9-4d6e-b9ce-5c002bc0e4d2';
+const FLOWISE_API_KEY = 'KSaGtFnJBRk87xtrvX8FRf6K4IMb7HgDWIujXX68a8Q';
 
 // Generate unique session ID
 const SESSION_ID = `test-e2e-${Date.now()}`;
@@ -17,30 +18,40 @@ const PERSONA = {
   parentName: 'TestParent E2E' + Date.now().toString().slice(-4),
   parentPhone: '555' + Date.now().toString().slice(-7),
   parentEmail: `test${Date.now()}@example.com`,
+  parentDOB: '05/20/1985',
   childName: 'TestChild',
   childLastName: 'E2ETest' + Date.now().toString().slice(-4),
   childDOB: '03/15/2014',
   preferredDate: 'next week',
 };
 
-// Response patterns for different agent questions
+// Response patterns for different agent questions (ORDER MATTERS - more specific patterns first)
 const RESPONSE_MAP = [
-  { pattern: /new patient|first time|ortho/i, response: 'Yes, new patient consultation' },
-  { pattern: /speaking with|your name|who am i/i, response: PERSONA.parentName },
-  { pattern: /seen.*before|been.*office/i, response: 'No, this is their first visit' },
-  { pattern: /child.*name|patient.*name/i, response: `${PERSONA.childName} ${PERSONA.childLastName}` },
+  // Slot confirmation - MUST be before date/time patterns
+  { pattern: /does that work|work for you|sound good|how does.*sound|confirm.*time|book.*that|would you like to book/i, response: 'Yes, that works perfectly' },
+  // Basic info
+  { pattern: /speaking with|your name|who am i|what's your name|tell me your name/i, response: PERSONA.parentName },
+  { pattern: /spell.*name/i, response: PERSONA.parentName },
+  { pattern: /seen.*before|been.*office|been to our office/i, response: 'No, this is their first visit' },
+  { pattern: /had braces|orthodontic treatment before/i, response: 'No, first time' },
+  { pattern: /child.*name|patient.*name|what's your child/i, response: `${PERSONA.childName} ${PERSONA.childLastName}` },
+  { pattern: /your date of birth|your own date|your.*dob|and what is your date/i, response: PERSONA.parentDOB },
+  { pattern: /patient.*date of birth|child.*birthday|patient.*dob|child.*date of birth/i, response: PERSONA.childDOB },
   { pattern: /date of birth|birthday|dob|how old/i, response: PERSONA.childDOB },
   { pattern: /phone|number|reach you|contact/i, response: PERSONA.parentPhone },
   { pattern: /email/i, response: PERSONA.parentEmail },
-  { pattern: /when.*like|preferred.*date|what day|available/i, response: PERSONA.preferredDate },
-  { pattern: /morning|afternoon|time preference/i, response: 'morning works best' },
-  { pattern: /work.*for you|sound.*good|confirm|book.*that/i, response: 'Yes, that works perfectly' },
+  // Time preferences
+  { pattern: /morning|afternoon|time preference|prefer morning/i, response: 'morning works best' },
+  { pattern: /when.*like|preferred.*date|what day/i, response: 'anytime this month' },
+  // Other
   { pattern: /anything else|other questions/i, response: 'No, that is all, thank you' },
   { pattern: /legal guardian|parent.*attend/i, response: 'Yes, I understand' },
-  { pattern: /address|directions/i, response: 'No thanks, I have it' },
+  { pattern: /address|directions|would you like the address/i, response: 'No thanks, I have it' },
   { pattern: /insurance/i, response: 'We have dental insurance through Delta' },
+  { pattern: /proceed anyway|like to proceed/i, response: 'Yes' },
   { pattern: /how many|children|kids/i, response: 'Just one child' },
-  { pattern: /special needs|medical conditions/i, response: 'No special needs' },
+  { pattern: /special needs|medical conditions|any special/i, response: 'No special needs' },
+  { pattern: /new patient|first time|ortho/i, response: 'Yes, new patient consultation' },
 ];
 
 function getResponse(agentMessage) {
@@ -65,7 +76,10 @@ async function sendMessage(message) {
 
   const response = await fetch(FLOWISE_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${FLOWISE_API_KEY}`
+    },
     body: JSON.stringify({
       question: message,
       overrideConfig: {

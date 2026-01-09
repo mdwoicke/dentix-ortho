@@ -81,8 +81,14 @@ export function SandboxFileList({
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between mb-2">
-        <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
-          Sandbox Files
+        <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center gap-2">
+          <span className={cn(
+            'inline-flex items-center justify-center w-5 h-5 rounded text-xs font-bold text-white',
+            selectedSandbox === 'sandbox_a' ? 'bg-blue-500' : 'bg-purple-500'
+          )}>
+            {selectedSandbox === 'sandbox_a' ? 'A' : 'B'}
+          </span>
+          Sandbox {selectedSandbox === 'sandbox_a' ? 'A' : 'B'} Files
         </h3>
         <span className="text-xs text-gray-500 dark:text-gray-400">
           {files.length}/4 configured

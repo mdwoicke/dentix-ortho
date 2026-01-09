@@ -20,7 +20,6 @@ import type {
   TestResultForScoring,
   SemanticEvaluationForScoring,
   AnalysisResultForScoring,
-  ErrorSeverity,
 } from '../types/langfuse.types';
 
 // ============================================================================

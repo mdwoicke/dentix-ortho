@@ -21,6 +21,7 @@ export function LangfuseUrlConfig({ className }: LangfuseUrlConfigProps) {
   const [host, setHost] = useState('');
   const [publicKey, setPublicKey] = useState('');
   const [secretKey, setSecretKey] = useState('');
+  const [projectId, setProjectId] = useState('');
   const [showSecretKey, setShowSecretKey] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -29,6 +30,7 @@ export function LangfuseUrlConfig({ className }: LangfuseUrlConfigProps) {
   const [hasChanges, setHasChanges] = useState(false);
   const [originalHost, setOriginalHost] = useState('');
   const [originalPublicKey, setOriginalPublicKey] = useState('');
+  const [originalProjectId, setOriginalProjectId] = useState('');
   const [originalSecretKeySet, setOriginalSecretKeySet] = useState(false);
 
   // Load settings on mount
@@ -42,10 +44,13 @@ export function LangfuseUrlConfig({ className }: LangfuseUrlConfigProps) {
       const settings: AppSettings = await getAppSettings();
       const hostValue = settings.langfuseHost?.value || '';
       const publicKeyValue = settings.langfusePublicKey?.value || '';
+      const projectIdValue = settings.langfuseProjectId?.value || '';
       setHost(hostValue);
       setPublicKey(publicKeyValue);
+      setProjectId(projectIdValue);
       setOriginalHost(hostValue);
       setOriginalPublicKey(publicKeyValue);
+      setOriginalProjectId(projectIdValue);
       setOriginalSecretKeySet(settings.langfuseSecretKey?.hasValue || false);
       // Secret key is masked, so we don't set it - only show if it has a value
       if (settings.langfuseSecretKey?.hasValue) {
@@ -58,28 +63,35 @@ export function LangfuseUrlConfig({ className }: LangfuseUrlConfigProps) {
     }
   };
 
-  const checkForChanges = (newHost: string, newPublicKey: string, newSecretKey: string) => {
+  const checkForChanges = (newHost: string, newPublicKey: string, newSecretKey: string, newProjectId: string) => {
     const hostChanged = newHost !== originalHost;
     const publicKeyChanged = newPublicKey !== originalPublicKey;
+    const projectIdChanged = newProjectId !== originalProjectId;
     const secretKeyChanged = newSecretKey !== '********' && newSecretKey !== '';
-    setHasChanges(hostChanged || publicKeyChanged || secretKeyChanged);
+    setHasChanges(hostChanged || publicKeyChanged || projectIdChanged || secretKeyChanged);
   };
 
   const handleHostChange = (value: string) => {
     setHost(value);
-    checkForChanges(value, publicKey, secretKey);
+    checkForChanges(value, publicKey, secretKey, projectId);
     setTestResult(null);
   };
 
   const handlePublicKeyChange = (value: string) => {
     setPublicKey(value);
-    checkForChanges(host, value, secretKey);
+    checkForChanges(host, value, secretKey, projectId);
     setTestResult(null);
   };
 
   const handleSecretKeyChange = (value: string) => {
     setSecretKey(value);
-    checkForChanges(host, publicKey, value);
+    checkForChanges(host, publicKey, value, projectId);
+    setTestResult(null);
+  };
+
+  const handleProjectIdChange = (value: string) => {
+    setProjectId(value);
+    checkForChanges(host, publicKey, secretKey, value);
     setTestResult(null);
   };
 
@@ -98,6 +110,10 @@ export function LangfuseUrlConfig({ className }: LangfuseUrlConfigProps) {
         updates.langfusePublicKey = publicKey;
       }
 
+      if (projectId !== originalProjectId) {
+        updates.langfuseProjectId = projectId;
+      }
+
       // Only update secret key if it's not the masked placeholder
       if (secretKey !== '********' && secretKey !== '') {
         updates.langfuseSecretKey = secretKey;
@@ -106,6 +122,7 @@ export function LangfuseUrlConfig({ className }: LangfuseUrlConfigProps) {
       await updateAppSettings(updates);
       setOriginalHost(host);
       setOriginalPublicKey(publicKey);
+      setOriginalProjectId(projectId);
       if (secretKey !== '********') {
         setOriginalSecretKeySet(!!secretKey);
       }
@@ -260,6 +277,31 @@ export function LangfuseUrlConfig({ className }: LangfuseUrlConfigProps) {
               )}
             </button>
           </div>
+        </div>
+
+        {/* Project ID */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            Project ID
+          </label>
+          <input
+            type="text"
+            value={projectId}
+            onChange={(e) => handleProjectIdChange(e.target.value)}
+            placeholder="cmk2l64ij000npc065mawjmyr"
+            disabled={isSaving}
+            className={cn(
+              'w-full px-3 py-2 text-sm border rounded-lg transition-colors',
+              'bg-white dark:bg-gray-900 text-gray-900 dark:text-white',
+              'placeholder-gray-400 dark:placeholder-gray-500',
+              'border-gray-300 dark:border-gray-600',
+              'focus:outline-none focus:ring-2 focus:ring-purple-500',
+              isSaving && 'opacity-50 cursor-not-allowed'
+            )}
+          />
+          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            Found in Langfuse URL: /project/<span className="font-mono text-purple-600 dark:text-purple-400">[project-id]</span>/...
+          </p>
         </div>
 
         {/* Action Buttons */}

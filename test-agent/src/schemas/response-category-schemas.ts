@@ -34,15 +34,17 @@ export type ResponseCategory = z.infer<typeof ResponseCategorySchema>;
  * Maps to persona DataInventory fields
  */
 export const DataFieldCategorySchema = z.enum([
-  // Identity fields
+  // Identity fields (parent/caller)
   'caller_name',
   'caller_name_spelling',
   'caller_phone',
   'caller_email',
+  'parent_dob',  // Parent's own date of birth (not child's)
 
   // Child fields
   'child_count',
   'child_name',
+  'child_name_spelling',  // Spelling of child's name (distinct from caller_name_spelling)
   'child_dob',
   'child_age',
 
@@ -53,7 +55,9 @@ export const DataFieldCategorySchema = z.enum([
 
   // Insurance & needs
   'insurance_info',
+  'insurance_member_id',  // Member ID and group number
   'special_needs',
+  'medical_conditions',  // "Does [patient] have any medical conditions?"
   'card_reminder', // Agent reminded to bring insurance card
 
   // Preference fields
@@ -77,12 +81,20 @@ export type DataFieldCategory = z.infer<typeof DataFieldCategorySchema>;
  */
 export const ConfirmationSubjectSchema = z.enum([
   'information_correct',    // "Is that correct?"
+  'phone_number_correct',   // "Is [number] the best number?" - phone confirmation
   'proceed_anyway',         // "Would you like to proceed anyway?"
   'booking_details',        // "Confirming your appointment for..."
   'wants_address',          // "Would you like the address?"
   'wants_parking_info',     // "Would you like parking information?"
   'spelling_correct',       // "Is the spelling correct?"
   'insurance_card_reminder', // "Please bring your insurance card"
+  'previous_visit',         // "Has [patient] been seen before?"
+  'previous_treatment',     // "Has [patient] had orthodontic treatment before?"
+  'has_insurance',          // "Do you have dental/orthodontic insurance?"
+  'wants_time_slot',        // "Does [time] work for you?"
+  'ready_to_book',          // "Would you like me to book this?"
+  'medical_conditions',     // "Does [patient] have any medical conditions?"
+  'special_needs',          // "Does [patient] have any special needs?"
   'general',                // Generic confirmation
 ]);
 
@@ -224,15 +236,19 @@ export const FIELD_TO_LEGACY_INTENT: Record<DataFieldCategory, string> = {
   'caller_name_spelling': 'asking_spell_name',
   'caller_phone': 'asking_phone',
   'caller_email': 'asking_email',
+  'parent_dob': 'asking_parent_dob',
   'child_count': 'asking_child_count',
   'child_name': 'asking_child_name',
+  'child_name_spelling': 'asking_spell_child_name',
   'child_dob': 'asking_child_dob',
   'child_age': 'asking_child_age',
   'new_patient_status': 'asking_new_patient',
   'previous_visit': 'asking_previous_visit',
   'previous_ortho_treatment': 'asking_previous_ortho',
   'insurance_info': 'asking_insurance',
+  'insurance_member_id': 'asking_insurance_member_id',
   'special_needs': 'asking_special_needs',
+  'medical_conditions': 'asking_medical_conditions',
   'card_reminder': 'reminding_bring_card',
   'time_preference': 'asking_time_preference',
   'location_preference': 'asking_location_preference',

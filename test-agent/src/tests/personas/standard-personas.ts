@@ -48,6 +48,7 @@ export const SARAH_JOHNSON: UserPersona = {
     parentLastName: 'Johnson',
     parentPhone: '2155551234',
     parentEmail: 'sarah@email.com',
+    parentDateOfBirth: '1985-06-22', // Parent's own DOB (not child's)
     children: [
       {
         firstName: 'Emma',
@@ -59,6 +60,8 @@ export const SARAH_JOHNSON: UserPersona = {
     ],
     hasInsurance: true,
     insuranceProvider: 'Keystone First',
+    insuranceMemberId: 'KF123456789',
+    insuranceGroupNumber: 'GRP001234',
     previousVisitToOffice: false,
     previousOrthoTreatment: false,
     preferredLocation: 'Alleghany',
@@ -80,6 +83,7 @@ export const MICHAEL_DAVIS: UserPersona = {
     parentLastName: 'Davis',
     parentPhone: '2155559876',
     parentEmail: 'mike@email.com',
+    parentDateOfBirth: '1982-03-14',
     children: [
       {
         firstName: 'Jake',
@@ -98,6 +102,8 @@ export const MICHAEL_DAVIS: UserPersona = {
     ],
     hasInsurance: true,
     insuranceProvider: 'Aetna Better Health',
+    insuranceMemberId: 'ABH987654321',
+    insuranceGroupNumber: 'ABH5678',
     previousVisitToOffice: false,
     previousOrthoTreatment: false,
     preferredLocation: 'Alleghany',
@@ -120,6 +126,7 @@ export const JANE_SMITH: UserPersona = {
     parentLastName: 'Smith',
     parentPhone: '2155551111',
     parentEmail: 'jane@email.com',
+    parentDateOfBirth: '1988-11-08',
     children: [
       {
         firstName: 'Emma',
@@ -131,6 +138,8 @@ export const JANE_SMITH: UserPersona = {
     ],
     hasInsurance: true,
     insuranceProvider: 'Keystone First',
+    insuranceMemberId: 'KF555123456',
+    insuranceGroupNumber: 'GRP002345',
     previousVisitToOffice: false,
     previousOrthoTreatment: false,
     preferredLocation: 'Alleghany',
@@ -151,6 +160,7 @@ export const ROBERT_CHEN: UserPersona = {
     parentLastName: 'Chen',
     parentPhone: '2155552222',
     parentEmail: 'robert.chen@email.com',
+    parentDateOfBirth: '1979-09-03',
     children: [
       {
         firstName: 'Lucas',
@@ -162,6 +172,8 @@ export const ROBERT_CHEN: UserPersona = {
     ],
     hasInsurance: true,
     insuranceProvider: 'Blue Cross Blue Shield',
+    insuranceMemberId: 'BCBS444555666',
+    insuranceGroupNumber: 'BCBS9999',
     previousVisitToOffice: true,
     previousOrthoTreatment: true,
     preferredLocation: 'Philadelphia',
@@ -182,6 +194,7 @@ export const MARIA_GARCIA: UserPersona = {
     parentLastName: 'Garcia',
     parentPhone: '2155553333',
     parentEmail: 'maria.garcia@email.com',
+    parentDateOfBirth: '1990-07-25',
     children: [
       {
         firstName: 'Sofia',
@@ -212,6 +225,7 @@ export const DAVID_WILSON: UserPersona = {
     parentLastName: 'Wilson',
     parentPhone: '2155554444',
     parentEmail: 'david.wilson@email.com',
+    parentDateOfBirth: '1983-12-10',
     children: [
       {
         firstName: 'Ethan',
@@ -224,6 +238,8 @@ export const DAVID_WILSON: UserPersona = {
     ],
     hasInsurance: true,
     insuranceProvider: 'United Healthcare',
+    insuranceMemberId: 'UHC777888999',
+    insuranceGroupNumber: 'UHC3456',
     previousVisitToOffice: false,
     previousOrthoTreatment: false,
     preferredLocation: 'Alleghany',
@@ -244,6 +260,7 @@ export const TERSE_TOM: UserPersona = {
     parentLastName: 'Brown',
     parentPhone: '2155555555',
     parentEmail: 'tom@email.com',
+    parentDateOfBirth: '1987-04-18',
     children: [
       {
         firstName: 'Max',
@@ -255,6 +272,8 @@ export const TERSE_TOM: UserPersona = {
     ],
     hasInsurance: true,
     insuranceProvider: 'Cigna',
+    insuranceMemberId: 'CIG111222333',
+    insuranceGroupNumber: 'CIG7890',
     previousVisitToOffice: false,
     previousOrthoTreatment: false,
     preferredLocation: 'Philadelphia',

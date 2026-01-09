@@ -44,12 +44,20 @@ export function PatientDetail() {
     await confirmAppointment({
       appointmentGuid: appointment.appointment_guid,
     });
+    // Refresh appointments to show updated status
+    if (patientGuid) {
+      fetchPatientAppointments(patientGuid);
+    }
   };
 
   const handleCancelAppointment = async (appointment: any) => {
     await cancelAppointment({
       appointmentGuid: appointment.appointment_guid,
     });
+    // Refresh appointments to show updated status
+    if (patientGuid) {
+      fetchPatientAppointments(patientGuid);
+    }
   };
 
   if (patientLoading && !selectedPatient) {

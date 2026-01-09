@@ -16,6 +16,133 @@ import type { UserPersona } from '../tests/types/persona';
 import type { ConversationTurn } from '../tests/test-case';
 import { PersonaDataMapper, createDataMapper, DataMapperContext } from './persona-data-mapper';
 import { ResponseFormatter, createFormatter } from './response-formatter';
+import type { DataInventory } from '../tests/types/persona';
+
+// =============================================================================
+// Smart Fallback Patterns (for when classification fails)
+// =============================================================================
+
+interface SmartFallbackPattern {
+  pattern: RegExp;
+  getResponse: (inv: DataInventory, childIndex: number) => string;
+}
+
+const SMART_FALLBACK_PATTERNS: SmartFallbackPattern[] = [
+  // Child name patterns
+  {
+    pattern: /\b(child|kid|patient|son|daughter)('s)?\s+(first\s+)?(name|called)\b/i,
+    getResponse: (inv, idx) => {
+      const child = inv.children[idx] || inv.children[0];
+      return child ? `${child.firstName} ${child.lastName}` : 'I\'m not sure';
+    },
+  },
+  {
+    pattern: /\bwhat.*name.*child\b/i,
+    getResponse: (inv, idx) => {
+      const child = inv.children[idx] || inv.children[0];
+      return child ? `${child.firstName} ${child.lastName}` : 'I\'m not sure';
+    },
+  },
+  {
+    pattern: /\bfirst\s+name\b/i,
+    getResponse: (inv, idx) => {
+      const child = inv.children[idx] || inv.children[0];
+      return child?.firstName || inv.parentFirstName;
+    },
+  },
+  {
+    pattern: /\blast\s+name\b/i,
+    getResponse: (inv, idx) => {
+      const child = inv.children[idx] || inv.children[0];
+      return child?.lastName || inv.parentLastName;
+    },
+  },
+  // Date of birth patterns - CRITICAL for avoiding "Yes" loops
+  {
+    pattern: /\b(date\s+of\s+birth|dob|birth\s*date|birthday|born|birthdate)\b/i,
+    getResponse: (inv, idx) => {
+      const child = inv.children[idx] || inv.children[0];
+      if (!child) return 'I\'m not sure';
+      const dob = new Date(child.dateOfBirth);
+      return dob.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+    },
+  },
+  // Age patterns
+  {
+    pattern: /\b(how\s+old|age|years\s+old)\b/i,
+    getResponse: (inv, idx) => {
+      const child = inv.children[idx] || inv.children[0];
+      if (!child) return 'I\'m not sure';
+      const dob = new Date(child.dateOfBirth);
+      const age = Math.floor((Date.now() - dob.getTime()) / (365.25 * 24 * 60 * 60 * 1000));
+      return `${age} years old`;
+    },
+  },
+  // Phone patterns
+  {
+    pattern: /\b(phone|number|call.*back|reach\s+you|contact)\b/i,
+    getResponse: (inv) => inv.parentPhone,
+  },
+  // Email patterns
+  {
+    pattern: /\b(email|e-mail)\b/i,
+    getResponse: (inv) => inv.parentEmail || 'I don\'t have an email',
+  },
+  // Caller/parent name patterns
+  {
+    pattern: /\b(your|caller|parent)\s*(full\s*)?(name|called)\b/i,
+    getResponse: (inv) => `${inv.parentFirstName} ${inv.parentLastName}`,
+  },
+  {
+    pattern: /\bwho\s+(am\s+i|are\s+you)\s+(speaking|talking)\b/i,
+    getResponse: (inv) => `${inv.parentFirstName} ${inv.parentLastName}`,
+  },
+  // Insurance patterns
+  {
+    pattern: /\b(insurance|coverage|plan|provider)\b/i,
+    getResponse: (inv) => {
+      if (!inv.insuranceProvider && inv.hasInsurance === false) return 'No insurance';
+      return inv.insuranceProvider || 'I\'m not sure about insurance';
+    },
+  },
+  // Location/time preferences
+  {
+    pattern: /\b(which\s+location|prefer.*location|office)\b/i,
+    getResponse: (inv) => inv.preferredLocation || 'Either location is fine',
+  },
+  {
+    pattern: /\b(what\s+time|prefer.*time|morning|afternoon|best\s+time)\b/i,
+    getResponse: (inv) => {
+      if (inv.preferredTimeOfDay && inv.preferredTimeOfDay !== 'any') {
+        return `${inv.preferredTimeOfDay} works best`;
+      }
+      return 'Any time works for us';
+    },
+  },
+  // Previous visit / existing patient patterns - CRITICAL for avoiding "Yes" when it should be "No"
+  {
+    pattern: /\b(been\s+(seen|to)|visited|been\s+here|seen\s+(at|here|before)|(existing|returning)\s+patient)\b/i,
+    getResponse: (inv) => {
+      return inv.previousVisitToOffice ? 'Yes, she has been seen before' : 'No, this is our first visit';
+    },
+  },
+  // Previous orthodontic treatment patterns
+  {
+    pattern: /\b(orthodontic\s+treatment|braces|ortho\s+treatment|had\s+(ortho|braces|treatment))\b.*before\b/i,
+    getResponse: (inv, idx) => {
+      const child = inv.children[idx] || inv.children[0];
+      const hadBraces = child?.hadBracesBefore ?? false;
+      return hadBraces ? 'Yes, she has had orthodontic treatment before' : 'No previous orthodontic treatment';
+    },
+  },
+  // New patient status patterns
+  {
+    pattern: /\b(are\s+you|is\s+(this|it))\s+(a\s+)?new\s+patient\b/i,
+    getResponse: (inv) => {
+      return inv.previousVisitToOffice ? 'No, we have been seen before' : 'Yes, we are new patients';
+    },
+  },
+];
 
 // =============================================================================
 // Configuration
@@ -147,10 +274,14 @@ export class ResponseStrategyEngine {
     });
     const formatter = createFormatter(persona.traits);
 
+    // Get last agent message for smart fallback
+    const history = context.conversationHistory || [];
+    const lastAgentMessage = [...history].reverse().find(t => t.role === 'assistant')?.content || '';
+
     // Dispatch to appropriate strategy
     switch (classification.category) {
       case 'provide_data':
-        return this.handleProvideData(classification, dataMapper, formatter);
+        return this.handleProvideData(classification, dataMapper, formatter, persona, lastAgentMessage);
 
       case 'confirm_or_deny':
         return this.handleConfirmOrDeny(classification, dataMapper, formatter, persona, context);
@@ -180,7 +311,9 @@ export class ResponseStrategyEngine {
   private handleProvideData(
     classification: CategoryClassificationResult,
     dataMapper: PersonaDataMapper,
-    formatter: ResponseFormatter
+    formatter: ResponseFormatter,
+    persona: UserPersona,
+    agentMessage: string
   ): string {
     const fields = classification.dataFields || ['unknown'];
     const dataValues: string[] = [];
@@ -194,12 +327,35 @@ export class ResponseStrategyEngine {
     }
 
     if (dataValues.length === 0) {
-      // When data can't be mapped, be cooperative and affirm (this is a test user)
-      // "I'm not sure about that" causes loops - prefer affirmative fallback
+      // Try smart fallback before returning "Yes"
+      const smartResponse = this.trySmartFallback(agentMessage, persona, dataMapper.getCurrentChildIndex());
+      if (smartResponse) {
+        console.log(`[ResponseStrategyEngine] Smart fallback matched for: "${agentMessage.substring(0, 50)}..."`);
+        return smartResponse;
+      }
+
+      // When data can't be mapped and smart fallback fails, be cooperative
+      console.log(`[ResponseStrategyEngine] No data mapping or smart fallback for: "${agentMessage.substring(0, 50)}..."`);
       return 'Yes';
     }
 
     return formatter.formatDataResponse(dataValues);
+  }
+
+  /**
+   * Try smart fallback pattern matching when classification fails
+   */
+  private trySmartFallback(agentMessage: string, persona: UserPersona, childIndex: number): string | null {
+    for (const { pattern, getResponse } of SMART_FALLBACK_PATTERNS) {
+      if (pattern.test(agentMessage)) {
+        try {
+          return getResponse(persona.inventory, childIndex);
+        } catch (error) {
+          console.warn('[ResponseStrategyEngine] Smart fallback error:', error);
+        }
+      }
+    }
+    return null;
   }
 
   // ==========================================================================
@@ -238,13 +394,32 @@ export class ResponseStrategyEngine {
       }
     }
 
+    // Check if this is asking about SCHEDULING INTENT (not patient history)
+    // "Are you looking to schedule a new patient consultation?" → Answer YES (they're calling to schedule)
+    // This is different from "Are you a new patient?" which asks about patient history
+    const isSchedulingIntent = /\b(looking to|want to|like to|need to)\s*(schedule|book|make|set up)/i.test(lastAgentMessage) ||
+                               /\bschedule\s*(a|an)?\s*(new patient|appointment|consultation)/i.test(lastAgentMessage);
+    if (isSchedulingIntent) {
+      console.log('[ResponseStrategyEngine] Scheduling intent confirmation detected, answering YES');
+      return formatter.formatConfirmation(subject, 'yes');
+    }
+
     // Check if this is a question about previous visit or existing patient status
     // These are commonly asked as yes/no questions but should use persona data
+    // Only triggers when asking "Are you a new patient?" or "Have you been here before?"
     if (dataFields.includes('previous_visit') || dataFields.includes('new_patient_status')) {
-      // Use persona's previousVisitToOffice to determine answer
-      answer = persona.inventory.previousVisitToOffice ? 'yes' : 'no';
-      console.log(`[ResponseStrategyEngine] Previous visit question: previousVisitToOffice=${persona.inventory.previousVisitToOffice}, answering: ${answer}`);
-      return formatter.formatConfirmation(subject, answer);
+      // Extra check: make sure this is actually asking about patient history, not scheduling
+      const isPatientHistoryQuestion = /\b(new patient|been (here|seen|to)|visited before|first (time|visit))/i.test(lastAgentMessage) &&
+                                       !/\b(schedule|book|appointment|consultation|looking to)/i.test(lastAgentMessage);
+      if (isPatientHistoryQuestion) {
+        // Use persona's previousVisitToOffice to determine answer
+        answer = persona.inventory.previousVisitToOffice ? 'yes' : 'no';
+        console.log(`[ResponseStrategyEngine] Previous visit question: previousVisitToOffice=${persona.inventory.previousVisitToOffice}, answering: ${answer}`);
+        return formatter.formatConfirmation(subject, answer);
+      }
+      // If not clearly a patient history question, default to yes for scheduling confirmation
+      console.log('[ResponseStrategyEngine] Ambiguous new_patient_status question, defaulting to YES');
+      return formatter.formatConfirmation(subject, 'yes');
     }
 
     // Check if this is a question about previous orthodontic treatment

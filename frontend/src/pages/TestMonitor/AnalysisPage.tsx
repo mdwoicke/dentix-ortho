@@ -14,6 +14,8 @@ import { DiagnosisPanel } from '../../components/features/testMonitor/DiagnosisP
 import { VerificationPanel } from '../../components/features/testMonitor/VerificationPanel';
 import { SyncStatusIndicator } from '../../components/features/testMonitor/SyncStatusIndicator';
 import { FixAnalytics } from '../../components/features/testMonitor/FixAnalytics';
+import { EnvironmentSelector, EnvironmentBadge } from '../../components/features/testMonitor/EnvironmentSelector';
+import { ErrorClusteringPanel } from '../../components/features/testMonitor/ErrorClusteringPanel';
 import {
   fetchFixes,
   fetchPromptFiles,
@@ -25,6 +27,9 @@ import {
   verifyFixes,
   fetchDeployedVersions,
   markPromptDeployed,
+  fetchEnvironmentPromptFiles,
+  fetchEnvironmentDeployedVersions,
+  setSelectedEnvironment,
   selectFixes,
   selectPromptFiles,
   selectPromptHistory,
@@ -36,9 +41,13 @@ import {
   selectVerificationResult,
   selectDeployedVersions,
   selectDeploymentLoading,
+  selectSelectedEnvironment,
+  selectCurrentEnvironmentPromptFiles,
+  selectCurrentEnvironmentDeployedVersions,
+  selectEnvironmentLoading,
 } from '../../store/slices/testMonitorSlice';
 import * as testMonitorApi from '../../services/api/testMonitorApi';
-import type { GeneratedFix, VerificationSummary } from '../../types/testMonitor.types';
+import type { GeneratedFix, VerificationSummary, PromptContext } from '../../types/testMonitor.types';
 
 // Workflow phase types
 type WorkflowPhase = 'diagnose' | 'apply' | 'verify' | 'deploy';
@@ -98,7 +107,7 @@ export function AnalysisPage() {
 
   // Redux selectors
   const fixes = useAppSelector(selectFixes);
-  const promptFiles = useAppSelector(selectPromptFiles);
+  const promptFiles = useAppSelector(selectCurrentEnvironmentPromptFiles);
   const promptHistory = useAppSelector(selectPromptHistory);
   const promptLoading = useAppSelector(selectPromptLoading);
   const fixesLoading = useAppSelector(selectFixesLoading);
@@ -106,12 +115,18 @@ export function AnalysisPage() {
   const appliedFixesFromStore = useAppSelector(selectAppliedFixes);
   const verificationRunning = useAppSelector(selectVerificationRunning);
   const verificationResult = useAppSelector(selectVerificationResult);
-  const deployedVersions = useAppSelector(selectDeployedVersions);
+  const deployedVersions = useAppSelector(selectCurrentEnvironmentDeployedVersions);
   const deploymentLoading = useAppSelector(selectDeploymentLoading);
+  const selectedEnvironment = useAppSelector(selectSelectedEnvironment);
+  const environmentLoading = useAppSelector(selectEnvironmentLoading);
 
-  // Local state
+  // Local state - persist selectedRunId to localStorage so it survives page refresh
   const [activePhase, setActivePhase] = useState<WorkflowPhase>('diagnose');
-  const [selectedRunId, setSelectedRunId] = useState<string>('');
+  const [selectedRunId, setSelectedRunId] = useState<string>(() => {
+    // Initialize from localStorage if available
+    const stored = localStorage.getItem('analysis_selectedRunId');
+    return stored || '';
+  });
   const [selectedFixIds, setSelectedFixIds] = useState<Set<string>>(new Set());
   const [applyingBatch, setApplyingBatch] = useState(false);
   const [classificationFilter, setClassificationFilter] = useState<ClassificationFilter>('all');
@@ -123,7 +138,9 @@ export function AnalysisPage() {
   const latestRun = testRuns.length > 0 ? testRuns[0] : null;
   const latestRunId = latestRun?.runId ?? '';
   const runWithFailures = testRuns.find(r => r.failed > 0);
-  const activeRunId = selectedRunId || runWithFailures?.runId || latestRunId;
+  // Validate that selectedRunId still exists in testRuns (it might have been deleted)
+  const validSelectedRunId = selectedRunId && testRuns.some(r => r.runId === selectedRunId) ? selectedRunId : '';
+  const activeRunId = validSelectedRunId || runWithFailures?.runId || latestRunId;
   const activeRun = testRuns.find(r => r.runId === activeRunId);
   const failedTestCount = activeRun?.failed ?? 0;
 
@@ -153,9 +170,28 @@ export function AnalysisPage() {
 
   // Fetch data on mount
   useEffect(() => {
-    dispatch(fetchPromptFiles());
     dispatch(fetchTestRuns({}));
-    dispatch(fetchDeployedVersions());
+  }, [dispatch]);
+
+  // Fetch environment-specific data when environment changes
+  useEffect(() => {
+    dispatch(fetchEnvironmentPromptFiles(selectedEnvironment));
+    dispatch(fetchEnvironmentDeployedVersions(selectedEnvironment));
+  }, [dispatch, selectedEnvironment]);
+
+  // Handle environment change
+  const handleEnvironmentChange = useCallback((env: PromptContext) => {
+    dispatch(setSelectedEnvironment(env));
+    // Persist to localStorage
+    localStorage.setItem('analysis_selectedEnvironment', env);
+  }, [dispatch]);
+
+  // Restore environment from localStorage on mount
+  useEffect(() => {
+    const storedEnv = localStorage.getItem('analysis_selectedEnvironment') as PromptContext | null;
+    if (storedEnv && ['production', 'sandbox_a', 'sandbox_b'].includes(storedEnv)) {
+      dispatch(setSelectedEnvironment(storedEnv));
+    }
   }, [dispatch]);
 
   // Fetch fixes when activeRunId changes
@@ -169,6 +205,9 @@ export function AnalysisPage() {
   const handleDiagnosisComplete = useCallback(() => {
     if (activeRunId) {
       dispatch(fetchFixes(activeRunId));
+      // Persist the run ID so fixes are shown after page refresh
+      localStorage.setItem('analysis_selectedRunId', activeRunId);
+      setSelectedRunId(activeRunId);
       // Auto-advance to apply phase if fixes were generated
       setTimeout(() => setActivePhase('apply'), 500);
     }
@@ -177,6 +216,12 @@ export function AnalysisPage() {
   const handleRunChange = useCallback((runId: string) => {
     setSelectedRunId(runId);
     setSelectedFixIds(new Set());
+    // Persist to localStorage so it survives page refresh
+    if (runId) {
+      localStorage.setItem('analysis_selectedRunId', runId);
+    } else {
+      localStorage.removeItem('analysis_selectedRunId');
+    }
   }, []);
 
   const handleApplyFix = async (fixId: string, fileKey: string) => {
@@ -284,8 +329,39 @@ export function AnalysisPage() {
         subtitle="Diagnose failures, apply fixes, verify changes, and deploy to production"
       />
 
-      {/* Workflow Phase Navigation */}
+      {/* Environment Selector */}
       <div className="mt-6">
+        <Card>
+          <div className="p-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  Environment:
+                </span>
+                <EnvironmentSelector
+                  selectedEnvironment={selectedEnvironment}
+                  onSelect={handleEnvironmentChange}
+                  disabled={environmentLoading}
+                />
+              </div>
+              <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+                {environmentLoading && (
+                  <div className="flex items-center gap-2">
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary-500"></div>
+                    <span>Loading...</span>
+                  </div>
+                )}
+                {!environmentLoading && promptFiles.length > 0 && (
+                  <span>{promptFiles.length} files loaded</span>
+                )}
+              </div>
+            </div>
+          </div>
+        </Card>
+      </div>
+
+      {/* Workflow Phase Navigation */}
+      <div className="mt-4">
         <Card>
           <div className="p-4">
             <div className="flex items-center justify-between">
@@ -387,6 +463,20 @@ export function AnalysisPage() {
                 failedTestCount={failedTestCount}
                 onDiagnosisComplete={handleDiagnosisComplete}
               />
+              {/* Error Clustering Panel - shows grouped error patterns */}
+              {activeRunId && failedTestCount > 0 && (
+                <Card className="mt-6">
+                  <div className="p-4">
+                    <ErrorClusteringPanel
+                      runId={activeRunId}
+                      onTestSelect={(testId) => {
+                        // Navigate to test details or highlight the test
+                        console.log('Selected test:', testId);
+                      }}
+                    />
+                  </div>
+                </Card>
+              )}
             </div>
             <div className="col-span-5">
               <FixAnalytics
@@ -607,6 +697,7 @@ export function AnalysisPage() {
               loading={deploymentLoading}
               hasRecentlyAppliedFixes={appliedBotFixes.length > 0}
               appliedBotFixesCount={appliedBotFixes.length}
+              environment={selectedEnvironment}
             />
             {!hasPendingFlowiseChanges && appliedBotFixes.length > 0 && (
               <Card className="mt-6">

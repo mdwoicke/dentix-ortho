@@ -19,6 +19,7 @@ export interface ChildData {
   isNewPatient: boolean;
   hadBracesBefore?: boolean;
   specialNeeds?: string;
+  medicalConditions?: string;
 }
 
 /**
@@ -30,13 +31,16 @@ export interface DataInventory {
   parentLastName: string;
   parentPhone: string;
   parentEmail?: string;
+  parentDateOfBirth?: string; // ISO format YYYY-MM-DD (parent's own DOB, not child's)
 
   // Children info (array for siblings)
   children: ChildData[];
 
   // Insurance
   insuranceProvider?: string;
-  insuranceId?: string;
+  insuranceMemberId?: string;  // Member ID on insurance card
+  insuranceGroupNumber?: string;  // Group number on insurance card
+  insuranceId?: string;  // Alias for member ID
   hasInsurance?: boolean;
 
   // Location preferences
@@ -160,13 +164,16 @@ export interface DynamicDataInventory {
   parentLastName: MaybeDynamic<string>;
   parentPhone: MaybeDynamic<string>;
   parentEmail?: MaybeDynamic<string>;
+  parentDateOfBirth?: MaybeDynamic<string>; // ISO format YYYY-MM-DD
 
   // Children info (array - each child can have dynamic fields)
   children: DynamicChildData[];
 
   // Insurance
   insuranceProvider?: MaybeDynamic<string>;
-  insuranceId?: MaybeDynamic<string>;
+  insuranceMemberId?: MaybeDynamic<string>;  // Member ID on insurance card
+  insuranceGroupNumber?: MaybeDynamic<string>;  // Group number on insurance card
+  insuranceId?: MaybeDynamic<string>;  // Alias for member ID
   hasInsurance?: MaybeDynamic<boolean>;
 
   // Location preferences

@@ -18,6 +18,8 @@ import type {
   PromptFile,
   PromptVersionHistory,
   VerificationSummary,
+  PromptContext,
+  EnvironmentPromptState,
 } from '../../types/testMonitor.types';
 import * as testMonitorApi from '../../services/api/testMonitorApi';
 import type { DiagnosisResult } from '../../services/api/testMonitorApi';
@@ -46,6 +48,155 @@ interface DeploymentState {
 }
 import { handleError, logError } from '../../services/utils/errorHandler';
 
+// ============================================================================
+// SMART ARRAY MERGING HELPERS (prevent flickering on updates)
+// ============================================================================
+
+/**
+ * Smart merge for TestRun arrays - only updates items that have changed
+ * Returns same array reference if nothing changed (prevents re-render)
+ */
+function mergeTestRuns(existing: TestRun[], incoming: TestRun[]): TestRun[] {
+  if (existing.length === 0) return incoming;
+  if (incoming.length === 0) return existing;
+
+  const existingMap = new Map(existing.map(r => [r.runId, r]));
+  let hasChanges = false;
+
+  const merged = incoming.map(newRun => {
+    const existingRun = existingMap.get(newRun.runId);
+    if (!existingRun) {
+      hasChanges = true;
+      return newRun;
+    }
+    // Compare key fields to detect changes
+    if (existingRun.status !== newRun.status ||
+        existingRun.passed !== newRun.passed ||
+        existingRun.failed !== newRun.failed ||
+        existingRun.totalTests !== newRun.totalTests) {
+      hasChanges = true;
+      return newRun;
+    }
+    // Return existing reference to prevent re-render
+    return existingRun;
+  });
+
+  // Check if any items were removed
+  if (merged.length !== existing.length) {
+    hasChanges = true;
+  }
+
+  return hasChanges ? merged : existing;
+}
+
+/**
+ * Smart merge for TestResult arrays - only updates items that have changed
+ * Returns same array reference if nothing changed
+ */
+function mergeTestResults(existing: TestResult[], incoming: TestResult[]): TestResult[] {
+  if (existing.length === 0) return incoming;
+  if (incoming.length === 0) return existing;
+
+  const existingMap = new Map(existing.map(r => [r.testId, r]));
+  let hasChanges = false;
+
+  const merged = incoming.map(newResult => {
+    const existingResult = existingMap.get(newResult.testId);
+    if (!existingResult) {
+      hasChanges = true;
+      return newResult;
+    }
+    // Compare key fields to detect changes
+    if (existingResult.status !== newResult.status ||
+        existingResult.durationMs !== newResult.durationMs ||
+        existingResult.errorMessage !== newResult.errorMessage) {
+      hasChanges = true;
+      return newResult;
+    }
+    return existingResult;
+  });
+
+  if (merged.length !== existing.length) {
+    hasChanges = true;
+  }
+
+  return hasChanges ? merged : existing;
+}
+
+/**
+ * Smart merge for ConversationTurn arrays - append-only for transcripts
+ * Only adds new turns, preserves existing references
+ */
+function mergeTranscript(existing: ConversationTurn[], incoming: ConversationTurn[]): ConversationTurn[] {
+  if (existing.length === 0) return incoming;
+  if (incoming.length === 0) return existing;
+  if (incoming.length <= existing.length) {
+    // No new turns, check if content is identical
+    let identical = true;
+    for (let i = 0; i < existing.length && i < incoming.length; i++) {
+      if (existing[i].timestamp !== incoming[i].timestamp) {
+        identical = false;
+        break;
+      }
+    }
+    if (identical && incoming.length === existing.length) return existing;
+  }
+
+  // Create a set of existing timestamps for fast lookup
+  const existingTimestamps = new Set(existing.map(t => t.timestamp));
+  const newTurns = incoming.filter(t => !existingTimestamps.has(t.timestamp));
+
+  if (newTurns.length === 0) return existing;
+
+  // Append new turns to existing (preserves references)
+  return [...existing, ...newTurns];
+}
+
+/**
+ * Smart merge for ApiCall arrays - append-only
+ */
+function mergeApiCalls(existing: ApiCall[], incoming: ApiCall[]): ApiCall[] {
+  if (existing.length === 0) return incoming;
+  if (incoming.length === 0) return existing;
+  if (incoming.length <= existing.length) {
+    // Check if identical by comparing lengths and sample
+    if (incoming.length === existing.length) {
+      let identical = true;
+      for (let i = 0; i < Math.min(3, existing.length); i++) {
+        if (existing[i].timestamp !== incoming[i].timestamp) {
+          identical = false;
+          break;
+        }
+      }
+      if (identical) return existing;
+    }
+  }
+
+  // Create lookup by timestamp for deduplication
+  const existingTimestamps = new Set(existing.map(a => a.timestamp));
+  const newCalls = incoming.filter(a => !existingTimestamps.has(a.timestamp));
+
+  if (newCalls.length === 0) return existing;
+
+  return [...existing, ...newCalls];
+}
+
+// Live conversation state for a single test
+interface LiveConversationState {
+  transcript: ConversationTurn[];
+  apiCalls: ApiCall[];
+  isLive: boolean;
+  lastUpdated: number;
+}
+
+// Running test info (for displaying in table before test completes)
+interface RunningTestInfo {
+  testId: string;
+  testName: string;
+  runId: string;
+  startedAt: number;
+}
+
 interface TestMonitorState {
   runs: TestRun[];
   selectedRun: TestRunWithResults | null;
@@ -63,11 +214,19 @@ interface TestMonitorState {
   // Real-time streaming state
   isStreaming: boolean;
   streamError: string | null;
+  // Live conversation streaming state
+  liveConversations: Record<string, LiveConversationState>;
+  selectedLiveTestId: string | null;
+  // Running tests (for table display before completion)
+  runningTests: Record<string, RunningTestInfo>;
   // Prompt version management state
   promptFiles: PromptFile[];
   promptContent: Record<string, string>;
   promptHistory: PromptVersionHistory[];
   promptLoading: boolean;
+  // Environment selection state
+  selectedEnvironment: PromptContext;
+  environmentPromptStates: Record<PromptContext, EnvironmentPromptState>;
   // Diagnosis state
   diagnosis: DiagnosisState;
   // Verification state
@@ -93,11 +252,23 @@ const initialState: TestMonitorState = {
   // Real-time streaming state
   isStreaming: false,
   streamError: null,
+  // Live conversation streaming state
+  liveConversations: {},
+  selectedLiveTestId: null,
+  // Running tests (for table display before completion)
+  runningTests: {},
   // Prompt version management state
   promptFiles: [],
   promptContent: {},
   promptHistory: [],
   promptLoading: false,
+  // Environment selection state
+  selectedEnvironment: 'production',
+  environmentPromptStates: {
+    production: { files: [], deployedVersions: {}, loading: false, error: null },
+    sandbox_a: { files: [], deployedVersions: {}, loading: false, error: null },
+    sandbox_b: { files: [], deployedVersions: {}, loading: false, error: null },
+  },
   // Diagnosis state
   diagnosis: {
     isRunning: false,
@@ -363,6 +534,40 @@ export const fetchPromptFiles = createAsyncThunk(
 );
 
 /**
+ * Fetch prompt files for a specific environment (production, sandbox_a, sandbox_b)
+ */
+export const fetchEnvironmentPromptFiles = createAsyncThunk(
+  'testMonitor/fetchEnvironmentPromptFiles',
+  async (environment: PromptContext, { rejectWithValue }) => {
+    try {
+      const files = await testMonitorApi.getPromptFiles(environment);
+      return { environment, files };
+    } catch (error) {
+      logError(error, 'fetchEnvironmentPromptFiles');
+      const formattedError = handleError(error, `Failed to fetch prompt files for ${environment}`);
+      return rejectWithValue(formattedError.message);
+    }
+  }
+);
+
+/**
+ * Fetch deployed versions for a specific environment
+ */
+export const fetchEnvironmentDeployedVersions = createAsyncThunk(
+  'testMonitor/fetchEnvironmentDeployedVersions',
+  async (environment: PromptContext, { rejectWithValue }) => {
+    try {
+      const versions = await testMonitorApi.getDeployedVersions(environment);
+      return { environment, versions };
+    } catch (error) {
+      logError(error, 'fetchEnvironmentDeployedVersions');
+      const formattedError = handleError(error, `Failed to fetch deployed versions for ${environment}`);
+      return rejectWithValue(formattedError.message);
+    }
+  }
+);
+
+/**
  * Fetch content for a specific prompt file
  */
 export const fetchPromptContent = createAsyncThunk(
@@ -442,6 +647,13 @@ export const testMonitorSlice = createSlice({
      */
     clearError: (state) => {
       state.error = null;
+    },
+
+    /**
+     * Set selected environment (production, sandbox_a, sandbox_b)
+     */
+    setSelectedEnvironment: (state, action: PayloadAction<PromptContext>) => {
+      state.selectedEnvironment = action.payload;
     },
 
     /**
@@ -527,11 +739,15 @@ export const testMonitorSlice = createSlice({
     },
 
     /**
-     * Update results from stream
+     * Update results from stream - uses smart merge to prevent flickering
      */
     streamResultsUpdate: (state, action: PayloadAction<TestResult[]>) => {
       if (state.selectedRun) {
-        state.selectedRun.results = action.payload;
+        const mergedResults = mergeTestResults(state.selectedRun.results || [], action.payload);
+        // Only update if there were actual changes
+        if (mergedResults !== state.selectedRun.results) {
+          state.selectedRun.results = mergedResults;
+        }
       }
     },
 
@@ -543,17 +759,170 @@ export const testMonitorSlice = createSlice({
     },
 
     /**
-     * Update transcript from stream
+     * Update transcript from stream - uses smart merge to prevent flickering
      */
     streamTranscriptUpdate: (state, action: PayloadAction<ConversationTurn[]>) => {
-      state.transcript = action.payload;
+      const mergedTranscript = mergeTranscript(state.transcript, action.payload);
+      if (mergedTranscript !== state.transcript) {
+        state.transcript = mergedTranscript;
+      }
     },
 
     /**
-     * Update API calls from stream
+     * Update API calls from stream - uses smart merge to prevent flickering
      */
     streamApiCallsUpdate: (state, action: PayloadAction<ApiCall[]>) => {
-      state.apiCalls = action.payload;
+      const mergedApiCalls = mergeApiCalls(state.apiCalls, action.payload);
+      if (mergedApiCalls !== state.apiCalls) {
+        state.apiCalls = mergedApiCalls;
+      }
+    },
+
+    // Live conversation streaming actions
+
+    /**
+     * Add a conversation turn to a live test
+     */
+    addLiveConversationTurn: (state, action: PayloadAction<{
+      testId: string;
+      turn: ConversationTurn;
+    }>) => {
+      const { testId, turn } = action.payload;
+      if (!state.liveConversations[testId]) {
+        state.liveConversations[testId] = {
+          transcript: [],
+          apiCalls: [],
+          isLive: true,
+          lastUpdated: Date.now(),
+        };
+      }
+      state.liveConversations[testId].transcript.push(turn);
+      state.liveConversations[testId].lastUpdated = Date.now();
+    },
+
+    /**
+     * Add an API call to a live test
+     */
+    addLiveApiCall: (state, action: PayloadAction<{
+      testId: string;
+      apiCall: ApiCall;
+    }>) => {
+      const { testId, apiCall } = action.payload;
+      if (!state.liveConversations[testId]) {
+        state.liveConversations[testId] = {
+          transcript: [],
+          apiCalls: [],
+          isLive: true,
+          lastUpdated: Date.now(),
+        };
+      }
+      state.liveConversations[testId].apiCalls.push(apiCall);
+      state.liveConversations[testId].lastUpdated = Date.now();
+    },
+
+    /**
+     * Initialize a live conversation with fetched data (for catching up)
+     */
+    initializeLiveConversation: (state, action: PayloadAction<{
+      testId: string;
+      transcript: ConversationTurn[];
+      apiCalls: ApiCall[];
+    }>) => {
+      const { testId, transcript, apiCalls } = action.payload;
+      // Only initialize if not already present (avoid overwriting live updates)
+      if (!state.liveConversations[testId]) {
+        state.liveConversations[testId] = {
+          transcript,
+          apiCalls,
+          isLive: true,
+          lastUpdated: Date.now(),
+        };
+      } else {
+        // Merge new data with existing (avoid duplicates by checking timestamps)
+        const existing = state.liveConversations[testId];
+        const existingTimestamps = new Set(existing.transcript.map(t => t.timestamp));
+        const newTurns = transcript.filter(t => !existingTimestamps.has(t.timestamp));
+        existing.transcript = [...newTurns, ...existing.transcript].sort(
+          (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+        );
+        existing.lastUpdated = Date.now();
+      }
+    },
+
+    /**
+     * Set the currently selected live test
+     */
+    setSelectedLiveTestId: (state, action: PayloadAction<string | null>) => {
+      state.selectedLiveTestId = action.payload;
+    },
+
+    /**
+     * Clear live conversation when test completes
+     */
+    clearLiveConversation: (state, action: PayloadAction<string>) => {
+      delete state.liveConversations[action.payload];
+    },
+
+    /**
+     * Clear all live conversations (on execution complete)
+     * Note: Consider using markAllConversationsComplete instead to preserve data
+     */
+    clearAllLiveConversations: (state) => {
+      state.liveConversations = {};
+      state.selectedLiveTestId = null;
+    },
+
+    /**
+     * Mark a live conversation as no longer live (test completed)
+     */
+    markConversationComplete: (state, action: PayloadAction<string>) => {
+      const testId = action.payload;
+      if (state.liveConversations[testId]) {
+        state.liveConversations[testId].isLive = false;
+      }
+    },
+
+    /**
+     * Mark all live conversations as complete (execution ended)
+     * Preserves conversation data so it stays visible after session ends
+     */
+    markAllConversationsComplete: (state) => {
+      for (const testId of Object.keys(state.liveConversations)) {
+        state.liveConversations[testId].isLive = false;
+      }
+    },
+
+    // Running tests tracking actions
+
+    /**
+     * Add a running test (from worker-status event)
+     */
+    addRunningTest: (state, action: PayloadAction<{
+      testId: string;
+      testName: string;
+      runId: string;
+    }>) => {
+      const { testId, testName, runId } = action.payload;
+      state.runningTests[testId] = {
+        testId,
+        testName,
+        runId,
+        startedAt: Date.now(),
+      };
+    },
+
+    /**
+     * Remove a running test (when test completes)
+     */
+    removeRunningTest: (state, action: PayloadAction<string>) => {
+      delete state.runningTests[action.payload];
+    },
+
+    /**
+     * Clear all running tests (on execution complete)
+     */
+    clearAllRunningTests: (state) => {
+      state.runningTests = {};
     },
   },
   extraReducers: (builder) => {
@@ -565,7 +934,8 @@ export const testMonitorSlice = createSlice({
       })
       .addCase(fetchTestRuns.fulfilled, (state, action) => {
         state.loading = false;
-        state.runs = action.payload;
+        // Use smart merge to prevent flickering - only update if data actually changed
+        state.runs = mergeTestRuns(state.runs, action.payload);
       })
       .addCase(fetchTestRuns.rejected, (state, action) => {
         state.loading = false;
@@ -580,10 +950,32 @@ export const testMonitorSlice = createSlice({
       })
       .addCase(fetchTestRun.fulfilled, (state, action) => {
         state.loading = false;
-        state.selectedRun = action.payload;
-        state.selectedTest = null;
-        state.transcript = [];
-        state.apiCalls = [];
+        // Only clear selected test and transcript when switching to a different run
+        // This prevents the selected test from being cleared during auto-refresh
+        const isNewRun = state.selectedRun?.runId !== action.payload.runId;
+
+        if (isNewRun) {
+          // New run selected, replace everything
+          state.selectedRun = action.payload;
+          state.selectedTest = null;
+          state.transcript = [];
+          state.apiCalls = [];
+        } else {
+          // Same run - use smart merge for results to prevent flickering
+          const existingResults = state.selectedRun?.results || [];
+          const mergedResults = mergeTestResults(existingResults, action.payload.results || []);
+
+          // Only update if something actually changed
+          if (mergedResults !== existingResults ||
+              state.selectedRun?.status !== action.payload.status ||
+              state.selectedRun?.passed !== action.payload.passed ||
+              state.selectedRun?.failed !== action.payload.failed) {
+            state.selectedRun = {
+              ...action.payload,
+              results: mergedResults,
+            };
+          }
+        }
       })
       .addCase(fetchTestRun.rejected, (state, action) => {
         state.loading = false;
@@ -659,6 +1051,18 @@ export const testMonitorSlice = createSlice({
         state.fixes = action.payload;
         console.log(`[Fixes:Reducer] New fixes count: ${state.fixes.length}`);
         console.log(`[Fixes:Reducer] Fix IDs in state:`, state.fixes.map(f => f.fixId));
+
+        // Derive lastResult from loaded fixes so UI shows "Generated X fix(es)" without re-running diagnosis
+        // This ensures fixes persist across page reloads
+        if (action.payload && action.payload.length > 0) {
+          state.diagnosis.lastResult = {
+            success: true,
+            fixesGenerated: action.payload.length,
+            analyzedCount: action.payload.length, // Approximation - actual analyzed may differ
+            totalFailures: action.payload.length, // Approximation
+          };
+          console.log(`[Fixes:Reducer] Set diagnosis.lastResult from loaded fixes: ${action.payload.length} fixes`);
+        }
       })
       .addCase(fetchFixes.rejected, (state, action) => {
         console.error(`[Fixes:Reducer] fetchFixes.rejected - error:`, action.payload);
@@ -874,12 +1278,60 @@ export const testMonitorSlice = createSlice({
         state.deployment.loading = false;
         state.deployment.error = action.payload as string;
       });
+
+    // ========================================================================
+    // ENVIRONMENT-SPECIFIC PROMPT FILES REDUCERS
+    // ========================================================================
+
+    // Fetch Environment Prompt Files
+    builder
+      .addCase(fetchEnvironmentPromptFiles.pending, (state, action) => {
+        const env = action.meta.arg;
+        state.environmentPromptStates[env].loading = true;
+        state.environmentPromptStates[env].error = null;
+      })
+      .addCase(fetchEnvironmentPromptFiles.fulfilled, (state, action) => {
+        const { environment, files } = action.payload;
+        state.environmentPromptStates[environment].loading = false;
+        state.environmentPromptStates[environment].files = files;
+        // Also update main promptFiles if this is the selected environment
+        if (state.selectedEnvironment === environment) {
+          state.promptFiles = files;
+        }
+      })
+      .addCase(fetchEnvironmentPromptFiles.rejected, (state, action) => {
+        const env = action.meta.arg;
+        state.environmentPromptStates[env].loading = false;
+        state.environmentPromptStates[env].error = action.payload as string;
+      });
+
+    // Fetch Environment Deployed Versions
+    builder
+      .addCase(fetchEnvironmentDeployedVersions.pending, (state, action) => {
+        const env = action.meta.arg;
+        state.environmentPromptStates[env].loading = true;
+      })
+      .addCase(fetchEnvironmentDeployedVersions.fulfilled, (state, action) => {
+        const { environment, versions } = action.payload;
+        state.environmentPromptStates[environment].loading = false;
+        state.environmentPromptStates[environment].deployedVersions = versions;
+        // Also update deployment state if this is the selected environment
+        if (state.selectedEnvironment === environment) {
+          state.deployment.deployedVersions = versions;
+        }
+      })
+      .addCase(fetchEnvironmentDeployedVersions.rejected, (state, action) => {
+        const env = action.meta.arg;
+        state.environmentPromptStates[env].loading = false;
+        state.environmentPromptStates[env].error = action.payload as string;
+      });
   },
 });
 
 // Export actions
 export const {
   clearError,
+  setSelectedEnvironment,
   setSelectedTest,
   clearSelectedRun,
   clearAllData,
@@ -892,6 +1344,19 @@ export const {
   streamFindingsUpdate,
   streamTranscriptUpdate,
   streamApiCallsUpdate,
+  // Live conversation streaming actions
+  addLiveConversationTurn,
+  addLiveApiCall,
+  initializeLiveConversation,
+  setSelectedLiveTestId,
+  clearLiveConversation,
+  clearAllLiveConversations,
+  markConversationComplete,
+  markAllConversationsComplete,
+  // Running tests tracking actions
+  addRunningTest,
+  removeRunningTest,
+  clearAllRunningTests,
 } = testMonitorSlice.actions;
 
 // Selectors
@@ -909,6 +1374,23 @@ export const selectTestMonitorError = (state: RootState) => state.testMonitor.er
 // Streaming selectors
 export const selectIsStreaming = (state: RootState) => state.testMonitor.isStreaming;
 export const selectStreamError = (state: RootState) => state.testMonitor.streamError;
+// Live conversation selectors
+export const selectLiveConversations = (state: RootState) => state.testMonitor.liveConversations;
+export const selectSelectedLiveTestId = (state: RootState) => state.testMonitor.selectedLiveTestId;
+export const selectLiveConversation = (testId: string) => (state: RootState) =>
+  state.testMonitor.liveConversations[testId];
+export const selectCurrentLiveTranscript = (state: RootState) => {
+  const testId = state.testMonitor.selectedLiveTestId;
+  if (!testId) return [];
+  return state.testMonitor.liveConversations[testId]?.transcript ?? [];
+};
+export const selectCurrentLiveApiCalls = (state: RootState) => {
+  const testId = state.testMonitor.selectedLiveTestId;
+  if (!testId) return [];
+  return state.testMonitor.liveConversations[testId]?.apiCalls ?? [];
+};
+// Running tests selectors
+export const selectRunningTests = (state: RootState) => state.testMonitor.runningTests;
 // Fixes selectors
 export const selectFixes = (state: RootState) => state.testMonitor.fixes;
 export const selectFixesLoading = (state: RootState) => state.testMonitor.fixesLoading;
@@ -933,6 +1415,21 @@ export const selectAppliedFixes = (state: RootState) => state.testMonitor.fixes.
 export const selectDeploymentState = (state: RootState) => state.testMonitor.deployment;
 export const selectDeployedVersions = (state: RootState) => state.testMonitor.deployment.deployedVersions;
 export const selectDeploymentLoading = (state: RootState) => state.testMonitor.deployment.loading;
+// Environment selectors
+export const selectSelectedEnvironment = (state: RootState) => state.testMonitor.selectedEnvironment;
+export const selectEnvironmentPromptStates = (state: RootState) => state.testMonitor.environmentPromptStates;
+export const selectCurrentEnvironmentPromptFiles = (state: RootState) => {
+  const env = state.testMonitor.selectedEnvironment;
+  return state.testMonitor.environmentPromptStates[env]?.files ?? state.testMonitor.promptFiles;
+};
+export const selectCurrentEnvironmentDeployedVersions = (state: RootState) => {
+  const env = state.testMonitor.selectedEnvironment;
+  return state.testMonitor.environmentPromptStates[env]?.deployedVersions ?? state.testMonitor.deployment.deployedVersions;
+};
+export const selectEnvironmentLoading = (state: RootState) => {
+  const env = state.testMonitor.selectedEnvironment;
+  return state.testMonitor.environmentPromptStates[env]?.loading ?? false;
+};
 
 // Export reducer
 export default testMonitorSlice.reducer;

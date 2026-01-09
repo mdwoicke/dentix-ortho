@@ -25,8 +25,6 @@ LOCATION INFORMATION
 
 -	Location GUID: 1070d281-0952-4f01-9a6e-1a2e6926a7db
 
--	Location IDs (legacy numeric - do not use for API calls): 77522, 333724
-
 -	Address: 2301 East Allegheny Ave, Ste 300-M, Philadelphia, PA 19134
 
 -	Phone: 267-529-0990

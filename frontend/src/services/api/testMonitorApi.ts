@@ -28,6 +28,15 @@ import type {
   ConversationGoalDTO,
   TestConstraintDTO,
   ResponseConfigDTO,
+  PromptContext,
+  ProductionTrace,
+  ProductionTraceDetail,
+  ProductionTracesResponse,
+  ImportResult,
+  ImportHistoryEntry,
+  ProductionSession,
+  ProductionSessionsResponse,
+  ProductionSessionDetailResponse,
 } from '../../types/testMonitor.types';
 
 // Base API URL
@@ -49,7 +58,10 @@ export type ExecutionStreamEvent =
   | { type: 'execution-stopped'; data: { runId: string; status: string } }
   | { type: 'execution-error'; data: { error: string } }
   | { type: 'complete'; data: { status: string } }
-  | { type: 'error'; data: { error: string } };
+  | { type: 'error'; data: { error: string } }
+  // Real-time conversation streaming events
+  | { type: 'conversation-update'; data: { testId: string; turn: ConversationTurn; turnIndex: number; totalTurns: number } }
+  | { type: 'api-call-update'; data: { testId: string; apiCall: ApiCall } };
 
 /**
  * Subscribe to real-time execution status updates via SSE
@@ -91,6 +103,15 @@ export function subscribeToExecution(
 
   eventSource.addEventListener('execution-error', (e) => {
     onEvent({ type: 'execution-error', data: JSON.parse(e.data) });
+  });
+
+  // Real-time conversation streaming events
+  eventSource.addEventListener('conversation-update', (e) => {
+    onEvent({ type: 'conversation-update', data: JSON.parse(e.data) });
+  });
+
+  eventSource.addEventListener('api-call-update', (e) => {
+    onEvent({ type: 'api-call-update', data: JSON.parse(e.data) });
   });
 
   eventSource.addEventListener('complete', (e) => {
@@ -241,6 +262,21 @@ export async function getApiCalls(
     url += `?runId=${runId}`;
   }
   const response = await get<TestMonitorApiResponse<ApiCall[]>>(url);
+  return response.data;
+}
+
+/**
+ * Get live conversation for a running test
+ */
+export async function getLiveConversation(
+  runId: string,
+  testId: string
+): Promise<{ transcript: ConversationTurn[]; apiCalls: ApiCall[]; lastUpdated: number | null }> {
+  const response = await get<TestMonitorApiResponse<{
+    transcript: ConversationTurn[];
+    apiCalls: ApiCall[];
+    lastUpdated: number | null;
+  }>>(`/test-monitor/execution/${runId}/conversation/${testId}`);
   return response.data;
 }
 
@@ -640,9 +676,9 @@ export interface DeploymentRecord {
 /**
  * Get deployed versions for all prompt files
  */
-export async function getDeployedVersions(): Promise<Record<string, number>> {
+export async function getDeployedVersions(context: PromptContext = 'production'): Promise<Record<string, number>> {
   const response = await get<TestMonitorApiResponse<Record<string, number>>>(
-    '/test-monitor/prompts/deployed'
+    `/test-monitor/prompts/deployed?context=${context}`
   );
   return response.data;
 }
@@ -1053,7 +1089,6 @@ import type {
   QualityScore,
   ReferenceDocument,
   UpdateReferenceDocumentRequest,
-  PromptContext,
 } from '../../types/aiPrompting.types';
 
 /**
@@ -1263,4 +1298,138 @@ export async function deleteReferenceDocument(
   await fetch(`${API_BASE_URL}/test-monitor/references/${documentId}`, {
     method: 'DELETE',
   });
+}
+
+// ============================================================================
+// PRODUCTION CALLS API
+// ============================================================================
+
+/**
+ * Get list of imported production traces
+ */
+export async function getProductionTraces(options?: {
+  configId?: number;
+  limit?: number;
+  offset?: number;
+  fromDate?: string;
+  toDate?: string;
+  sessionId?: string;
+}): Promise<ProductionTracesResponse> {
+  const params = new URLSearchParams();
+  if (options?.configId) params.append('configId', options.configId.toString());
+  if (options?.limit) params.append('limit', options.limit.toString());
+  if (options?.offset) params.append('offset', options.offset.toString());
+  if (options?.fromDate) params.append('fromDate', options.fromDate);
+  if (options?.toDate) params.append('toDate', options.toDate);
+  if (options?.sessionId) params.append('sessionId', options.sessionId);
+
+  const queryString = params.toString();
+  const url = `/test-monitor/production-calls${queryString ? `?${queryString}` : ''}`;
+  const response = await get<TestMonitorApiResponse<ProductionTracesResponse>>(url);
+  return response.data;
+}
+
+/**
+ * Get single production trace with transcript
+ */
+export async function getProductionTrace(traceId: string): Promise<ProductionTraceDetail> {
+  const response = await get<TestMonitorApiResponse<ProductionTraceDetail>>(
+    `/test-monitor/production-calls/${traceId}`
+  );
+  return response.data;
+}
+
+/**
+ * Import traces from Langfuse
+ */
+export async function importProductionTraces(options: {
+  configId: number;
+  fromDate: string;
+  toDate?: string;
+}): Promise<ImportResult> {
+  const response = await post<TestMonitorApiResponse<ImportResult>>(
+    '/test-monitor/production-calls/import',
+    options
+  );
+  return response.data;
+}
+
+/**
+ * Get import history
+ */
+export async function getImportHistory(configId?: number, limit?: number): Promise<ImportHistoryEntry[]> {
+  const params = new URLSearchParams();
+  if (configId) params.append('configId', configId.toString());
+  if (limit) params.append('limit', limit.toString());
+
+  const queryString = params.toString();
+  const url = `/test-monitor/production-calls/import-history${queryString ? `?${queryString}` : ''}`;
+  const response = await get<TestMonitorApiResponse<ImportHistoryEntry[]>>(url);
+  return response.data;
+}
+
+/**
+ * Get last import date for a config
+ */
+export async function getLastImportDate(configId: number): Promise<string | null> {
+  const response = await get<TestMonitorApiResponse<{ lastImportDate: string | null }>>(
+    `/test-monitor/production-calls/last-import/${configId}`
+  );
+  return response.data.lastImportDate;
+}
+
+// ============================================================================
+// PRODUCTION SESSIONS API - Grouped Conversations
+// ============================================================================
+
+/**
+ * Get list of production sessions (grouped conversations)
+ */
+export async function getProductionSessions(options?: {
+  configId?: number;
+  limit?: number;
+  offset?: number;
+  fromDate?: string;
+  toDate?: string;
+  userId?: string;
+}): Promise<ProductionSessionsResponse> {
+  const params = new URLSearchParams();
+  if (options?.configId) params.append('configId', options.configId.toString());
+  if (options?.limit) params.append('limit', options.limit.toString());
+  if (options?.offset) params.append('offset', options.offset.toString());
+  if (options?.fromDate) params.append('fromDate', options.fromDate);
+  if (options?.toDate) params.append('toDate', options.toDate);
+  if (options?.userId) params.append('userId', options.userId);
+
+  const queryString = params.toString();
+  const url = `/test-monitor/production-calls/sessions${queryString ? `?${queryString}` : ''}`;
+  const response = await get<TestMonitorApiResponse<ProductionSessionsResponse>>(url);
+  return response.data;
+}
+
+/**
+ * Get single production session with all traces and combined transcript
+ */
+export async function getProductionSession(
+  sessionId: string,
+  configId?: number
+): Promise<ProductionSessionDetailResponse> {
+  const params = new URLSearchParams();
+  if (configId) params.append('configId', configId.toString());
+
+  const queryString = params.toString();
+  const url = `/test-monitor/production-calls/sessions/${sessionId}${queryString ? `?${queryString}` : ''}`;
+  const response = await get<TestMonitorApiResponse<ProductionSessionDetailResponse>>(url);
+  return response.data;
+}
+
+/**
+ * Rebuild session aggregates from existing traces
+ */
+export async function rebuildProductionSessions(configId?: number): Promise<{ sessionsCreated: number; sessionsUpdated: number }> {
+  const response = await post<TestMonitorApiResponse<{ sessionsCreated: number; sessionsUpdated: number }>>(
+    '/test-monitor/production-calls/sessions/rebuild',
+    { configId }
+  );
+  return response.data;
 }

@@ -18,6 +18,10 @@ interface ExpandablePanelProps {
   grow?: boolean;
   /** Maximum height for content area when not growing (default: 300px) */
   maxContentHeight?: string;
+  /** Optional actions to render in the header (buttons, etc.) */
+  headerActions?: React.ReactNode;
+  /** Whether the panel should be expanded by default (default: true) */
+  defaultExpanded?: boolean;
 }
 
 export function ExpandablePanel({
@@ -28,6 +32,8 @@ export function ExpandablePanel({
   contentClassName,
   grow = false,
   maxContentHeight = '300px',
+  headerActions,
+  defaultExpanded = true,
 }: ExpandablePanelProps) {
   const [isExpanded, setIsExpanded] = useState(false);
 
@@ -88,7 +94,10 @@ export function ExpandablePanel({
           </span>
         )}
       </div>
-      <ExpandIcon />
+      <div className="flex items-center gap-2">
+        {headerActions}
+        <ExpandIcon />
+      </div>
     </div>
   );
 

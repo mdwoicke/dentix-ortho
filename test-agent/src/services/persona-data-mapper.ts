@@ -54,6 +54,25 @@ const DATA_MAPPERS: Record<DataFieldCategory, DataMapperFn> = {
     return `${firstName.replace(/[^a-z]/g, '')}@email.com`;
   },
 
+  parent_dob: (inv) => {
+    if (!inv.parentDateOfBirth) {
+      // Fallback: generate a reasonable adult DOB (30-50 years old)
+      const currentYear = new Date().getFullYear();
+      const parentYear = currentYear - 40; // Default to ~40 years old
+      return new Date(parentYear, 0, 15).toLocaleDateString('en-US', {
+        month: 'long',
+        day: 'numeric',
+        year: 'numeric',
+      });
+    }
+    const dob = new Date(inv.parentDateOfBirth);
+    return dob.toLocaleDateString('en-US', {
+      month: 'long',
+      day: 'numeric',
+      year: 'numeric',
+    });
+  },
+
   // Child fields
   child_count: (inv) => {
     const count = inv.children.length;
@@ -68,6 +87,15 @@ const DATA_MAPPERS: Record<DataFieldCategory, DataMapperFn> = {
     const child = getChild(inv, ctx.currentChildIndex);
     if (!child) return null;
     return `${child.firstName} ${child.lastName}`;
+  },
+
+  child_name_spelling: (inv, ctx) => {
+    const child = getChild(inv, ctx.currentChildIndex);
+    if (!child) return null;
+    // Spell out name: "J-A-K-E D-A-V-I-S" with space between first and last name
+    const firstName = child.firstName.split('').join('-').toUpperCase();
+    const lastName = child.lastName.split('').join('-').toUpperCase();
+    return `${firstName}- -${lastName}`;
   },
 
   child_dob: (inv, ctx) => {
@@ -114,10 +142,32 @@ const DATA_MAPPERS: Record<DataFieldCategory, DataMapperFn> = {
     return inv.insuranceProvider;
   },
 
+  insurance_member_id: (inv) => {
+    // Provide member ID and group number together
+    const parts: string[] = [];
+    if (inv.insuranceMemberId) {
+      parts.push(`Member ID is ${inv.insuranceMemberId}`);
+    }
+    if (inv.insuranceGroupNumber) {
+      parts.push(`group number is ${inv.insuranceGroupNumber}`);
+    }
+    if (parts.length === 0) {
+      // Generate fallback IDs if not provided
+      return "Member ID is 123456789, group number is G12345";
+    }
+    return parts.join(' and ');
+  },
+
   special_needs: (inv, ctx) => {
     const child = getChild(inv, ctx.currentChildIndex);
     if (!child?.specialNeeds) return 'No special needs';
     return child.specialNeeds;
+  },
+
+  medical_conditions: (inv, ctx) => {
+    const child = getChild(inv, ctx.currentChildIndex);
+    if (!child?.medicalConditions) return 'No medical conditions';
+    return child.medicalConditions;
   },
 
   // Card reminder is agent-provided, not user-provided

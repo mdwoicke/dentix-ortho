@@ -25,6 +25,7 @@ export type CollectableField =
   | 'parent_name_spelling'
   | 'parent_phone'
   | 'parent_email'
+  | 'parent_dob'
   | 'child_count'
   | 'child_names'
   | 'child_dob'

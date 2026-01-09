@@ -22,11 +22,14 @@ export interface TestResult {
   testId: string;
   testName: string;
   category: string;
-  status: 'passed' | 'failed' | 'error' | 'skipped';
+  status: 'passed' | 'failed' | 'error' | 'skipped' | 'running';
   startedAt: string;
   completedAt: string;
   durationMs: number;
   errorMessage?: string;
+  langfuseTraceId?: string;
+  // Flowise session ID (UUID) - used for Langfuse session URL
+  flowiseSessionId?: string;
 }
 
 export interface TestRunWithResults extends TestRun {
@@ -907,3 +910,177 @@ export const CATEGORY_STYLES: Record<TestCategory, {
     icon: 'text-red-500',
   },
 };
+
+// ============================================================================
+// ENVIRONMENT / PROMPT CONTEXT TYPES
+// ============================================================================
+
+/**
+ * Environment context for prompt operations
+ * - production: Live production files in /docs/v1/
+ * - sandbox_a: Sandbox A testing environment
+ * - sandbox_b: Sandbox B testing environment
+ */
+export type PromptContext = 'production' | 'sandbox_a' | 'sandbox_b';
+
+/**
+ * Environment-specific prompt files state
+ */
+export interface EnvironmentPromptState {
+  files: PromptFile[];
+  deployedVersions: Record<string, number>;
+  loading: boolean;
+  error: string | null;
+}
+
+// ============================================================================
+// PRODUCTION CALLS (LANGFUSE TRACES) TYPES
+// ============================================================================
+
+/**
+ * Imported production trace from Langfuse
+ */
+export interface ProductionTrace {
+  id: number;
+  traceId: string;
+  configId: number;
+  configName: string;
+  sessionId: string | null;
+  userId: string | null;
+  name: string | null;
+  input: Record<string, any> | null;
+  output: Record<string, any> | null;
+  metadata: Record<string, any> | null;
+  tags: string[];
+  release: string | null;
+  version: string | null;
+  totalCost: number | null;
+  latencyMs: number | null;
+  startedAt: string;
+  endedAt: string | null;
+  environment: string | null;
+  importedAt: string;
+  langfuseHost: string;
+  errorCount: number;
+}
+
+/**
+ * Observation from a Langfuse trace (generation, span, event)
+ */
+export interface ProductionTraceObservation {
+  id: number;
+  observationId: string;
+  traceId: string;
+  parentObservationId: string | null;
+  type: 'GENERATION' | 'SPAN' | 'EVENT';
+  name: string | null;
+  model: string | null;
+  input: Record<string, any> | null;
+  output: Record<string, any> | null;
+  metadata: Record<string, any> | null;
+  startedAt: string;
+  endedAt: string | null;
+  latencyMs: number | null;
+  usage: {
+    input: number | null;
+    output: number | null;
+    total: number | null;
+  };
+  cost: number | null;
+  level: string;
+  statusMessage: string | null;
+}
+
+/**
+ * Full trace detail with observations and transformed transcript
+ */
+export interface ProductionTraceDetail {
+  trace: ProductionTrace;
+  observations: ProductionTraceObservation[];
+  transcript: ConversationTurn[];
+  apiCalls: ApiCall[];
+}
+
+/**
+ * Result from an import operation
+ */
+export interface ImportResult {
+  importId: number;
+  tracesImported: number;
+  tracesSkipped: number;
+  status: 'completed' | 'failed';
+  errorMessage?: string;
+}
+
+/**
+ * Import history entry
+ */
+export interface ImportHistoryEntry {
+  id: number;
+  langfuse_config_id: number;
+  config_name: string;
+  import_started_at: string;
+  import_completed_at: string | null;
+  status: 'running' | 'completed' | 'failed';
+  traces_imported: number;
+  traces_skipped: number;
+  error_message: string | null;
+  from_date: string;
+  to_date: string | null;
+}
+
+/**
+ * Paginated traces response
+ */
+export interface ProductionTracesResponse {
+  traces: ProductionTrace[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+// ============================================================================
+// PRODUCTION SESSIONS - Grouped Conversations
+// ============================================================================
+
+/**
+ * Production Session - Groups multiple traces into a conversation
+ */
+export interface ProductionSession {
+  sessionId: string;
+  configId: number;
+  configName: string;
+  langfuseHost: string;
+  userId: string | null;
+  environment: string | null;
+  firstTraceAt: string;
+  lastTraceAt: string;
+  traceCount: number;
+  totalCost: number | null;
+  totalLatencyMs: number | null;
+  inputPreview: string | null;
+  tags: string[] | null;
+  metadata: Record<string, any> | null;
+  importedAt: string;
+  errorCount: number;
+}
+
+/**
+ * Paginated sessions response
+ */
+export interface ProductionSessionsResponse {
+  sessions: ProductionSession[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/**
+ * Session detail response - includes all traces and combined transcript
+ */
+export interface ProductionSessionDetailResponse {
+  session: ProductionSession;
+  traces: ProductionTrace[];
+  transcript: ConversationTurn[];
+  apiCalls: any[];
+}

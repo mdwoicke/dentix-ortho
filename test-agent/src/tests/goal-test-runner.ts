@@ -22,7 +22,14 @@ import {
 } from '../services/ab-testing';
 // New category-based system
 import { CategoryClassifier, getCategoryClassifier } from '../services/category-classifier';
+import { SemanticClassifier, getSemanticClassifier } from '../services/semantic-classifier';
+import { SemanticEntityExtractor, getSemanticEntityExtractor } from '../services/semantic-entity-extractor';
 import { ResponseStrategyEngine, createResponseStrategyEngine } from '../services/response-strategy-engine';
+import {
+  ConversationContextTracker,
+  createContextTracker,
+  type ConversationAnomaly,
+} from '../services/conversation-context-tracker';
 import type { CategoryClassificationResult, DataFieldCategory } from '../schemas/response-category-schemas';
 import type { GoalOrientedTestCase, GoalTestResult } from './types/goal-test';
 import type { ConversationTurn, Finding } from './test-case';
@@ -30,6 +37,7 @@ import type { IntentDetectionResult } from './types/intent';
 import type { UserPersona, DynamicUserPersona, ResolvedPersona } from './types/persona';
 import type { CollectableField } from './types/goals';
 import { config } from '../config/config';
+import { getCurrentTraceContext } from '../../../shared/services';
 
 /**
  * Pattern definitions for extracting volunteered data from user messages.
@@ -162,6 +170,25 @@ export interface GoalTestRunnerConfig {
    * When false, uses legacy IntentDetector + ResponseGenerator.
    */
   useCategoryBasedSystem: boolean;
+
+  /**
+   * Use the AI-first SemanticClassifier instead of pattern-based CategoryClassifier.
+   * Only applies when useCategoryBasedSystem is true.
+   * SemanticClassifier uses LLM for all classifications with intelligent caching.
+   */
+  useSemanticClassifier: boolean;
+
+  /**
+   * Use the AI-first SemanticEntityExtractor instead of regex-based extraction.
+   * Extracts phone, email, names, etc. using LLM with format normalization.
+   */
+  useSemanticEntityExtractor: boolean;
+
+  /**
+   * Use ConversationContextTracker for rich context tracking.
+   * Enables multi-child tracking, repetition analysis, and anomaly detection.
+   */
+  useContextTracker: boolean;
 }
 
 const DEFAULT_CONFIG: GoalTestRunnerConfig = {
@@ -172,6 +199,9 @@ const DEFAULT_CONFIG: GoalTestRunnerConfig = {
   saveProgressSnapshots: process.env.PARALLEL_MODE !== 'true',
   continueOnError: true,
   useCategoryBasedSystem: true, // Default to new system
+  useSemanticClassifier: process.env.USE_SEMANTIC_CLASSIFIER === 'true', // Enable via env var
+  useSemanticEntityExtractor: process.env.USE_SEMANTIC_ENTITY_EXTRACTOR === 'true', // Enable via env var
+  useContextTracker: process.env.USE_CONTEXT_TRACKER !== 'false', // Enabled by default
 };
 
 /**
@@ -211,6 +241,8 @@ export class GoalTestRunner {
 
   // New category-based system
   private categoryClassifier: CategoryClassifier;
+  private semanticClassifier: SemanticClassifier;
+  private semanticEntityExtractor: SemanticEntityExtractor;
   private responseStrategyEngine: ResponseStrategyEngine;
 
   constructor(
@@ -224,16 +256,28 @@ export class GoalTestRunner {
     this.intentDetector = intentDetector;
     this.config = { ...DEFAULT_CONFIG, ...cfg };
 
-    // Initialize new category-based services
+    // Initialize category-based services
     this.categoryClassifier = getCategoryClassifier();
+    this.semanticClassifier = getSemanticClassifier();
+    this.semanticEntityExtractor = getSemanticEntityExtractor();
     this.responseStrategyEngine = createResponseStrategyEngine({
       useLlmForComplex: false, // Templates by default
     });
 
     if (this.config.useCategoryBasedSystem) {
-      console.log('[GoalTestRunner] Using category-based classification system');
+      if (this.config.useSemanticClassifier) {
+        console.log('[GoalTestRunner] Using AI-first SemanticClassifier (LLM-based)');
+      } else {
+        console.log('[GoalTestRunner] Using pattern-based CategoryClassifier');
+      }
     } else {
       console.log('[GoalTestRunner] Using legacy intent-based system');
+    }
+
+    if (this.config.useSemanticEntityExtractor) {
+      console.log('[GoalTestRunner] Using AI-first SemanticEntityExtractor (LLM-based)');
+    } else {
+      console.log('[GoalTestRunner] Using regex-based entity extraction');
     }
   }
 
@@ -271,6 +315,14 @@ export class GoalTestRunner {
     const startTime = Date.now();
     const transcript: ConversationTurn[] = [];
 
+    // Emit test-started event for real-time streaming
+    console.log(JSON.stringify({
+      type: 'test-started',
+      testId: effectiveTestId,
+      testName: testCase.name,
+      runId,
+    }));
+
     // Resolve dynamic fields if present
     let resolvedPersona: ResolvedPersona | undefined;
     let personaToUse: UserPersona;
@@ -292,8 +344,23 @@ export class GoalTestRunner {
     const progressTracker = new ProgressTracker(testCase.goals);
     const goalEvaluator = new GoalEvaluator();
 
-    // Start new Flowise session
+    // Initialize context tracker for rich conversation context
+    let contextTracker: ConversationContextTracker | null = null;
+    if (this.config.useContextTracker) {
+      contextTracker = createContextTracker(runId, { verboseLogging: false });
+      contextTracker.setTestId(effectiveTestId);
+
+      // Set expected child count from persona
+      const childCount = personaToUse.inventory.children?.length || 1;
+      contextTracker.setChildCount(childCount);
+
+      console.log(`[GoalTestRunner] Context tracker enabled (tracking ${childCount} children)`);
+    }
+
+    // Start new Flowise session and capture session ID for Langfuse
     this.flowiseClient.newSession();
+    const flowiseSessionId = this.flowiseClient.getSessionId();
+    console.log(`[GoalTestRunner] Flowise session: ${flowiseSessionId}`);
 
     let turnNumber = 0;
     let lastError: string | undefined;
@@ -325,7 +392,7 @@ export class GoalTestRunner {
       const providedFields = new Set<DataFieldCategory>();
 
       // Extract volunteered data from initial message
-      const initialVolunteeredData = extractVolunteeredData(initialMessage);
+      const initialVolunteeredData = await this.extractVolunteeredDataFromMessage(initialMessage);
       for (const { field, value } of initialVolunteeredData) {
         progressTracker.markFieldCollected(field, value, 1);
         console.log(`[GoalTestRunner] Extracted volunteered ${field}: ${value}`);
@@ -341,17 +408,32 @@ export class GoalTestRunner {
         let userResponse: string;
 
         if (this.config.useCategoryBasedSystem) {
-          // New category-based system
-          const classification = await this.categoryClassifier.classify(
+          // Select classifier based on config
+          const classifier = this.config.useSemanticClassifier
+            ? this.semanticClassifier
+            : this.categoryClassifier;
+
+          // Classify using selected classifier
+          const classification = await classifier.classify(
             lastAgentTurn.content,
             transcript,
             personaToUse
           );
 
+          // Record agent turn in context tracker
+          if (contextTracker) {
+            contextTracker.recordAgentTurn(turnNumber, lastAgentTurn.content, {
+              category: classification.category,
+              dataFields: classification.dataFields,
+              terminalState: classification.terminalState,
+              confidence: classification.confidence,
+            });
+          }
+
           // Check if conversation should end
-          if (this.categoryClassifier.isTerminal(classification)) {
+          if (classifier.isTerminal(classification)) {
             console.log(`[GoalTestRunner] Terminal state: ${classification.terminalState}`);
-            intentResult = this.categoryClassifier.toLegacyIntent(classification);
+            intentResult = classifier.toLegacyIntent(classification);
             progressTracker.updateProgress(intentResult, '', turnNumber);
             break;
           }
@@ -373,6 +455,11 @@ export class GoalTestRunner {
               currentChildIndex = targetIndex;
               lastDetectedChildOrdinal = detectedOrdinal;
               console.log(`[GoalTestRunner] Advanced to child ${detectedOrdinal} (index ${currentChildIndex})`);
+
+              // Update context tracker with child switch
+              if (contextTracker) {
+                contextTracker.switchChild(currentChildIndex, turnNumber);
+              }
             }
           }
 
@@ -402,7 +489,7 @@ export class GoalTestRunner {
           }
 
           // Convert to legacy intent for progress tracker
-          intentResult = this.categoryClassifier.toLegacyIntent(classification);
+          intentResult = classifier.toLegacyIntent(classification);
         } else {
           // Legacy intent-based system
           intentResult = await this.intentDetector.detectIntent(
@@ -426,9 +513,14 @@ export class GoalTestRunner {
         progressTracker.updateProgress(intentResult, userResponse, turnNumber);
 
         // Extract any volunteered data from user response
-        const volunteeredData = extractVolunteeredData(userResponse);
+        const volunteeredData = await this.extractVolunteeredDataFromMessage(userResponse);
         for (const { field, value } of volunteeredData) {
           progressTracker.markFieldCollected(field, value, turnNumber);
+        }
+
+        // Record user turn in context tracker
+        if (contextTracker && volunteeredData.length > 0) {
+          contextTracker.recordUserTurn(turnNumber, userResponse, volunteeredData);
         }
 
         // Check for abort conditions
@@ -477,9 +569,55 @@ export class GoalTestRunner {
       durationMs
     );
 
+    // Add context tracker insights to result
+    if (contextTracker) {
+      const contextSummary = contextTracker.getSummary();
+      const anomalies = contextTracker.getAnomalies();
+
+      // Log context insights
+      if (anomalies.length > 0) {
+        console.log(`[GoalTestRunner] Context anomalies detected: ${anomalies.length}`);
+        for (const anomaly of anomalies) {
+          console.log(`  - Turn ${anomaly.turn}: ${anomaly.type} (${anomaly.severity}): ${anomaly.description}`);
+
+          // Add high/critical anomalies as issues in the result
+          // Map anomaly types to valid ProgressIssue types
+          if (anomaly.severity === 'high' || anomaly.severity === 'critical') {
+            const issueType = anomaly.type === 'stuck_conversation' ? 'stuck'
+              : anomaly.type === 'loop_detected' ? 'repeating'
+              : 'error'; // Default to error for other anomaly types
+
+            result.issues.push({
+              type: issueType,
+              severity: anomaly.severity,
+              description: `[Context] ${anomaly.type}: ${anomaly.description}`,
+              turnNumber: anomaly.turn,
+            });
+          }
+        }
+      }
+
+      const repetitions = contextTracker.getRepeatedQuestions();
+      if (repetitions.length > 0) {
+        console.log(`[GoalTestRunner] Repeated questions detected: ${repetitions.length}`);
+        for (const rep of repetitions) {
+          console.log(`  - ${rep.field} repeated at turns: ${rep.turns.join(', ')} (reason: ${rep.reason})`);
+        }
+      }
+
+      // Log booking status for multi-child scenarios
+      if (contextSummary.childrenTracked > 1) {
+        const bookingStatus = contextTracker.getBookingStatus();
+        console.log(`[GoalTestRunner] Multi-child booking status:`);
+        for (const status of bookingStatus) {
+          console.log(`  - Child ${status.childIndex + 1} (${status.name || 'unnamed'}): ${status.booked ? 'BOOKED' : 'not booked'}`);
+        }
+      }
+    }
+
     // Save to database (include resolved persona if dynamic fields were used)
     // Use effectiveTestId to ensure multiple runs of same test are stored separately
-    this.saveGoalTestResult(runId, effectiveTestId, testCase, result, transcript, lastError, resolvedPersona);
+    this.saveGoalTestResult(runId, effectiveTestId, testCase, result, transcript, lastError, resolvedPersona, flowiseSessionId);
 
     return result;
   }
@@ -692,6 +830,14 @@ export class GoalTestRunner {
     };
     transcript.push(userTurn);
 
+    // Emit for real-time streaming
+    console.log(JSON.stringify({
+      type: 'conversation-turn',
+      testId,
+      runId,
+      turn: userTurn,
+    }));
+
     try {
       // Send to Flowise
       const response = await this.flowiseClient.sendMessage(message);
@@ -705,6 +851,14 @@ export class GoalTestRunner {
         stepId,
       };
       transcript.push(assistantTurn);
+
+      // Emit for real-time streaming
+      console.log(JSON.stringify({
+        type: 'conversation-turn',
+        testId,
+        runId,
+        turn: assistantTurn,
+      }));
 
       // Save API calls (tool calls)
       if (response.toolCalls && response.toolCalls.length > 0) {
@@ -721,6 +875,21 @@ export class GoalTestRunner {
             timestamp: new Date().toISOString(),
           };
           this.database.saveApiCall(apiCall);
+
+          // Emit for real-time streaming
+          console.log(JSON.stringify({
+            type: 'api-call',
+            testId,
+            runId,
+            apiCall: {
+              toolName: toolCall.toolName,
+              requestPayload: toolCall.input,
+              responsePayload: toolCall.output,
+              status: toolCall.status,
+              durationMs: toolCall.durationMs,
+              timestamp: apiCall.timestamp,
+            },
+          }));
         }
       }
 
@@ -736,6 +905,14 @@ export class GoalTestRunner {
         validationMessage: error.message,
       };
       transcript.push(errorTurn);
+
+      // Emit for real-time streaming
+      console.log(JSON.stringify({
+        type: 'conversation-turn',
+        testId,
+        runId,
+        turn: errorTurn,
+      }));
 
       console.error(`[GoalTestRunner] Message send failed:`, error.message);
       return null;
@@ -840,6 +1017,7 @@ export class GoalTestRunner {
    * @param transcript The conversation transcript
    * @param errorMessage Optional error message
    * @param resolvedPersona Optional resolved persona for dynamic tests
+   * @param flowiseSessionId Optional Flowise session ID for Langfuse session URL
    */
   private saveGoalTestResult(
     runId: string,
@@ -848,7 +1026,8 @@ export class GoalTestRunner {
     result: GoalTestResult,
     transcript: ConversationTurn[],
     errorMessage?: string,
-    resolvedPersona?: ResolvedPersona
+    resolvedPersona?: ResolvedPersona,
+    flowiseSessionId?: string
   ): void {
     try {
       // Convert to TestResult format for compatibility
@@ -891,6 +1070,10 @@ export class GoalTestRunner {
         });
       }
 
+      // Get Langfuse trace ID from context
+      const traceContext = getCurrentTraceContext();
+      const langfuseTraceId = traceContext?.traceId;
+
       const testResult: TestResult = {
         runId,
         testId,  // Use the effective testId (may include #N suffix for multiple runs)
@@ -903,6 +1086,8 @@ export class GoalTestRunner {
         errorMessage,
         transcript,
         findings,
+        langfuseTraceId,
+        flowiseSessionId,
       };
 
       const resultId = this.database.saveTestResult(testResult);
@@ -927,10 +1112,36 @@ export class GoalTestRunner {
         // Include resolved persona data for debugging/reproducibility
         resolvedPersonaJson: resolvedPersona ? JSON.stringify(resolvedPersona.resolved) : undefined,
         generationSeed: resolvedPersona?.metadata.seed,
+        langfuseTraceId,
+        // Flowise session ID for Langfuse session URL
+        flowiseSessionId,
       });
     } catch (error) {
       console.error('[GoalTestRunner] Failed to save test result:', error);
     }
+  }
+
+  /**
+   * Extract volunteered data using either semantic or regex-based extraction
+   */
+  private async extractVolunteeredDataFromMessage(message: string): Promise<VolunteeredData[]> {
+    if (this.config.useSemanticEntityExtractor) {
+      try {
+        // Use LLM-based semantic extraction
+        const extracted = await this.semanticEntityExtractor.extractVolunteered(message);
+        if (extracted.length > 0) {
+          console.log(`[GoalTestRunner] Semantic extraction found ${extracted.length} entities`);
+        }
+        return extracted;
+      } catch (error: any) {
+        console.warn(`[GoalTestRunner] Semantic extraction failed, falling back to regex: ${error.message}`);
+        // Fall back to regex extraction on error
+        return extractVolunteeredData(message);
+      }
+    }
+
+    // Use regex-based extraction
+    return extractVolunteeredData(message);
   }
 
   /**
