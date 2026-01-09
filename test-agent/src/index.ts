@@ -1408,6 +1408,8 @@ program
   .command('ab-run <experimentId>')
   .description('Run an A/B experiment')
   .option('-n, --iterations <n>', 'Number of iterations per variant', '10')
+  .option('-c, --concurrency <number>', 'Number of parallel workers (1-10, default: 1)', '1')
+  .option('-r, --retries <number>', 'Number of retries for flaky tests (0-3, default: 0)', '0')
   .action(async (experimentId, options) => {
     try {
       const db = new Database();
@@ -1438,82 +1440,201 @@ program
       }
 
       const iterations = parseInt(options.iterations, 10) || 10;
+      const concurrency = Math.min(10, Math.max(1, parseInt(options.concurrency, 10) || 1));
+      const maxRetries = Math.min(3, Math.max(0, parseInt(options.retries, 10) || 0));
       const totalRuns = iterations * 2; // Control + treatment
-      console.log(`\n Running ${totalRuns} test iterations (${iterations} per variant)...\n`);
+
+      const retryInfo = maxRetries > 0 ? ` with ${maxRetries} retr${maxRetries > 1 ? 'ies' : 'y'}` : '';
+      console.log(`\n Running ${totalRuns} test iterations (${iterations} per variant), concurrency ${concurrency}${retryInfo}...\n`);
 
       // Get goal test scenarios
       const dbScenarios = loadGoalTestsFromDatabase();
       const allGoalScenarios = [...goalHappyPathScenarios, ...dbScenarios];
 
+      // Get variant IDs for control and treatment
+      const controlVariant = experiment.variants.find(v => v.role === 'control');
+      const treatmentVariant = experiment.variants.find(v => v.role === 'treatment');
+
+      if (!controlVariant || !treatmentVariant) {
+        console.log(`\n Error: Experiment missing control or treatment variant\n`);
+        process.exit(1);
+      }
+
+      // Stats tracking (thread-safe in JS single-threaded event loop)
       let controlRuns = 0;
       let treatmentRuns = 0;
       let controlPassed = 0;
       let treatmentPassed = 0;
 
-      // Run iterations
-      for (let i = 0; i < totalRuns; i++) {
-        // Select variant
-        const selection = experimentService.selectVariant(experimentId, experiment.testIds[0]);
-        const isControl = selection.role === 'control';
+      /**
+       * Work item for A/B test execution
+       */
+      interface ABWorkItem {
+        iteration: number;
+        testId: string;
+        scenario: GoalOrientedTestCase;
+        retryAttempt: number;
+      }
 
-        console.log(`[${i + 1}/${totalRuns}] Running with ${isControl ? 'CONTROL' : 'TREATMENT'} variant...`);
+      /**
+       * Run a batch of iterations for a single variant in parallel
+       */
+      async function runVariantBatch(
+        variantId: string,
+        role: 'control' | 'treatment',
+        batchIterations: number
+      ): Promise<{ runs: number; passed: number }> {
+        console.log(`\n[${role.toUpperCase()}] Running ${batchIterations} iterations with concurrency ${concurrency}...\n`);
 
-        // Apply variant
-        await variantService.applyVariant(selection.variantId);
+        // Build work queue for this variant
+        // Note: experiment/controlVariant/treatmentVariant are guaranteed non-null by earlier checks
+        const workQueue: ABWorkItem[] = [];
+        for (let i = 0; i < batchIterations; i++) {
+          const testId = experiment!.testIds[Math.floor(Math.random() * experiment!.testIds.length)];
+          const scenario = allGoalScenarios.find(s => s.id === testId);
+          if (scenario) {
+            workQueue.push({ iteration: i, testId, scenario, retryAttempt: 0 });
+          }
+        }
+
+        if (workQueue.length === 0) {
+          console.log(`   No valid test scenarios found`);
+          return { runs: 0, passed: 0 };
+        }
+
+        // Apply variant once for the entire batch
+        await variantService.applyVariant(variantId);
+
+        // Selection template for this variant
+        const selectionTemplate = {
+          variantId,
+          role,
+          targetFile: controlVariant!.variantId === variantId
+            ? variantService.getVariant(controlVariant!.variantId)?.targetFile || ''
+            : variantService.getVariant(treatmentVariant!.variantId)?.targetFile || '',
+        };
+
+        let queueIndex = 0;
+        let batchRuns = 0;
+        let batchPassed = 0;
+
+        function getNextWorkItem(): ABWorkItem | null {
+          if (queueIndex >= workQueue.length) return null;
+          return workQueue[queueIndex++];
+        }
+
+        function requeueForRetry(item: ABWorkItem): void {
+          workQueue.push({ ...item, retryAttempt: item.retryAttempt + 1 });
+        }
+
+        /**
+         * Worker function for A/B test execution
+         */
+        async function runABWorker(workerId: number): Promise<{ runs: number; passed: number }> {
+          let workerRuns = 0;
+          let workerPassed = 0;
+
+          while (true) {
+            const workItem = getNextWorkItem();
+            if (!workItem) break;
+
+            const { iteration, testId, scenario, retryAttempt } = workItem;
+            const retryLabel = retryAttempt > 0 ? ` [retry ${retryAttempt}/${maxRetries}]` : '';
+
+            console.log(`[${role.toUpperCase()} W${workerId}] #${iteration + 1}${retryLabel}: ${testId}`);
+
+            try {
+              // Create runner using active config from settings
+              const sessionVars: Record<string, string> = {};
+              if (scenario.persona?.inventory?.parentPhone) {
+                sessionVars.c1mg_variable_caller_id_number = scenario.persona.inventory.parentPhone;
+              }
+              const flowiseClient = await FlowiseClient.forActiveConfig(undefined, sessionVars);
+              const intentDetector = new IntentDetector();
+              const runner = new GoalTestRunner(flowiseClient, db, intentDetector);
+
+              const runId = db.createTestRun();
+              const result = await runner.runTest(scenario, runId);
+
+              // Record experiment run
+              experimentService.recordTestResult(experimentId, runId, testId, selectionTemplate as any, {
+                passed: result.passed,
+                turnCount: result.turnCount,
+                durationMs: result.durationMs,
+                goalCompletionRate: result.goalResults.filter(g => g.passed).length / Math.max(result.goalResults.length, 1),
+                constraintViolations: result.constraintViolations.length,
+                errorOccurred: !!result.issues.find(i => i.type === 'error'),
+                goalsCompleted: result.goalResults.filter(g => g.passed).length,
+                goalsTotal: result.goalResults.length,
+                issuesDetected: result.issues.length,
+              });
+
+              // Handle retry logic
+              if (!result.passed && retryAttempt < maxRetries) {
+                requeueForRetry(workItem);
+                console.log(`[${role.toUpperCase()} W${workerId}] ✗ ${testId}${retryLabel} - retrying (${result.durationMs}ms)`);
+              } else {
+                workerRuns++;
+                if (result.passed) workerPassed++;
+                const status = result.passed ? '✓' : '✗';
+                const retriedNote = retryAttempt > 0 ? (result.passed ? ' (passed on retry)' : ' (failed after retries)') : '';
+                console.log(`[${role.toUpperCase()} W${workerId}] ${status} ${testId}${retriedNote} (${result.turnCount} turns, ${result.durationMs}ms)`);
+              }
+
+            } catch (error: any) {
+              if (retryAttempt < maxRetries) {
+                requeueForRetry(workItem);
+                console.log(`[${role.toUpperCase()} W${workerId}] ✗ ${testId}${retryLabel} - error, retrying: ${error.message}`);
+              } else {
+                workerRuns++;
+                const retriedNote = retryAttempt > 0 ? ' (failed after retries)' : '';
+                console.log(`[${role.toUpperCase()} W${workerId}] ✗ ${testId}${retriedNote} - error: ${error.message}`);
+              }
+            }
+          }
+
+          return { runs: workerRuns, passed: workerPassed };
+        }
 
         try {
-          // Run a random test from the experiment's test IDs
-          const testId = experiment.testIds[Math.floor(Math.random() * experiment.testIds.length)];
-          const scenario = allGoalScenarios.find(s => s.id === testId);
+          // Determine actual concurrency
+          const actualConcurrency = Math.min(concurrency, workQueue.length);
 
-          if (!scenario) {
-            console.log(`   Skipping: Test ${testId} not found`);
-            continue;
+          if (actualConcurrency > 1) {
+            console.log(`[${role.toUpperCase()}] Starting ${actualConcurrency} parallel workers...\n`);
           }
 
-          // Create runner using active config from settings
-          // Pass the persona's phone number as a session variable to simulate telephony caller ID
-          const sessionVars: Record<string, string> = {};
-          if (scenario.persona?.inventory?.parentPhone) {
-            sessionVars.c1mg_variable_caller_id_number = scenario.persona.inventory.parentPhone;
-          }
-          const flowiseClient = await FlowiseClient.forActiveConfig(undefined, sessionVars);
-          const intentDetector = new IntentDetector();
-          const runner = new GoalTestRunner(flowiseClient, db, intentDetector);
-
-          const runId = db.createTestRun();
-          const result = await runner.runTest(scenario, runId);
-
-          // Record experiment run
-          experimentService.recordTestResult(experimentId, runId, testId, selection, {
-            passed: result.passed,
-            turnCount: result.turnCount,
-            durationMs: result.durationMs,
-            goalCompletionRate: result.goalResults.filter(g => g.passed).length / Math.max(result.goalResults.length, 1),
-            constraintViolations: result.constraintViolations.length,
-            errorOccurred: !!result.issues.find(i => i.type === 'error'),
-            goalsCompleted: result.goalResults.filter(g => g.passed).length,
-            goalsTotal: result.goalResults.length,
-            issuesDetected: result.issues.length,
-          });
-
-          // Track stats
-          if (isControl) {
-            controlRuns++;
-            if (result.passed) controlPassed++;
-          } else {
-            treatmentRuns++;
-            if (result.passed) treatmentPassed++;
+          // Execute workers in parallel
+          const workerPromises: Promise<{ runs: number; passed: number }>[] = [];
+          for (let i = 0; i < actualConcurrency; i++) {
+            workerPromises.push(runABWorker(i));
           }
 
-          const status = result.passed ? '✓' : '✗';
-          console.log(`   ${status} ${testId} (${result.turnCount} turns, ${result.durationMs}ms)`);
+          const workerResults = await Promise.all(workerPromises);
+
+          // Aggregate results
+          for (const result of workerResults) {
+            batchRuns += result.runs;
+            batchPassed += result.passed;
+          }
 
         } finally {
-          // Always rollback
-          await variantService.rollback(selection.targetFile);
+          // Rollback variant after batch completes
+          await variantService.rollback(selectionTemplate.targetFile);
         }
+
+        return { runs: batchRuns, passed: batchPassed };
       }
+
+      // Run control batch
+      const controlResults = await runVariantBatch(controlVariant.variantId, 'control', iterations);
+      controlRuns = controlResults.runs;
+      controlPassed = controlResults.passed;
+
+      // Run treatment batch
+      const treatmentResults = await runVariantBatch(treatmentVariant.variantId, 'treatment', iterations);
+      treatmentRuns = treatmentResults.runs;
+      treatmentPassed = treatmentResults.passed;
 
       // Print summary
       console.log('\n');

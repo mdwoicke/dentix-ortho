@@ -465,7 +465,7 @@ export function ABTestingDashboard() {
                     <div className="mt-3 p-3 bg-yellow-50 dark:bg-yellow-900/20 text-yellow-700 dark:text-yellow-400 rounded text-sm">
                       Need more samples. Run more iterations via CLI:
                       <code className="block mt-1 bg-yellow-100 dark:bg-yellow-900/40 px-2 py-1 rounded text-xs">
-                        npx ts-node src/index.ts ab-run {selectedExperiment.experiment.experimentId} -n 10
+                        npx ts-node src/index.ts ab-run {selectedExperiment.experiment.experimentId} -n 10 -c 3
                       </code>
                     </div>
                   )}
@@ -510,8 +510,8 @@ export function ABTestingDashboard() {
             <p className="text-gray-600 dark:text-gray-400 mt-1">Create experiment from a fix</p>
           </div>
           <div className="p-3 bg-gray-50 dark:bg-gray-800 rounded">
-            <code className="text-primary-600 dark:text-primary-400">ab-run &lt;experimentId&gt; -n 10</code>
-            <p className="text-gray-600 dark:text-gray-400 mt-1">Run experiment iterations</p>
+            <code className="text-primary-600 dark:text-primary-400">ab-run &lt;experimentId&gt; -n 10 -c 3</code>
+            <p className="text-gray-600 dark:text-gray-400 mt-1">Run iterations (-n count, -c concurrency, -r retries)</p>
           </div>
           <div className="p-3 bg-gray-50 dark:bg-gray-800 rounded">
             <code className="text-primary-600 dark:text-primary-400">ab-status &lt;experimentId&gt;</code>
