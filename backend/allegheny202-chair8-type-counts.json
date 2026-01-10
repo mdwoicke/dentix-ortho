@@ -1,0 +1,99 @@
+{
+  "timestamp": "2026-01-10T13:13:24.554Z",
+  "location": "CDH - Allegheny 202",
+  "locationGUID": "1fef9297-7c8b-426b-b0d1-f2275136e48b",
+  "chair8SchdcolGUID": "07687884-7e37-49aa-8028-d43b751c9034",
+  "totalAppointments": 120,
+  "appointmentTypeCounts": [
+    {
+      "AppointmentTypeGUID": "db8bc1c2-dfd0-4dd6-989e-23060d82b9b0",
+      "Description": "Adjustment - 20 Min",
+      "Count": 56
+    },
+    {
+      "AppointmentTypeGUID": "33a6aefe-6932-41db-8bbe-95236c7a31b3",
+      "Description": "Adjustment - Long",
+      "Count": 11
+    },
+    {
+      "AppointmentTypeGUID": "a22feff5-1cee-ec24-3cb7-4cd20cae3630",
+      "Description": "Records MA Exam",
+      "Count": 8
+    },
+    {
+      "AppointmentTypeGUID": "f6c20c35-9abb-47c2-981a-342996016705",
+      "Description": "Exam - PPO/Self",
+      "Count": 7
+    },
+    {
+      "AppointmentTypeGUID": "1cb4bcb3-0afd-4f5f-9611-594bc5ef273e",
+      "Description": "Observation",
+      "Count": 6
+    },
+    {
+      "AppointmentTypeGUID": "854582d6-ab65-4ac7-a054-6a905b68bd66",
+      "Description": "Appliance Check",
+      "Count": 6
+    },
+    {
+      "AppointmentTypeGUID": "77a18c46-a90c-432c-8d09-71612492ed81",
+      "Description": "Progress Review",
+      "Count": 4
+    },
+    {
+      "AppointmentTypeGUID": "8fe6b3b0-35fc-4a08-bd79-3dbb00ddcbc8",
+      "Description": "Scan - Final scan &amp; check",
+      "Count": 4
+    },
+    {
+      "AppointmentTypeGUID": "4288bb16-2dba-4762-882e-0227c56b6270",
+      "Description": "Repositioning Brackets",
+      "Count": 3
+    },
+    {
+      "AppointmentTypeGUID": "7351cb28-5064-41c8-b050-017557bb3aa4",
+      "Description": "Retainer Check",
+      "Count": 2
+    },
+    {
+      "AppointmentTypeGUID": "f74b72db-b620-f3ea-b370-6580f9c7a66c",
+      "Description": "Debond - Full Comp",
+      "Count": 2
+    },
+    {
+      "AppointmentTypeGUID": "b065b156-52b1-41d4-ae84-5a874acc0340",
+      "Description": "Emergency",
+      "Count": 2
+    },
+    {
+      "AppointmentTypeGUID": "127ce34e-60d4-43e9-b323-e6b8224a8ca3",
+      "Description": "Scan / Impressions",
+      "Count": 2
+    },
+    {
+      "AppointmentTypeGUID": "e76279ac-2615-4186-8b51-0a154ed79aac",
+      "Description": "Bond - Upto 1 Arch",
+      "Count": 2
+    },
+    {
+      "AppointmentTypeGUID": "e9c81b26-47c7-44df-92d4-2f44323d8cdd",
+      "Description": "Start - Medicaid Approved Full Comprehensive Tx",
+      "Count": 2
+    },
+    {
+      "AppointmentTypeGUID": "dedfa678-bf11-4b3a-a3d3-5af2451e21ca",
+      "Description": "Delivery - Appliance ",
+      "Count": 1
+    },
+    {
+      "AppointmentTypeGUID": "6d723fef-cb58-a25f-fb7d-0e83e9da1dfe",
+      "Description": "Start - Full Comprehensive",
+      "Count": 1
+    },
+    {
+      "AppointmentTypeGUID": "59a221fe-ee52-43c3-ba56-b4d48ee018ab",
+      "Description": "Debond due to Non-Compliance",
+      "Count": 1
+    }
+  ]
+}

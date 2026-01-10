@@ -1,0 +1,499 @@
+{
+  "timestamp": "2026-01-10T00:55:49.273Z",
+  "target": {
+    "locGUID": "799d413a-5e1a-46a2-b169-e2108bf517d6",
+    "locName": "CDH - Allegheny 300M",
+    "schdvwGUID": "b1946f40-3b0b-4e01-87a9-c5060b88443e",
+    "schdcolGUID": "dda0b40c-ace5-4427-8b76-493bf9aa26f1",
+    "schdcolDescription": "Chair 8"
+  },
+  "allAppointmentTypes": [
+    {
+      "AppointmentTypeGUID": "db8bc1c2-dfd0-4dd6-989e-23060d82b9b0",
+      "AppointmentTypeCode": "ADJ-20",
+      "AppointmentTypeDescription": "Adjustment - 20 Min",
+      "AppointmentTypeMinutes": "20",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "True"
+    },
+    {
+      "AppointmentTypeGUID": "33a6aefe-6932-41db-8bbe-95236c7a31b3",
+      "AppointmentTypeCode": "ADJ-40",
+      "AppointmentTypeDescription": "Adjustment - Long",
+      "AppointmentTypeMinutes": "40",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "854582d6-ab65-4ac7-a054-6a905b68bd66",
+      "AppointmentTypeCode": "APP-CK",
+      "AppointmentTypeDescription": "Appliance Check",
+      "AppointmentTypeMinutes": "10",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "1f7d83fa-fd78-4c46-8c8a-d990a4581856",
+      "AppointmentTypeCode": "APP-REM",
+      "AppointmentTypeDescription": "Appliance Removal",
+      "AppointmentTypeMinutes": "30",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "e76279ac-2615-4186-8b51-0a154ed79aac",
+      "AppointmentTypeCode": "BA/REPO",
+      "AppointmentTypeDescription": "Bond - Upto 1 Arch",
+      "AppointmentTypeMinutes": "40",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "cf6aa261-098c-47f3-8bbe-2924da01420e",
+      "AppointmentTypeCode": "DB-EARLY ",
+      "AppointmentTypeDescription": "Debond - Early Termination",
+      "AppointmentTypeMinutes": "40",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "f74b72db-b620-f3ea-b370-6580f9c7a66c",
+      "AppointmentTypeCode": "DB-FULL",
+      "AppointmentTypeDescription": "Debond - Full Comp",
+      "AppointmentTypeMinutes": "60",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "7f05265f-4adc-eea0-cfeb-2cecb42bb22a",
+      "AppointmentTypeCode": "DB-INV",
+      "AppointmentTypeDescription": "Debond Invisalign/Aligner Tx",
+      "AppointmentTypeMinutes": "60",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "59a221fe-ee52-43c3-ba56-b4d48ee018ab",
+      "AppointmentTypeCode": "DB-NON-C",
+      "AppointmentTypeDescription": "Debond due to Non-Compliance",
+      "AppointmentTypeMinutes": "60",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "6cfc0fb7-6847-4607-83ee-91672e67ccf7",
+      "AppointmentTypeCode": "DB-PH1",
+      "AppointmentTypeDescription": "Debond - Phase I",
+      "AppointmentTypeMinutes": "40",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "dedfa678-bf11-4b3a-a3d3-5af2451e21ca",
+      "AppointmentTypeCode": "DEL-APP",
+      "AppointmentTypeDescription": "Delivery - Appliance ",
+      "AppointmentTypeMinutes": "30",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "e0c4f6ed-b58b-4ccb-8b18-4b96c4be19bb",
+      "AppointmentTypeCode": "DEL-R-RT",
+      "AppointmentTypeDescription": "Delivery Replacement Retainers",
+      "AppointmentTypeMinutes": "10",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "e640d8ec-1885-42c0-80f8-44bd8f3275c7",
+      "AppointmentTypeCode": "DEL-RT",
+      "AppointmentTypeDescription": "Delivery - Retainers at Debond",
+      "AppointmentTypeMinutes": "10",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "b065b156-52b1-41d4-ae84-5a874acc0340",
+      "AppointmentTypeCode": "EMER",
+      "AppointmentTypeDescription": "Emergency",
+      "AppointmentTypeMinutes": "20",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "50a6a502-bf67-4b82-8e51-fa01328038c4",
+      "AppointmentTypeCode": "Emer",
+      "AppointmentTypeDescription": "Emergency Long",
+      "AppointmentTypeMinutes": "30",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "7465315a-ad63-4716-918a-cc73de07799d",
+      "AppointmentTypeCode": "Emergency 10",
+      "AppointmentTypeDescription": "Emergency 10 NO BROKEN BRACKETS",
+      "AppointmentTypeMinutes": "10",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "afaa92fb-9115-4ae1-a4d7-696fba1ac801",
+      "AppointmentTypeCode": "EVAL-DB",
+      "AppointmentTypeDescription": "eval for deband",
+      "AppointmentTypeMinutes": "20",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "f6c20c35-9abb-47c2-981a-342996016705",
+      "AppointmentTypeCode": "EX",
+      "AppointmentTypeDescription": "Exam - PPO/Self",
+      "AppointmentTypeMinutes": "40",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "True"
+    },
+    {
+      "AppointmentTypeGUID": "6c24bff0-e57d-48b3-a07a-d56b4426726f",
+      "AppointmentTypeCode": "EX-R",
+      "AppointmentTypeDescription": "Rec + Fin Consult for Obs Pt",
+      "AppointmentTypeMinutes": "40",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "2a6c18ea-b8a0-4af5-b510-3eb601785813",
+      "AppointmentTypeCode": "EX-T",
+      "AppointmentTypeDescription": "Exam Transfer In",
+      "AppointmentTypeMinutes": "40",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "57091893-1daa-4f3a-a0fd-62f2e74638a6",
+      "AppointmentTypeCode": "FIT-APP",
+      "AppointmentTypeDescription": "Fit / Impress for Appliance",
+      "AppointmentTypeMinutes": "30",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "aec3c41c-4f33-e726-9988-0653c405732a",
+      "AppointmentTypeCode": "INV-CK",
+      "AppointmentTypeDescription": "Inv - Check Trays",
+      "AppointmentTypeMinutes": "20",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "1f3230fe-4932-516f-4d46-dadfbb5d3a94",
+      "AppointmentTypeCode": "INV-DEL",
+      "AppointmentTypeDescription": "Inv - Initial Delivery",
+      "AppointmentTypeMinutes": "40",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "749c27a1-d14a-440c-9681-33de12d6bfb3",
+      "AppointmentTypeCode": "INV-R",
+      "AppointmentTypeDescription": "Inv - Refinement",
+      "AppointmentTypeMinutes": "40",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "1804548a-f7d9-0ea1-fa90-5f5395b483a8",
+      "AppointmentTypeCode": "INV-REM",
+      "AppointmentTypeDescription": "Inv - Remove Attachments",
+      "AppointmentTypeMinutes": "40",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "5acbd105-60e3-4156-8ce2-a974b257a289",
+      "AppointmentTypeCode": "LA- GING 1",
+      "AppointmentTypeDescription": "Laser- Gingivectomy per tooth",
+      "AppointmentTypeMinutes": "20",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "ad9a2204-e05c-4d3d-abeb-42bdfaacbf0c",
+      "AppointmentTypeCode": "LA-B/L FREN",
+      "AppointmentTypeDescription": "Laser- Buccal/Labial Frenectomy",
+      "AppointmentTypeMinutes": "40",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "1dd07359-cc96-477b-abb1-04d4d7b4fb2f",
+      "AppointmentTypeCode": "LA-GING 1-3",
+      "AppointmentTypeDescription": "Laser- Gingivectomy 1-3 teeth per qaud",
+      "AppointmentTypeMinutes": "40",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "7c2ee38d-a74b-4eee-9625-3cd15be36602",
+      "AppointmentTypeCode": "LA-LING FREN",
+      "AppointmentTypeDescription": "Laser- Lingual Frenectomy",
+      "AppointmentTypeMinutes": "40",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "a15aea1d-ca96-4fe9-8186-dee0b4331e2c",
+      "AppointmentTypeCode": "LA-SA",
+      "AppointmentTypeDescription": "Laser- Surgical Access ",
+      "AppointmentTypeMinutes": "40",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "2eb998d5-c25f-4f89-b667-b4a45cd9ae7a",
+      "AppointmentTypeCode": "M-10",
+      "AppointmentTypeDescription": "Misc 10",
+      "AppointmentTypeMinutes": "10",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "b08a20a8-5f15-4bf8-ad25-3d6f276a8aeb",
+      "AppointmentTypeCode": "MAIN",
+      "AppointmentTypeDescription": "Maintenance Check",
+      "AppointmentTypeMinutes": "20",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "a9c3652a-b3f1-4af1-a07b-9015acdc2cbb",
+      "AppointmentTypeCode": "MTT",
+      "AppointmentTypeDescription": "Mini Talk Time w/ Dr.",
+      "AppointmentTypeMinutes": "40",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "1cb4bcb3-0afd-4f5f-9611-594bc5ef273e",
+      "AppointmentTypeCode": "OBS",
+      "AppointmentTypeDescription": "Observation",
+      "AppointmentTypeMinutes": "20",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "77a18c46-a90c-432c-8d09-71612492ed81",
+      "AppointmentTypeCode": "PR",
+      "AppointmentTypeDescription": "Progress Review",
+      "AppointmentTypeMinutes": "40",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "4288bb16-2dba-4762-882e-0227c56b6270",
+      "AppointmentTypeCode": "REPO",
+      "AppointmentTypeDescription": "Repositioning Brackets",
+      "AppointmentTypeMinutes": "40",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "7351cb28-5064-41c8-b050-017557bb3aa4",
+      "AppointmentTypeCode": "RET-CK",
+      "AppointmentTypeDescription": "Retainer Check",
+      "AppointmentTypeMinutes": "10",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "a22feff5-1cee-ec24-3cb7-4cd20cae3630",
+      "AppointmentTypeCode": "R-MA",
+      "AppointmentTypeDescription": "Records MA Exam",
+      "AppointmentTypeMinutes": "30",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "1a0b1c42-18e0-437d-9a40-41c37b2b42ce",
+      "AppointmentTypeCode": "S-AO",
+      "AppointmentTypeDescription": "Start - Appliance Therapy Only",
+      "AppointmentTypeMinutes": "40",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "2a3ecf4c-5b4e-4a7e-bc40-dc574905fae2",
+      "AppointmentTypeCode": "S-AS",
+      "AppointmentTypeDescription": "Start - Aligners Treatment (Scan)",
+      "AppointmentTypeMinutes": "40",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "8fe6b3b0-35fc-4a08-bd79-3dbb00ddcbc8",
+      "AppointmentTypeCode": "SC-40",
+      "AppointmentTypeDescription": "Scan - Final scan &amp; check",
+      "AppointmentTypeMinutes": "40",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "127ce34e-60d4-43e9-b323-e6b8224a8ca3",
+      "AppointmentTypeCode": "SC-IM",
+      "AppointmentTypeDescription": "Scan / Impressions",
+      "AppointmentTypeMinutes": "20",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "4c1a855d-e5e1-47e7-b3c2-5c879f0c2a25",
+      "AppointmentTypeCode": "S-DNQ FC",
+      "AppointmentTypeDescription": "Start - Does Not Qualify for MA (Full Comp)",
+      "AppointmentTypeMinutes": "60",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "6a7e39ac-929f-44f1-a710-6cb86e0226e4",
+      "AppointmentTypeCode": "S-DNQ-PH1",
+      "AppointmentTypeDescription": "Start - Does Not Qualify for MA (PH1)",
+      "AppointmentTypeMinutes": "40",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "9d95b688-f139-46ef-ad8c-2f615ee0fbb5",
+      "AppointmentTypeCode": "SEPS",
+      "AppointmentTypeDescription": "Separators",
+      "AppointmentTypeMinutes": "10",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "6d723fef-cb58-a25f-fb7d-0e83e9da1dfe",
+      "AppointmentTypeCode": "SFC",
+      "AppointmentTypeDescription": "Start - Full Comprehensive",
+      "AppointmentTypeMinutes": "60",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "e9c81b26-47c7-44df-92d4-2f44323d8cdd",
+      "AppointmentTypeCode": "S-MA-FC",
+      "AppointmentTypeDescription": "Start - Medicaid Approved Full Comprehensive Tx",
+      "AppointmentTypeMinutes": "60",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "1e80faf5-c2fb-4278-9716-1c5a91c0b3dd",
+      "AppointmentTypeCode": "S-MA-PH1",
+      "AppointmentTypeDescription": "Start - Medicaid Approved Phase 1",
+      "AppointmentTypeMinutes": "40",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "f6023ab5-4b45-454d-9932-bbcb6d20943c",
+      "AppointmentTypeCode": "SPH1",
+      "AppointmentTypeDescription": "Start - Phase I",
+      "AppointmentTypeMinutes": "40",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "74a5a1b2-d5c3-4ddd-8b5d-3ea75fc0f079",
+      "AppointmentTypeCode": "S-PH2",
+      "AppointmentTypeDescription": "Start - Phase 2",
+      "AppointmentTypeMinutes": "60",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "35d2912d-ac33-4f07-9b60-2ead69a4226d",
+      "AppointmentTypeCode": "S-TR",
+      "AppointmentTypeDescription": "Start - Transfer In",
+      "AppointmentTypeMinutes": "40",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    },
+    {
+      "AppointmentTypeGUID": "d1e3d82f-cabd-4c16-9e07-22caac90f76b",
+      "AppointmentTypeCode": "XRO",
+      "AppointmentTypeDescription": "Records/X-Rays Only",
+      "AppointmentTypeMinutes": "20",
+      "AppointmentTypeDeleted": "0",
+      "AppointmentTypeGaidgeCode": "",
+      "AppointmentTypeAllowOnlineScheduling": "False"
+    }
+  ],
+  "allProviders": [],
+  "chair8Details": [
+    {
+      "locGUID": "799d413a-5e1a-46a2-b169-e2108bf517d6",
+      "locName": "CDH - Allegheny 300M",
+      "schdvwGUID": "b1946f40-3b0b-4e01-87a9-c5060b88443e",
+      "schdvwDescription": "CDH - Allegheny",
+      "schdvwStartTime": "11/7/2024 7:30:00 AM",
+      "schdvwEndTime": "11/7/2024 6:00:00 PM",
+      "schdcolGUID": "dda0b40c-ace5-4427-8b76-493bf9aa26f1",
+      "schdcolDescription": "Chair 8",
+      "svcOrder": "8"
+    }
+  ],
+  "patientCount": 37,
+  "appointmentCount": 0,
+  "appointmentTypesUsed": [],
+  "providersUsed": [],
+  "sampleAppointments": []
+}
