@@ -3,7 +3,7 @@
  * Main page for running skills/plugins via SSH
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { SkillSelector } from '../../components/features/skillsRunner/SkillSelector';
@@ -22,7 +22,18 @@ import {
 } from '../../services/api/skillsRunner';
 import type { SSHTarget, SSHTargetsConfig } from '../../services/api/skillsRunner';
 
+// Skills that use CLI/PTY (subscription auth) - uses terminal, no API credits
+const CLI_SKILL_IDS = ['claude-plugin', 'claude-skill-runner-pty'];
+
+// Skills that use API credits (--print mode or LLM service)
+const API_SKILL_IDS = ['claude-cli-llm', 'claude-cli', 'claude-analyze-file', 'claude-skill-runner', 'claude-plugin-print'];
+
+type AuthMode = 'cli' | 'api';
+
 export function SkillsRunnerPage() {
+  // Auth mode toggle - CLI (subscription) vs API Credits
+  const [authMode, setAuthMode] = useState<AuthMode>('cli');
+
   // Skills state
   const [skills, setSkills] = useState<Skill[]>([]);
   const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
@@ -38,6 +49,28 @@ export function SkillsRunnerPage() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [lastExitCode, setLastExitCode] = useState<number | null>(null);
+
+  // Filter skills based on auth mode
+  // - Non-AI skills are always shown
+  // - AI skills are filtered based on whether they use CLI (subscription) or API credits
+  const filteredSkills = useMemo(() => {
+    return skills.filter(skill => {
+      // If skill is not in either list, always show it (non-AI skills)
+      const isCLISkill = CLI_SKILL_IDS.includes(skill.id);
+      const isAPISkill = API_SKILL_IDS.includes(skill.id);
+
+      if (!isCLISkill && !isAPISkill) {
+        return true; // Non-AI skill, always show
+      }
+
+      // Show based on selected auth mode
+      if (authMode === 'cli') {
+        return isCLISkill || !isAPISkill;
+      } else {
+        return isAPISkill || !isCLISkill;
+      }
+    });
+  }, [skills, authMode]);
 
   // Load skills on mount
   useEffect(() => {
@@ -55,6 +88,17 @@ export function SkillsRunnerPage() {
 
     loadSkills();
   }, []);
+
+  // Reset selected skill when auth mode changes if the skill is no longer available
+  useEffect(() => {
+    if (selectedSkill) {
+      const skillStillAvailable = filteredSkills.some(s => s.id === selectedSkill.id);
+      if (!skillStillAvailable) {
+        setSelectedSkill(null);
+        setInputs({});
+      }
+    }
+  }, [authMode, filteredSkills, selectedSkill]);
 
   // Load SSH targets on mount
   useEffect(() => {
@@ -157,9 +201,43 @@ export function SkillsRunnerPage() {
           </h1>
           <p className="text-sm text-gray-500 dark:text-gray-400">
             Execute skills and tools via SSH
+            <span className="ml-2 text-xs">
+              {authMode === 'cli' ? (
+                <span className="text-green-600 dark:text-green-400">(Using Claude Subscription)</span>
+              ) : (
+                <span className="text-amber-600 dark:text-amber-400">(Using API Credits)</span>
+              )}
+            </span>
           </p>
         </div>
         <div className="flex items-center gap-4">
+          {/* Auth Mode Toggle */}
+          <div className="flex items-center gap-2 bg-gray-100 dark:bg-gray-700 rounded-lg p-1">
+            <button
+              onClick={() => setAuthMode('cli')}
+              disabled={isRunning}
+              className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                authMode === 'cli'
+                  ? 'bg-white dark:bg-gray-600 text-primary-600 dark:text-primary-400 shadow-sm'
+                  : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+              }`}
+              title="Uses Claude subscription (PTY mode)"
+            >
+              CLI
+            </button>
+            <button
+              onClick={() => setAuthMode('api')}
+              disabled={isRunning}
+              className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                authMode === 'api'
+                  ? 'bg-white dark:bg-gray-600 text-primary-600 dark:text-primary-400 shadow-sm'
+                  : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+              }`}
+              title="Uses API credits (--print mode)"
+            >
+              API Credits
+            </button>
+          </div>
           {/* Target Selector */}
           <div className="flex items-center gap-2">
             <label className="text-sm text-gray-600 dark:text-gray-400">Target:</label>
@@ -207,7 +285,7 @@ export function SkillsRunnerPage() {
         {/* Left Panel - Skill Selector */}
         <div className="col-span-4 min-h-0">
           <SkillSelector
-            skills={skills}
+            skills={filteredSkills}
             selectedSkill={selectedSkill}
             onSkillSelect={handleSkillSelect}
             inputs={inputs}

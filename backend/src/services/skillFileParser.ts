@@ -120,8 +120,10 @@ export function parseSkillFile(filePath: string, projectRoot?: string): ParsedSk
 
 /**
  * Discover all skill files in a directory
+ * @param skillsDir - Absolute path to the skills directory
+ * @param projectRoot - Optional project root for computing relative paths
  */
-export function discoverSkillFiles(skillsDir: string): SkillFileInfo[] {
+export function discoverSkillFiles(skillsDir: string, projectRoot?: string): SkillFileInfo[] {
   const skills: SkillFileInfo[] = [];
 
   // Check if directory exists
@@ -146,8 +148,13 @@ export function discoverSkillFiles(skillsDir: string): SkillFileInfo[] {
       const name = frontmatter.name || extractNameFromFilename(file);
       const description = frontmatter.description;
 
+      // Return relative path if projectRoot is provided, otherwise absolute
+      const relativePath = projectRoot
+        ? path.relative(projectRoot, filePath).replace(/\\/g, '/')
+        : filePath;
+
       skills.push({
-        path: filePath,
+        path: relativePath,
         name,
         description,
       });

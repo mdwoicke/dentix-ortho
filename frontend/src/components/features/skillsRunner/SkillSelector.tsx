@@ -7,6 +7,7 @@ import { useState, useEffect } from 'react';
 import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
 import { SkillFileSelector } from './SkillFileSelector';
+import { PluginSelector } from './PluginSelector';
 
 export interface SkillInput {
   name: string;
@@ -28,7 +29,7 @@ export interface Skill {
   command?: string;
   category: string;
   inputs: SkillInput[];
-  skillType?: 'claude-skill-file';  // Optional skill type for special handling
+  skillType?: 'claude-skill-file' | 'pty-skill-file' | 'pty';  // Optional skill type for special handling
 }
 
 interface SkillSelectorProps {
@@ -98,12 +99,23 @@ export function SkillSelector({
       disabled:opacity-50 disabled:cursor-not-allowed
     `;
 
-    // Special handling for skill file path in claude-skill-file type skills
-    if (selectedSkill?.skillType === 'claude-skill-file' && input.name === 'skillFilePath') {
+    // Special handling for skill file path in skill file type skills (both API and PTY)
+    if ((selectedSkill?.skillType === 'claude-skill-file' || selectedSkill?.skillType === 'pty-skill-file') && input.name === 'skillFilePath') {
       return (
         <SkillFileSelector
           value={String(value)}
           onChange={(path) => onInputChange(input.name, path)}
+          disabled={isRunning}
+        />
+      );
+    }
+
+    // Special handling for plugin command in plugin skills (claude-plugin, claude-plugin-print)
+    if ((selectedSkill?.id === 'claude-plugin' || selectedSkill?.id === 'claude-plugin-print') && input.name === 'plugin') {
+      return (
+        <PluginSelector
+          value={String(value)}
+          onChange={(command) => onInputChange(input.name, command)}
           disabled={isRunning}
         />
       );

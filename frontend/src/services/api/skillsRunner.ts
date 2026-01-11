@@ -65,7 +65,15 @@ export interface SSHSession {
 export interface SkillFileInfo {
   path: string;
   name: string;
-  description?: string; // skill file description
+  description?: string;
+}
+
+export interface PluginCommand {
+  command: string;
+  fullCommand: string;
+  pluginName: string;
+  description?: string;
+  filePath: string;
 }
 
 interface ApiResponse<T> {
@@ -195,6 +203,23 @@ export async function fetchSkillFiles(): Promise<SkillFileInfo[]> {
   return response.data.data || [];
 }
 
+// Plugin Commands API
+export async function fetchPluginCommands(): Promise<PluginCommand[]> {
+  const response = await api.get<ApiResponse<PluginCommand[]>>('/plugin-commands');
+  if (!response.data.success) {
+    throw new Error(response.data.error || 'Failed to fetch plugin commands');
+  }
+  return response.data.data || [];
+}
+
+export async function fetchPluginCommandsByPlugin(): Promise<Record<string, PluginCommand[]>> {
+  const response = await api.get<ApiResponse<Record<string, PluginCommand[]>>>('/plugin-commands/by-plugin');
+  if (!response.data.success) {
+    throw new Error(response.data.error || 'Failed to fetch plugin commands');
+  }
+  return response.data.data || {};
+}
+
 // Export all functions as a service object
 export const skillsRunnerApi = {
   fetchSkills,
@@ -209,7 +234,9 @@ export const skillsRunnerApi = {
   deleteSSHTarget,
   setDefaultSSHTarget,
   testSSHConnection,
-  fetchSkillFiles
+  fetchSkillFiles,
+  fetchPluginCommands,
+  fetchPluginCommandsByPlugin
 };
 
 export default skillsRunnerApi;

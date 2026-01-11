@@ -31,6 +31,16 @@ router.get('/skills/:skillId', skillsRunnerController.getSkill);
 router.get('/skill-files', skillsRunnerController.getSkillFiles);
 
 // =============================================================================
+// PLUGIN COMMANDS ROUTES
+// =============================================================================
+
+// GET /api/skills-runner/plugin-commands - List available plugin commands
+router.get('/plugin-commands', skillsRunnerController.getPluginCommands);
+
+// GET /api/skills-runner/plugin-commands/by-plugin - Get commands grouped by plugin
+router.get('/plugin-commands/by-plugin', skillsRunnerController.getPluginCommandsByPlugin);
+
+// =============================================================================
 // EXECUTION ROUTES
 // =============================================================================
 

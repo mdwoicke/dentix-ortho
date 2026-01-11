@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { sshService } from '../services/sshService';
 import { skillsRegistry } from '../services/skillsRegistry';
 import { getClaudeSkillService } from '../services/claudeSkillService';
+import { ptyService } from '../services/ptyService';
 
 // =============================================================================
 // VALIDATION SCHEMAS
@@ -149,7 +150,7 @@ export async function executeSkill(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    // Check if this is a Claude skill file execution
+    // Check if this is a Claude skill file execution (API mode)
     if ((skill as any).skillType === 'claude-skill-file') {
       // Execute via Claude Skill Service
       const claudeSkillService = getClaudeSkillService();
@@ -166,6 +167,93 @@ export async function executeSkill(req: Request, res: Response): Promise<void> {
           skillId,
           targetId,
           skillType: 'claude-skill-file'
+        }
+      });
+      return;
+    }
+
+    // Check if this is a PTY-based skill file execution (subscription mode)
+    if ((skill as any).skillType === 'pty-skill-file') {
+      const fs = await import('fs/promises');
+      const path = await import('path');
+
+      // Get project root (same logic as claudeSkillService)
+      const projectRoot = process.env.PROJECT_ROOT ||
+        process.cwd().replace(/[\\/]backend$/, '');
+
+      // Get work directory from target config (for PTY execution directory)
+      const target = sshService.getTargetsConfig().targets.find(t => t.id === targetId);
+      const workDir = target?.workDir || projectRoot;
+
+      // Read skill file content - resolve from project root
+      const skillFilePath = inputs.skillFilePath as string;
+      const fullPath = path.resolve(projectRoot, skillFilePath);
+
+      let systemPrompt: string;
+      try {
+        systemPrompt = await fs.readFile(fullPath, 'utf-8');
+      } catch (error) {
+        res.status(400).json({
+          success: false,
+          error: `Failed to read skill file: ${skillFilePath}`,
+          details: (error as Error).message
+        });
+        return;
+      }
+
+      // Escape the system prompt for shell (replace single quotes)
+      const escapedSystemPrompt = systemPrompt.replace(/'/g, "'\\''");
+      const userPrompt = (inputs.userPrompt as string).replace(/'/g, "'\\''");
+
+      // Build command: claude with system prompt and user prompt
+      const command = `claude --system-prompt $'${escapedSystemPrompt.replace(/\n/g, '\\n')}' -p $'${userPrompt.replace(/\n/g, '\\n')}'`;
+
+      // Execute via PTY with options
+      const { sessionId } = await ptyService.execute(command, {
+        workDir,
+        stripAnsi: true,
+        autoExit: true,
+        autoExitDelay: 3000, // Longer delay for skill files
+      });
+
+      res.json({
+        success: true,
+        data: {
+          sessionId,
+          skillId,
+          targetId,
+          skillType: 'pty-skill-file',
+          skillFile: skillFilePath
+        }
+      });
+      return;
+    }
+
+    // Check if this is a PTY-based execution (for interactive CLI like Claude plugins)
+    if ((skill as any).skillType === 'pty') {
+      // Build command
+      const command = skillsRegistry.buildCommand(skill, inputs, targetId);
+
+      // Get work directory from target config
+      const target = sshService.getTargetsConfig().targets.find(t => t.id === targetId);
+      const workDir = target?.workDir;
+
+      // Execute via PTY with options
+      const { sessionId } = await ptyService.execute(command, {
+        workDir,
+        stripAnsi: true,
+        autoExit: true,
+        autoExitDelay: 2000,
+      });
+
+      res.json({
+        success: true,
+        data: {
+          sessionId,
+          skillId,
+          targetId,
+          skillType: 'pty',
+          command
         }
       });
       return;
@@ -210,9 +298,18 @@ export async function streamSession(req: Request, res: Response): Promise<void> 
 
   // Try SSH service first
   let sessionData = sshService.getSessionData(sessionId);
-  let sessionSource: 'ssh' | 'claude-skill' = 'ssh';
+  let sessionSource: 'ssh' | 'claude-skill' | 'pty' = 'ssh';
 
-  // If not found in SSH service, try Claude skill service
+  // If not found in SSH service, try PTY service
+  if (!sessionData) {
+    const ptySessionData = ptyService.getSessionData(sessionId);
+    if (ptySessionData) {
+      sessionSource = 'pty';
+      sessionData = ptySessionData;
+    }
+  }
+
+  // If not found in PTY service, try Claude skill service
   if (!sessionData) {
     const claudeSkillService = getClaudeSkillService();
     const claudeSession = claudeSkillService.getSession(sessionId);
@@ -308,7 +405,13 @@ export async function sendSessionInput(req: Request, res: Response): Promise<voi
       return;
     }
 
-    const success = sshService.sendInput(sessionId, input);
+    // Try SSH service first
+    let success = sshService.sendInput(sessionId, input);
+
+    // If not found in SSH service, try PTY service
+    if (!success) {
+      success = ptyService.sendInput(sessionId, input);
+    }
 
     if (!success) {
       res.status(404).json({
@@ -339,7 +442,12 @@ export async function killSession(req: Request, res: Response): Promise<void> {
     // Try SSH service first
     let success = sshService.killSession(sessionId);
 
-    // If not found in SSH service, try Claude skill service
+    // If not found in SSH service, try PTY service
+    if (!success) {
+      success = ptyService.killSession(sessionId);
+    }
+
+    // If not found in PTY service, try Claude skill service
     if (!success) {
       const claudeSkillService = getClaudeSkillService();
       success = claudeSkillService.killSession(sessionId);
@@ -522,6 +630,54 @@ export async function getSkillFiles(_req: Request, res: Response): Promise<void>
     res.status(500).json({
       success: false,
       error: 'Failed to get skill files'
+    });
+  }
+}
+
+// =============================================================================
+// PLUGIN COMMANDS ENDPOINTS
+// =============================================================================
+
+/**
+ * GET /api/skills-runner/plugin-commands
+ * List available Claude plugin commands (built-in + installed plugins)
+ */
+export async function getPluginCommands(_req: Request, res: Response): Promise<void> {
+  try {
+    const { getAllAvailableCommands } = await import('../services/pluginParser');
+    const commands = getAllAvailableCommands();
+
+    res.json({
+      success: true,
+      data: commands
+    });
+  } catch (error) {
+    console.error('Error getting plugin commands:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get plugin commands'
+    });
+  }
+}
+
+/**
+ * GET /api/skills-runner/plugin-commands/by-plugin
+ * Get plugin commands grouped by plugin name
+ */
+export async function getPluginCommandsByPlugin(_req: Request, res: Response): Promise<void> {
+  try {
+    const { getCommandsByPlugin } = await import('../services/pluginParser');
+    const commandsByPlugin = getCommandsByPlugin();
+
+    res.json({
+      success: true,
+      data: commandsByPlugin
+    });
+  } catch (error) {
+    console.error('Error getting plugin commands by plugin:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get plugin commands'
     });
   }
 }

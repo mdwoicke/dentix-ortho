@@ -204,7 +204,7 @@ class ClaudeSkillService {
    */
   getSkillFiles(): SkillFileInfo[] {
     const skillsDir = getDefaultSkillsDir(this.projectRoot);
-    return discoverSkillFiles(skillsDir);
+    return discoverSkillFiles(skillsDir, this.projectRoot);
   }
 
   /**

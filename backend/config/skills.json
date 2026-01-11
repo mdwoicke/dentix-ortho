@@ -17,6 +17,91 @@
       "inputs": []
     },
     {
+      "id": "git-status",
+      "name": "Git Status",
+      "description": "Show git status with file changes summary",
+      "command": "cd {{workDir}} && git status && echo '--- Recent Commits ---' && git log --oneline -5",
+      "category": "git",
+      "inputs": []
+    },
+    {
+      "id": "git-diff",
+      "name": "Git Diff",
+      "description": "Show uncommitted changes",
+      "command": "cd {{workDir}} && git diff --stat && echo '--- Details ---' && git diff",
+      "category": "git",
+      "inputs": []
+    },
+    {
+      "id": "git-commit-simple",
+      "name": "Git Commit (Simple)",
+      "description": "Stage all changes and commit with a message (no AI)",
+      "command": "cd {{workDir}} && git add -A && git commit -m \"{{message}}\"",
+      "category": "git",
+      "inputs": [
+        {
+          "name": "message",
+          "label": "Commit Message",
+          "type": "text",
+          "required": true,
+          "placeholder": "feat: add new feature",
+          "description": "The commit message (use conventional commits format)"
+        }
+      ]
+    },
+    {
+      "id": "git-commit-auto",
+      "name": "Git Commit (Auto Message)",
+      "description": "Stage all changes and commit with auto-generated message based on diff",
+      "command": "cd {{workDir}} && git add -A && git diff --cached --stat | head -20 && echo '---' && git commit -m \"$(git diff --cached --stat | head -1 | sed 's/^ *//' | cut -d'|' -f1 | xargs echo 'Update:')\"",
+      "category": "git",
+      "inputs": []
+    },
+    {
+      "id": "git-push",
+      "name": "Git Push",
+      "description": "Push commits to remote repository",
+      "command": "cd {{workDir}} && git push {{remote}} {{branch}}",
+      "category": "git",
+      "inputs": [
+        {
+          "name": "remote",
+          "label": "Remote",
+          "type": "text",
+          "required": false,
+          "default": "origin",
+          "description": "Remote name (default: origin)"
+        },
+        {
+          "name": "branch",
+          "label": "Branch",
+          "type": "text",
+          "required": false,
+          "default": "",
+          "description": "Branch name (leave empty for current branch)"
+        }
+      ]
+    },
+    {
+      "id": "git-log",
+      "name": "Git Log",
+      "description": "Show recent commit history",
+      "command": "cd {{workDir}} && git log --oneline --graph -{{count}}",
+      "category": "git",
+      "inputs": [
+        {
+          "name": "count",
+          "label": "Number of Commits",
+          "type": "number",
+          "required": false,
+          "default": 20,
+          "min": 1,
+          "max": 100,
+          "description": "How many commits to show"
+        }
+      ]
+    },
+    {
       "id": "run-tests",
       "name": "Run Tests",
       "description": "Execute test-agent test scenarios",
@@ -230,8 +315,8 @@
     },
     {
       "id": "claude-skill-runner",
-      "name": "Run Claude Skill File",
-      "description": "Execute a Claude skill from a .MD file using the LLM Provider",
+      "name": "Run Claude Skill File (API)",
+      "description": "Execute a Claude skill from a .MD file using the LLM Provider (uses API credits)",
       "skillType": "claude-skill-file",
       "category": "ai",
       "inputs": [
@@ -263,6 +348,66 @@
             { "value": "haiku", "label": "Claude Haiku (Fastest)" }
           ],
           "description": "Which Claude model to use"
+        }
+      ]
+    },
+    {
+      "id": "claude-skill-runner-pty",
+      "name": "Run Claude Skill File (PTY)",
+      "description": "Execute a Claude skill from a .MD file using PTY (uses subscription auth)",
+      "skillType": "pty-skill-file",
+      "category": "ai",
+      "inputs": [
+        {
+          "name": "skillFilePath",
+          "label": "Skill File",
+          "type": "text",
+          "required": true,
+          "placeholder": ".claude/skills/e2e-test.md",
+          "description": "Path to the .MD skill file (relative to project root)"
+        },
+        {
+          "name": "userPrompt",
+          "label": "User Prompt",
+          "type": "textarea",
+          "required": true,
+          "placeholder": "What would you like me to do?",
+          "description": "Your request/instruction for the skill"
+        }
+      ]
+    },
+    {
+      "id": "claude-plugin",
+      "name": "Run Claude Plugin (PTY)",
+      "description": "Execute a Claude Code plugin in interactive mode using PTY (uses subscription auth)",
+      "command": "claude {{plugin}}",
+      "skillType": "pty",
+      "category": "ai",
+      "inputs": [
+        {
+          "name": "plugin",
+          "label": "Plugin Command",
+          "type": "text",
+          "required": true,
+          "placeholder": "/commit",
+          "description": "The plugin command to run (e.g., /commit, /reflect, /ralph-loop)"
+        }
+      ]
+    },
+    {
+      "id": "claude-plugin-print",
+      "name": "Run Claude Plugin (API)",
+      "description": "Execute a Claude Code plugin in non-interactive mode (uses API credits)",
+      "command": "cd {{workDir}} && claude --print --permission-mode dontAsk {{plugin}}",
+      "category": "ai",
+      "inputs": [
+        {
+          "name": "plugin",
+          "label": "Plugin Command",
+          "type": "text",
+          "required": true,
+          "placeholder": "/commit",
+          "description": "The plugin command to run (e.g., /commit, /reflect, /ralph-loop)"
         }
       ]
     }
