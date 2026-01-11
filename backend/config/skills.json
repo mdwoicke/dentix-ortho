@@ -1,0 +1,270 @@
+{
+  "skills": [
+    {
+      "id": "echo-test",
+      "name": "Echo Test",
+      "description": "Simple echo command for testing SSH connection",
+      "command": "echo 'Hello from SSH! Connection successful.'",
+      "category": "utility",
+      "inputs": []
+    },
+    {
+      "id": "system-info",
+      "name": "System Info",
+      "description": "Display system information (OS, uptime, memory)",
+      "command": "uname -a && echo '---' && uptime && echo '---' && free -h 2>/dev/null || echo 'Memory info not available'",
+      "category": "utility",
+      "inputs": []
+    },
+    {
+      "id": "run-tests",
+      "name": "Run Tests",
+      "description": "Execute test-agent test scenarios",
+      "command": "cd {{workDir}} && npm run run -- {{scenariosArg}} {{concurrencyArg}}",
+      "category": "test-agent",
+      "inputs": [
+        {
+          "name": "scenarios",
+          "label": "Scenarios",
+          "type": "text",
+          "required": false,
+          "placeholder": "GOAL-HAPPY-001,GOAL-HAPPY-002",
+          "description": "Comma-separated list of scenario IDs to run (leave empty for all)"
+        },
+        {
+          "name": "concurrency",
+          "label": "Concurrency",
+          "type": "number",
+          "required": false,
+          "default": 5,
+          "min": 1,
+          "max": 20,
+          "description": "Number of parallel test workers"
+        }
+      ]
+    },
+    {
+      "id": "diagnose",
+      "name": "Diagnose Failures",
+      "description": "Analyze test failures and generate fix recommendations",
+      "command": "cd {{workDir}} && npm run diagnose",
+      "category": "test-agent",
+      "inputs": []
+    },
+    {
+      "id": "ab-run",
+      "name": "Run A/B Experiment",
+      "description": "Execute an A/B testing experiment",
+      "command": "cd {{workDir}} && npm run ab-run -- {{experimentId}} {{iterationsArg}}",
+      "category": "test-agent",
+      "inputs": [
+        {
+          "name": "experimentId",
+          "label": "Experiment ID",
+          "type": "text",
+          "required": true,
+          "placeholder": "exp-123",
+          "description": "The ID of the experiment to run"
+        },
+        {
+          "name": "iterations",
+          "label": "Iterations",
+          "type": "number",
+          "required": false,
+          "default": 10,
+          "min": 1,
+          "max": 100,
+          "description": "Number of iterations per variant"
+        }
+      ]
+    },
+    {
+      "id": "ab-status",
+      "name": "A/B Experiment Status",
+      "description": "View status of A/B experiments",
+      "command": "cd {{workDir}} && npm run ab-status {{experimentIdArg}}",
+      "category": "test-agent",
+      "inputs": [
+        {
+          "name": "experimentId",
+          "label": "Experiment ID (optional)",
+          "type": "text",
+          "required": false,
+          "placeholder": "exp-123",
+          "description": "Leave empty to see all experiments"
+        }
+      ]
+    },
+    {
+      "id": "scenarios-list",
+      "name": "List Scenarios",
+      "description": "List all available test scenarios",
+      "command": "cd {{workDir}} && npm run scenarios",
+      "category": "test-agent",
+      "inputs": []
+    },
+    {
+      "id": "results",
+      "name": "View Results",
+      "description": "View test results from previous runs",
+      "command": "cd {{workDir}} && npm run results {{limitArg}}",
+      "category": "test-agent",
+      "inputs": [
+        {
+          "name": "limit",
+          "label": "Limit",
+          "type": "number",
+          "required": false,
+          "default": 10,
+          "min": 1,
+          "max": 100,
+          "description": "Number of results to show"
+        }
+      ]
+    },
+    {
+      "id": "custom-command",
+      "name": "Custom Command",
+      "description": "Run any custom shell command",
+      "command": "{{command}}",
+      "category": "custom",
+      "inputs": [
+        {
+          "name": "command",
+          "label": "Command",
+          "type": "textarea",
+          "required": true,
+          "placeholder": "ls -la",
+          "description": "The shell command to execute"
+        }
+      ]
+    },
+    {
+      "id": "claude-cli-llm",
+      "name": "Claude CLI (LLM Service)",
+      "description": "Run Claude CLI via LLM service - handles stdin properly on Windows",
+      "command": "cd {{workDir}} && npm run llm-prompt -- --prompt \"{{prompt}}\" --model {{model}}",
+      "category": "ai",
+      "inputs": [
+        {
+          "name": "prompt",
+          "label": "Prompt",
+          "type": "textarea",
+          "required": true,
+          "placeholder": "Explain what this code does...",
+          "description": "The prompt to send to Claude"
+        },
+        {
+          "name": "model",
+          "label": "Model",
+          "type": "select",
+          "required": false,
+          "default": "sonnet",
+          "options": [
+            { "value": "sonnet", "label": "Claude Sonnet (Fast)" },
+            { "value": "opus", "label": "Claude Opus (Best)" },
+            { "value": "haiku", "label": "Claude Haiku (Fastest)" }
+          ],
+          "description": "Which Claude model to use"
+        }
+      ]
+    },
+    {
+      "id": "claude-cli",
+      "name": "Claude CLI (Raw)",
+      "description": "Run Claude CLI directly (may have issues on Windows)",
+      "command": "claude --print --model {{model}} -p \"{{prompt}}\"",
+      "category": "ai",
+      "inputs": [
+        {
+          "name": "prompt",
+          "label": "Prompt",
+          "type": "textarea",
+          "required": true,
+          "placeholder": "Explain what this code does...",
+          "description": "The prompt to send to Claude"
+        },
+        {
+          "name": "model",
+          "label": "Model",
+          "type": "select",
+          "required": false,
+          "default": "sonnet",
+          "options": [
+            { "value": "sonnet", "label": "Claude Sonnet (Fast)" },
+            { "value": "opus", "label": "Claude Opus (Best)" },
+            { "value": "haiku", "label": "Claude Haiku (Fastest)" }
+          ],
+          "description": "Which Claude model to use"
+        }
+      ]
+    },
+    {
+      "id": "claude-analyze-file",
+      "name": "Claude Analyze File",
+      "description": "Use Claude to analyze a file in the project",
+      "command": "cd {{workDir}} && claude --print --model {{model}} -p \"Analyze this file and explain what it does: $(cat {{filePath}})\"",
+      "category": "ai",
+      "inputs": [
+        {
+          "name": "filePath",
+          "label": "File Path",
+          "type": "text",
+          "required": true,
+          "placeholder": "src/index.ts",
+          "description": "Relative path to the file to analyze"
+        },
+        {
+          "name": "model",
+          "label": "Model",
+          "type": "select",
+          "required": false,
+          "default": "sonnet",
+          "options": [
+            { "value": "sonnet", "label": "Claude Sonnet (Fast)" },
+            { "value": "haiku", "label": "Claude Haiku (Fastest)" }
+          ],
+          "description": "Which Claude model to use"
+        }
+      ]
+    },
+    {
+      "id": "claude-skill-runner",
+      "name": "Run Claude Skill File",
+      "description": "Execute a Claude skill from a .MD file using the LLM Provider",
+      "skillType": "claude-skill-file",
+      "category": "ai",
+      "inputs": [
+        {
+          "name": "skillFilePath",
+          "label": "Skill File",
+          "type": "text",
+          "required": true,
+          "placeholder": ".claude/skills/e2e-test.md",
+          "description": "Path to the .MD skill file (relative to project root)"
+        },
+        {
+          "name": "userPrompt",
+          "label": "User Prompt",
+          "type": "textarea",
+          "required": true,
+          "placeholder": "What would you like me to do?",
+          "description": "Your request/instruction for the skill"
+        },
+        {
+          "name": "model",
+          "label": "Model",
+          "type": "select",
+          "required": false,
+          "default": "sonnet",
+          "options": [
+            { "value": "sonnet", "label": "Claude Sonnet (Fast)" },
+            { "value": "opus", "label": "Claude Opus (Best)" },
+            { "value": "haiku", "label": "Claude Haiku (Fastest)" }
+          ],
+          "description": "Which Claude model to use"
+        }
+      ]
+    }
+  ]
+}

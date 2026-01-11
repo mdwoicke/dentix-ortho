@@ -32,6 +32,7 @@ import {
   AnalysisPage,
   SandboxLabPage,
   CallTracePage,
+  SkillsRunnerPage,
 } from '../pages/TestMonitor';
 import { NotFound } from '../pages/NotFound';
 import { ROUTES } from '../utils/constants';
@@ -143,6 +144,7 @@ export function AppRouter() {
             <Route path="call-trace" element={<CallTracePage />} />
             <Route path="sandbox-lab" element={<SandboxLabPage />} />
             <Route path="experiments" element={<ABTestingDashboard />} />
+            <Route path="skills-runner" element={<SkillsRunnerPage />} />
             <Route path="cases" element={<TestCasesPage />} />
             <Route path="goal-cases" element={<GoalTestsDashboard />} />
             <Route path="create" element={<CreateGoalTestPage />} />

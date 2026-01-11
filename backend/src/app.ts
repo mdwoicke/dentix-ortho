@@ -11,6 +11,7 @@ import postmanRoutes from './routes/postman';
 import testMonitorRoutes from './routes/testMonitor';
 import authRoutes from './routes/auth';
 import adminRoutes from './routes/admin';
+import skillsRunnerRoutes from './routes/skillsRunner';
 
 /**
  * Express Application Setup
@@ -66,6 +67,7 @@ app.use('/api/postman', postmanRoutes);
 app.use('/api/test-monitor', testMonitorRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/skills-runner', skillsRunnerRoutes);
 
 // ===========================================
 // Error Handling

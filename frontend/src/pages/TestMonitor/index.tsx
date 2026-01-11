@@ -13,7 +13,8 @@ const tabs = [
   { name: 'A/B Testing', path: ROUTES.TEST_MONITOR_SANDBOX_LAB },
   { name: 'API Explorer', path: ROUTES.TEST_MONITOR_API_TESTING },
   { name: 'Experiments', path: ROUTES.TEST_MONITOR_EXPERIMENTS },
-  { name: 'Call Trace', path: ROUTES.TEST_MONITOR_CALL_TRACE },
+  { name: 'Call Tracing', path: ROUTES.TEST_MONITOR_CALL_TRACE },
+  { name: 'Skills Runner', path: ROUTES.TEST_MONITOR_SKILLS_RUNNER },
   // Legacy tabs (deprecated - routes still work for backwards compatibility)
   // { name: 'Goal Tests', path: ROUTES.TEST_MONITOR_GOAL_CASES },
   // { name: 'Goal Test Generator', path: ROUTES.TEST_MONITOR_CREATE },
@@ -86,3 +87,4 @@ export { TestsPage } from './TestsPage';
 export { AnalysisPage } from './AnalysisPage';
 export { SandboxLabPage } from './SandboxLabPage';
 export { default as CallTracePage } from './CallTracePage';
+export { SkillsRunnerPage } from './SkillsRunnerPage';
