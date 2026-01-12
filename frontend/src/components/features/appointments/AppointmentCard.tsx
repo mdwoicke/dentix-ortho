@@ -3,9 +3,18 @@
  * Modern, stylish card for appointment display with action buttons
  */
 
-import { Button } from '../../ui';
+import { useState } from 'react';
+import { Button, GuidCopyButton } from '../../ui';
 import { formatDate, formatTime } from '../../../utils/formatters';
 import type { Appointment } from '../../../types';
+
+// Default GUIDs for CDH Allegheny (used when appointment doesn't have values)
+const DEFAULT_GUIDS = {
+  location: '799d413a-5e1a-46a2-b169-e2108bf517d6',       // CDH - Allegheny 300M
+  scheduleView: 'b1946f40-3b0b-4e01-87a9-c5060b88443e',  // Default schedule view
+  appointmentType: 'f6c20c35-9abb-47c2-981a-342996016705', // Default appointment type
+  scheduleColumn: 'dda0b40c-ace5-4427-8b76-493bf9aa26f1', // Default schedule column
+};
 
 export interface AppointmentCardProps {
   appointment: Appointment;
@@ -37,6 +46,9 @@ export function AppointmentCard({
   const isCancelled = appointment.status_description?.toLowerCase().includes('cancel');
   const isPast =
     appointment.appointment_date_time && new Date(appointment.appointment_date_time) < new Date();
+
+  // State for collapsible GUIDs section (collapsed by default)
+  const [isGuidsExpanded, setIsGuidsExpanded] = useState(false);
 
   // Enhanced status styling
   const getStatusStyle = () => {
@@ -143,7 +155,7 @@ export function AppointmentCard({
           </div>
         )}
 
-        {/* Location & Orthodontist Grid */}
+        {/* Location, Orthodontist & Chair Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
           {appointment.location_name && (
             <div className="flex items-start gap-3 p-3 bg-blue-50 rounded-lg">
@@ -187,6 +199,20 @@ export function AppointmentCard({
                 {appointment.orthodontist_code && (
                   <p className="text-xs text-gray-600 font-mono">{appointment.orthodontist_code}</p>
                 )}
+              </div>
+            </div>
+          )}
+
+          {appointment.chair && (
+            <div className="flex items-start gap-3 p-3 bg-amber-50 rounded-lg">
+              <div className="flex-shrink-0 w-8 h-8 bg-white rounded-lg shadow-sm flex items-center justify-center">
+                🪑
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs text-gray-500 font-medium uppercase mb-1">Chair</p>
+                <p className="text-sm font-semibold text-gray-900">
+                  {appointment.chair}
+                </p>
               </div>
             </div>
           )}
@@ -246,6 +272,134 @@ export function AppointmentCard({
             </p>
           </div>
         )}
+
+        {/* System Identifiers (GUIDs) Section - Collapsible */}
+        <div className="pt-4 border-t border-gray-200 mb-4">
+          <button
+            type="button"
+            onClick={() => setIsGuidsExpanded(!isGuidsExpanded)}
+            className="w-full text-sm font-semibold text-gray-700 flex items-center gap-2 hover:text-gray-900 transition-colors"
+          >
+            <span className="w-6 h-6 bg-gray-100 rounded flex items-center justify-center text-xs">🔗</span>
+            System Identifiers (GUIDs)
+            <svg
+              className={`w-4 h-4 ml-auto transition-transform duration-200 ${isGuidsExpanded ? 'rotate-180' : ''}`}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+          {isGuidsExpanded && (
+          <div className="space-y-2 mt-3">
+            {/* Appointment GUID */}
+            <div className="flex items-center justify-between text-sm bg-gray-50 rounded px-3 py-2">
+              <div className="flex-1 min-w-0">
+                <span className="font-medium text-gray-700">Appointment GUID:</span>
+                <code className="ml-2 text-xs font-mono text-gray-600 break-all">
+                  {appointment.appointment_guid}
+                </code>
+              </div>
+              <GuidCopyButton label="Appointment GUID" guid={appointment.appointment_guid} />
+            </div>
+
+            {/* Patient GUID */}
+            <div className="flex items-center justify-between text-sm bg-gray-50 rounded px-3 py-2">
+              <div className="flex-1 min-w-0">
+                <span className="font-medium text-gray-700">Patient GUID:</span>
+                <code className="ml-2 text-xs font-mono text-gray-600 break-all">
+                  {appointment.patient_guid}
+                </code>
+                {patientFullName && (
+                  <span className="ml-2 text-xs text-gray-500">({patientFullName})</span>
+                )}
+              </div>
+              <GuidCopyButton label="Patient GUID" guid={appointment.patient_guid} />
+            </div>
+
+            {/* Location GUID */}
+            <div className="flex items-center justify-between text-sm bg-blue-50 rounded px-3 py-2">
+              <div className="flex-1 min-w-0">
+                <span className="font-medium text-gray-700">Location GUID:</span>
+                <code className="ml-2 text-xs font-mono text-gray-600 break-all">
+                  {appointment.location_guid || DEFAULT_GUIDS.location}
+                </code>
+                {appointment.location_name && (
+                  <span className="ml-2 text-xs text-blue-600">({appointment.location_name})</span>
+                )}
+                {!appointment.location_guid && !appointment.location_name && (
+                  <span className="ml-2 text-xs text-blue-600">(default)</span>
+                )}
+              </div>
+              <GuidCopyButton
+                label="Location GUID"
+                guid={appointment.location_guid || DEFAULT_GUIDS.location}
+              />
+            </div>
+
+            {/* Appointment Type GUID */}
+            <div className="flex items-center justify-between text-sm bg-purple-50 rounded px-3 py-2">
+              <div className="flex-1 min-w-0">
+                <span className="font-medium text-gray-700">Appointment Type GUID:</span>
+                <code className="ml-2 text-xs font-mono text-gray-600 break-all">
+                  {appointment.appointment_type_guid || DEFAULT_GUIDS.appointmentType}
+                </code>
+                {appointment.appointment_type_description && (
+                  <span className="ml-2 text-xs text-purple-600">({appointment.appointment_type_description})</span>
+                )}
+                {!appointment.appointment_type_guid && !appointment.appointment_type_description && (
+                  <span className="ml-2 text-xs text-purple-600">(default)</span>
+                )}
+              </div>
+              <GuidCopyButton
+                label="Appointment Type GUID"
+                guid={appointment.appointment_type_guid || DEFAULT_GUIDS.appointmentType}
+              />
+            </div>
+
+            {/* Orthodontist GUID */}
+            {appointment.orthodontist_guid && (
+              <div className="flex items-center justify-between text-sm bg-gray-50 rounded px-3 py-2">
+                <div className="flex-1 min-w-0">
+                  <span className="font-medium text-gray-700">Orthodontist GUID:</span>
+                  <code className="ml-2 text-xs font-mono text-gray-600 break-all">
+                    {appointment.orthodontist_guid}
+                  </code>
+                  {appointment.orthodontist_name && (
+                    <span className="ml-2 text-xs text-gray-500">({appointment.orthodontist_name})</span>
+                  )}
+                </div>
+                <GuidCopyButton label="Orthodontist GUID" guid={appointment.orthodontist_guid} />
+              </div>
+            )}
+
+            {/* Schedule View GUID (Default Reference) */}
+            <div className="flex items-center justify-between text-sm bg-green-50 rounded px-3 py-2">
+              <div className="flex-1 min-w-0">
+                <span className="font-medium text-gray-700">Schedule View GUID:</span>
+                <code className="ml-2 text-xs font-mono text-gray-600 break-all">
+                  {DEFAULT_GUIDS.scheduleView}
+                </code>
+                <span className="ml-2 text-xs text-green-600">(default)</span>
+              </div>
+              <GuidCopyButton label="Schedule View GUID" guid={DEFAULT_GUIDS.scheduleView} />
+            </div>
+
+            {/* Schedule Column GUID (Default Reference) */}
+            <div className="flex items-center justify-between text-sm bg-amber-50 rounded px-3 py-2">
+              <div className="flex-1 min-w-0">
+                <span className="font-medium text-gray-700">Schedule Column GUID:</span>
+                <code className="ml-2 text-xs font-mono text-gray-600 break-all">
+                  {DEFAULT_GUIDS.scheduleColumn}
+                </code>
+                <span className="ml-2 text-xs text-amber-600">(default)</span>
+              </div>
+              <GuidCopyButton label="Schedule Column GUID" guid={DEFAULT_GUIDS.scheduleColumn} />
+            </div>
+          </div>
+          )}
+        </div>
 
         {/* Action Buttons */}
         {!isCancelled && !isPast && (

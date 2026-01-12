@@ -1,10 +1,11 @@
 /**
  * PatientCard Component
- * Display card for patient information
+ * Display card for patient information with all GUIDs
  */
 
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Card, Button } from '../../ui';
+import { Card, Button, GuidCopyButton } from '../../ui';
 import { formatPhoneNumber, formatDate } from '../../../utils/formatters';
 import { ROUTES } from '../../../utils/constants';
 import type { Patient } from '../../../types';
@@ -16,6 +17,7 @@ export interface PatientCardProps {
 
 export function PatientCard({ patient, onSchedule }: PatientCardProps) {
   const navigate = useNavigate();
+  const [isGuidsExpanded, setIsGuidsExpanded] = useState(false);
 
   const handleViewDetails = () => {
     navigate(ROUTES.PATIENT_DETAIL.replace(':patientGuid', patient.patient_guid));
@@ -77,29 +79,84 @@ export function PatientCard({ patient, onSchedule }: PatientCardProps) {
             )}
           </div>
 
-          {/* Provider & Location Info */}
-          {(patient.provider_guid || patient.location_guid) && (
-            <div className="pt-2 border-t border-gray-200 dark:border-slate-600">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2">
-                {patient.provider_guid && (
-                  <div className="text-sm">
-                    <span className="font-medium text-gray-700 dark:text-gray-300">Provider:</span>
-                    <span className="ml-2 text-gray-600 dark:text-gray-400 font-mono text-xs">
-                      {patient.provider_guid.slice(0, 8)}...
-                    </span>
-                  </div>
-                )}
-                {patient.location_guid && (
-                  <div className="text-sm">
-                    <span className="font-medium text-gray-700 dark:text-gray-300">Location:</span>
-                    <span className="ml-2 text-gray-600 dark:text-gray-400 font-mono text-xs">
-                      {patient.location_guid.slice(0, 8)}...
-                    </span>
-                  </div>
-                )}
+          {/* GUIDs Section - Collapsible */}
+          <div className="pt-3 border-t border-gray-200 dark:border-slate-600">
+            <button
+              type="button"
+              onClick={() => setIsGuidsExpanded(!isGuidsExpanded)}
+              className="w-full text-sm font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-2 hover:text-gray-900 dark:hover:text-white transition-colors"
+            >
+              System Identifiers (GUIDs)
+              <svg
+                className={`w-4 h-4 ml-auto transition-transform duration-200 ${isGuidsExpanded ? 'rotate-180' : ''}`}
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+            {isGuidsExpanded && (
+            <div className="space-y-2 mt-2">
+              {/* Patient GUID */}
+              <div className="flex items-center justify-between text-sm bg-gray-50 dark:bg-slate-700/50 rounded px-3 py-2">
+                <div className="flex-1 min-w-0">
+                  <span className="font-medium text-gray-700 dark:text-gray-300">Patient GUID:</span>
+                  <code className="ml-2 text-xs font-mono text-gray-600 dark:text-gray-400 break-all">
+                    {patient.patient_guid}
+                  </code>
+                  <span className="ml-2 text-xs text-gray-500">({patient.first_name} {patient.last_name})</span>
+                </div>
+                <GuidCopyButton label="Patient GUID" guid={patient.patient_guid} />
               </div>
+
+              {/* Patient ID */}
+              {patient.patient_id && (
+                <div className="flex items-center justify-between text-sm bg-gray-50 dark:bg-slate-700/50 rounded px-3 py-2">
+                  <div className="flex-1 min-w-0">
+                    <span className="font-medium text-gray-700 dark:text-gray-300">Patient ID:</span>
+                    <code className="ml-2 text-xs font-mono text-gray-600 dark:text-gray-400">
+                      {patient.patient_id}
+                    </code>
+                  </div>
+                  <GuidCopyButton label="Patient ID" guid={patient.patient_id} />
+                </div>
+              )}
+
+              {/* Provider/Orthodontist GUID */}
+              {patient.provider_guid && (
+                <div className="flex items-center justify-between text-sm bg-gray-50 dark:bg-slate-700/50 rounded px-3 py-2">
+                  <div className="flex-1 min-w-0">
+                    <span className="font-medium text-gray-700 dark:text-gray-300">Provider GUID:</span>
+                    <code className="ml-2 text-xs font-mono text-gray-600 dark:text-gray-400 break-all">
+                      {patient.provider_guid}
+                    </code>
+                    {patient.provider_name && (
+                      <span className="ml-2 text-xs text-gray-500">({patient.provider_name})</span>
+                    )}
+                  </div>
+                  <GuidCopyButton label="Provider GUID" guid={patient.provider_guid} />
+                </div>
+              )}
+
+              {/* Location GUID */}
+              {patient.location_guid && (
+                <div className="flex items-center justify-between text-sm bg-gray-50 dark:bg-slate-700/50 rounded px-3 py-2">
+                  <div className="flex-1 min-w-0">
+                    <span className="font-medium text-gray-700 dark:text-gray-300">Location GUID:</span>
+                    <code className="ml-2 text-xs font-mono text-gray-600 dark:text-gray-400 break-all">
+                      {patient.location_guid}
+                    </code>
+                    {patient.location_name && (
+                      <span className="ml-2 text-xs text-blue-600">({patient.location_name})</span>
+                    )}
+                  </div>
+                  <GuidCopyButton label="Location GUID" guid={patient.location_guid} />
+                </div>
+              )}
             </div>
-          )}
+            )}
+          </div>
 
           {/* Environment Badge */}
           {patient.environment && (

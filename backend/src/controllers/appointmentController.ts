@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { createCloud9Client } from '../services/cloud9/client';
 import { Environment, isValidEnvironment } from '../config/cloud9';
 import { AppError, asyncHandler } from '../middleware/errorHandler';
-import { Cloud9Appointment, Cloud9AvailableSlot, Cloud9Location, Cloud9AppointmentType } from '../types/cloud9';
+import { Cloud9Appointment, Cloud9AvailableSlot, Cloud9Location, Cloud9AppointmentType, Cloud9Provider } from '../types/cloud9';
 import { AppointmentModel } from '../models/Appointment';
 import { PatientModel } from '../models/Patient';
 import logger from '../utils/logger';
@@ -44,10 +44,11 @@ export const getPatientAppointments = asyncHandler(
 
     const client = createCloud9Client(environment);
 
-    // Fetch reference data in parallel
-    const [locationsResponse, appointmentTypesResponse] = await Promise.all([
+    // Fetch reference data in parallel (including chair schedules for chair info)
+    const [locationsResponse, appointmentTypesResponse, chairSchedulesResponse] = await Promise.all([
       client.getLocations(),
       client.getAppointmentTypes(),
+      client.getChairSchedules(),
     ]);
 
     // Create lookup maps for reference data
@@ -62,6 +63,28 @@ export const getPatientAppointments = asyncHandler(
     if (appointmentTypesResponse.status === 'Success' && appointmentTypesResponse.records) {
       appointmentTypesResponse.records.forEach((type: Cloud9AppointmentType) => {
         appointmentTypeMap.set(type.AppointmentTypeGUID, type);
+      });
+    }
+
+    // Create maps from chair schedules:
+    // 1. location GUID -> schedule view GUIDs (for fetching chair info)
+    // 2. schedule column GUID -> description (for direct chair lookup)
+    const locationScheduleViewMap = new Map<string, string[]>();
+    const scheduleColumnDescriptionMap = new Map<string, string>();
+
+    if (chairSchedulesResponse.status === 'Success' && chairSchedulesResponse.records) {
+      chairSchedulesResponse.records.forEach((schedule: Cloud9Provider) => {
+        // Build location -> schedule views map
+        const existing = locationScheduleViewMap.get(schedule.locGUID) || [];
+        if (!existing.includes(schedule.schdvwGUID)) {
+          existing.push(schedule.schdvwGUID);
+        }
+        locationScheduleViewMap.set(schedule.locGUID, existing);
+
+        // Build schedule column GUID -> description map (for direct chair lookup)
+        if (schedule.schdcolGUID && schedule.schdcolDescription) {
+          scheduleColumnDescriptionMap.set(schedule.schdcolGUID, schedule.schdcolDescription);
+        }
       });
     }
 
@@ -179,6 +202,78 @@ export const getPatientAppointments = asyncHandler(
       await Promise.all(patientInfoPromises);
     }
 
+    // Fetch chair info via GetAppointmentsByDate for appointments without local chair data
+    // Build map from appointment GUID to chair
+    const appointmentChairMap = new Map<string, string>();
+
+    // Get unique date/location combinations that need chair info
+    const dateLocationCombos = new Map<string, Set<string>>(); // date -> Set of locationGUIDs
+    for (const appt of uniqueAppointments) {
+      const localAppt = localAppointmentMap.get(appt.AppointmentGUID);
+      // Only fetch if we don't have chair info locally
+      if (!localAppt?.schedule_column_description && appt.LocationGUID && appt.AppointmentDateTime) {
+        // Parse date from appointment (format: "M/D/YYYY H:mm:ss AM/PM")
+        const datePart = appt.AppointmentDateTime.split(' ')[0];
+        const locations = dateLocationCombos.get(datePart) || new Set();
+        locations.add(appt.LocationGUID);
+        dateLocationCombos.set(datePart, locations);
+      }
+    }
+
+    // Fetch chair info for each unique date/location combo (limited to avoid rate limiting)
+    const fetchPromises: Promise<void>[] = [];
+    let fetchCount = 0;
+    const MAX_FETCHES = 50; // High limit to ensure chair info is found across multiple schedule views
+
+    for (const [date, locationGuids] of dateLocationCombos) {
+      if (fetchCount >= MAX_FETCHES) break;
+
+      for (const locationGuid of locationGuids) {
+        if (fetchCount >= MAX_FETCHES) break;
+
+        const scheduleViews = locationScheduleViewMap.get(locationGuid) || [];
+
+        if (scheduleViews.length === 0) {
+          logger.warn('No schedule views found for location - cannot fetch chair info', { locationGuid, date });
+        }
+
+        // Check all schedule views for this location (chair could be on any)
+        for (const scheduleViewGuid of scheduleViews) {
+          if (fetchCount >= MAX_FETCHES) break;
+          fetchCount++;
+
+          fetchPromises.push(
+            client.getAppointmentsByDate(date, scheduleViewGuid)
+              .then(response => {
+                if (response.status === 'Success' && response.records) {
+                  for (const record of response.records) {
+                    if (record.AppointmentGUID && record.Chair) {
+                      appointmentChairMap.set(record.AppointmentGUID, record.Chair);
+                    }
+                  }
+                }
+              })
+              .catch(err => {
+                logger.warn('Failed to fetch appointments by date for chair info', {
+                  date,
+                  scheduleViewGuid,
+                  error: err instanceof Error ? err.message : String(err)
+                });
+              })
+          );
+        }
+      }
+    }
+
+    if (fetchPromises.length > 0) {
+      await Promise.all(fetchPromises);
+      logger.info('Chair info fetch complete', {
+        fetchCount,
+        dateLocationCombos: dateLocationCombos.size,
+        chairsFound: appointmentChairMap.size,
+      });
+    }
+
     // Transform appointment data with location and appointment type enrichment
     const appointments = uniqueAppointments.map((appt: Cloud9Appointment) => {
       const localAppt = localAppointmentMap.get(appt.AppointmentGUID);
@@ -215,6 +310,16 @@ export const getPatientAppointments = asyncHandler(
         location_state: location?.AddressState || location?.LocationState || null,
         location_address: location?.AddressStreet || null,
         location_phone: location?.PhoneNumber || null,
+        // Chair lookup priority:
+        // 1. Direct from Cloud9 API (if returned)
+        // 2. Local DB schedule_column_description (from previous create)
+        // 3. Look up via schedule_column_guid in the chair schedule map
+        // 4. From GetAppointmentsByDate fetch (appointmentChairMap)
+        chair: appt.Chair ||
+          localAppt?.schedule_column_description ||
+          (localAppt?.schedule_column_guid ? scheduleColumnDescriptionMap.get(localAppt.schedule_column_guid) : null) ||
+          appointmentChairMap.get(appt.AppointmentGUID) ||
+          null,
         environment,
         scheduled_at: localAppt?.cached_at || null,
       };
@@ -292,7 +397,9 @@ export const createAppointment = asyncHandler(async (req: Request, res: Response
   });
 
   if (response.status === 'Error' || response.errorMessage) {
-    throw new AppError(response.errorMessage || 'Failed to create appointment', 500);
+    // Error code 8 = rate limiting
+    const statusCode = response.errorCode === 8 ? 429 : 500;
+    throw new AppError(response.errorMessage || 'Failed to create appointment', statusCode);
   }
 
   // Check if there's a Result field in the response
@@ -307,6 +414,20 @@ export const createAppointment = asyncHandler(async (req: Request, res: Response
     // Otherwise, if ResponseStatus is "Success", treat it as successful
     // (The result message might be a success message or empty)
     logger.info('Appointment created successfully', { resultMessage });
+  }
+
+  // Fetch chair schedules to look up the chair description
+  const chairSchedulesResponse = await client.getChairSchedules();
+  let scheduleColumnDescription: string | undefined;
+
+  if (chairSchedulesResponse.status === 'Success' && chairSchedulesResponse.records) {
+    const chairRecord = chairSchedulesResponse.records.find(
+      (chair: Cloud9Provider) => chair.schdcolGUID === scheduleColumnGuid
+    );
+    if (chairRecord) {
+      scheduleColumnDescription = chairRecord.schdcolDescription;
+      logger.info('Found chair description', { scheduleColumnGuid, scheduleColumnDescription });
+    }
   }
 
   // Fetch the created appointment to get its GUID
@@ -345,7 +466,7 @@ export const createAppointment = asyncHandler(async (req: Request, res: Response
     // Return the most recent one (likely the newly created appointment)
     const newAppointment = appointments[0];
 
-    // Save to local database to track scheduled_at timestamp
+    // Save to local database to track scheduled_at timestamp and chair info
     try {
       AppointmentModel.upsert({
         appointment_guid: newAppointment.appointment_guid,
@@ -358,12 +479,14 @@ export const createAppointment = asyncHandler(async (req: Request, res: Response
         orthodontist_name: newAppointment.orthodontist_name,
         schedule_view_guid: scheduleViewGuid,
         schedule_column_guid: scheduleColumnGuid,
+        schedule_column_description: scheduleColumnDescription, // Chair name
         minutes: newAppointment.appointment_minutes,
         status: newAppointment.status_description || 'Scheduled',
         environment,
       });
       logger.info('Appointment saved to local database', {
         appointmentGuid: newAppointment.appointment_guid,
+        chair: scheduleColumnDescription,
       });
     } catch (dbError) {
       logger.warn('Failed to save appointment to local database', {
@@ -407,7 +530,9 @@ export const confirmAppointment = asyncHandler(async (req: Request, res: Respons
   const response = await client.confirmAppointment(appointmentGuid);
 
   if (response.status === 'Error' || response.errorMessage) {
-    throw new AppError(response.errorMessage || 'Failed to confirm appointment', 500);
+    // Error code 8 = rate limiting
+    const statusCode = response.errorCode === 8 ? 429 : 500;
+    throw new AppError(response.errorMessage || 'Failed to confirm appointment', statusCode);
   }
 
   res.json({
@@ -439,7 +564,9 @@ export const cancelAppointment = asyncHandler(async (req: Request, res: Response
   const response = await client.cancelAppointment(appointmentGuid);
 
   if (response.status === 'Error' || response.errorMessage) {
-    throw new AppError(response.errorMessage || 'Failed to cancel appointment', 500);
+    // Error code 8 = rate limiting
+    const statusCode = response.errorCode === 8 ? 429 : 500;
+    throw new AppError(response.errorMessage || 'Failed to cancel appointment', statusCode);
   }
 
   res.json({
