@@ -1,5 +1,5 @@
 /**
- * Call Trace Page
+ * Call Tracing Page
  * View and import production conversation traces from Langfuse
  */
 
@@ -11,22 +11,22 @@ import { PerformanceWaterfall } from '../../components/features/testMonitor/Perf
 import { LangfuseConnectionsManager } from '../../components/features/testMonitor/LangfuseConnectionsManager';
 import { TraceInsights } from '../../components/features/testMonitor/TraceInsights';
 import {
-  getProductionTraces,
-  getProductionTrace,
-  importProductionTraces,
   getImportHistory,
   getLastImportDate,
-  getProductionSessions,
   getProductionSession,
+  getProductionSessions,
+  getProductionTrace,
+  getProductionTraces,
+  importProductionTraces,
   rebuildProductionSessions,
 } from '../../services/api/testMonitorApi';
-import { getLangfuseConfigs } from '../../services/api/appSettingsApi';
+import { getLangfuseConfigs, getAppSettings } from '../../services/api/appSettingsApi';
 import type {
-  ProductionTrace,
-  ProductionTraceDetail,
   ImportHistoryEntry,
   ProductionSession,
   ProductionSessionDetailResponse,
+  ProductionTrace,
+  ProductionTraceDetail,
   TraceInsightsResponse,
 } from '../../types/testMonitor.types';
 import type { LangfuseConfigProfile } from '../../types/appSettings.types';
@@ -382,12 +382,13 @@ interface SessionModalProps {
   sessionId: string;
   configId?: number;
   timezone: string;
+  langfuseProjectId?: string;
   onClose: () => void;
 }
 
 type SessionModalTab = 'transcript' | 'performance' | 'traces';
 
-function SessionModal({ sessionId, configId, timezone, onClose }: SessionModalProps) {
+function SessionModal({ sessionId, configId, timezone, langfuseProjectId, onClose }: SessionModalProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sessionDetail, setSessionDetail] = useState<ProductionSessionDetailResponse | null>(null);
@@ -525,6 +526,26 @@ function SessionModal({ sessionId, configId, timezone, onClose }: SessionModalPr
                   <span className="text-xs px-2 py-0.5 bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 rounded">
                     {formatCost(sessionDetail.session.totalCost)}
                   </span>
+                )}
+                {sessionDetail.session.langfuseHost && langfuseProjectId && sessionDetail.traces.length > 0 && (
+                  <a
+                    href={`${sessionDetail.session.langfuseHost}/project/${langfuseProjectId}/traces/${sessionDetail.traces[0].traceId}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-2 px-3 py-1.5 bg-orange-50 dark:bg-orange-900/30 hover:bg-orange-100 dark:hover:bg-orange-900/50 border border-orange-200 dark:border-orange-700 rounded-lg font-mono text-sm text-orange-700 dark:text-orange-300 transition-colors"
+                    title="View in Langfuse"
+                  >
+                    {/* Langfuse-style icon */}
+                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+                    </svg>
+                    <span className="text-orange-500 dark:text-orange-400">Langfuse:</span>
+                    <span className="font-semibold">{sessionDetail.traces[0].traceId.slice(0, 8)}...</span>
+                    {/* External link icon */}
+                    <svg className="w-3.5 h-3.5 opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                    </svg>
+                  </a>
                 )}
               </div>
             )}
@@ -711,6 +732,9 @@ export default function CallTracePage() {
   const [cachedInsights, setCachedInsights] = useState<TraceInsightsResponse | null>(null);
   const [cachedInsightsLastDays, setCachedInsightsLastDays] = useState<number>(7);
 
+  // Langfuse project ID (for URL linking)
+  const [langfuseProjectId, setLangfuseProjectId] = useState<string | undefined>(undefined);
+
   // Check if any filters are active
   const hasActiveFilters = filterFromDate || filterToDate || filterSessionId;
 
@@ -761,6 +785,17 @@ export default function CallTracePage() {
   // Initial load
   useEffect(() => {
     reloadConfigs(false);
+  }, []);
+
+  // Fetch Langfuse project ID from app settings (for URL linking)
+  useEffect(() => {
+    getAppSettings()
+      .then(settings => {
+        if (settings.langfuseProjectId?.value) {
+          setLangfuseProjectId(settings.langfuseProjectId.value);
+        }
+      })
+      .catch(err => console.warn('Failed to fetch app settings:', err));
   }, []);
 
   // Load last import date when config changes, and clear insights cache
@@ -996,7 +1031,7 @@ export default function CallTracePage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Call Trace"
+        title="Call Tracing"
         subtitle="View and import production conversation traces from Langfuse"
       />
 
@@ -1690,6 +1725,7 @@ export default function CallTracePage() {
           sessionId={selectedSessionId}
           configId={selectedConfigId || undefined}
           timezone={timezone}
+          langfuseProjectId={langfuseProjectId}
           onClose={() => setSelectedSessionId(null)}
         />
       )}
