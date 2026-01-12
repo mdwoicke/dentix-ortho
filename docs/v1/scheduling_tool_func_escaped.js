@@ -1,49 +1,93 @@
 /**
  * ============================================================================
  * CHORD SCHEDULING DSO - Appointment Scheduling Tool (Node Red Version)
- * Version: v44 | Updated: 2026-01-04
+ * Version: v50 | Updated: 2026-01-12
  * ============================================================================
  * Actions: slots, grouped_slots, book_child, cancel
  *
- * v44 FIX: Fixed fetch body consumption bug AND removed DEFAULT_SCHEDULE_VIEW_GUID
- *          - Body stream can only be read once, now reads text first then parses JSON
- *          - Removed DEFAULT_SCHEDULE_VIEW_GUID which pointed to schedule with no slots
- * v42 FIX: Default numberOfPatients=2 for grouped_slots (LLM often omits it)
- * v41 FIX: Added _debug_error and _debug_dates for API failure diagnosis
- * CRITICAL FIX: SANDBOX_MIN_DATE ensures slot searches start from Jan 13, 2026
+ * v50 FIX: DYNAMIC SLOT SEARCH - Progressive date expansion when no slots found
+ *          - Auto-expands search: 2 weeks -> 4 weeks -> 8 weeks
+ *          - Minimum 14-day range enforced (prevents single-day searches)
+ *          - Auto-retries with expanded range before returning empty
+ *          - Transfer only after all expansion tiers exhausted
+ * v49 FIX: STRIP GUIDs FROM SLOTS RESPONSE
+ * v48 FIX: ENFORCE BOOKINGTOKEN
  * ============================================================================
  */
 
 const fetch = require('node-fetch');
 
-const TOOL_VERSION = 'v44';
-const MAX_SLOTS_RETURNED = 10;
+const TOOL_VERSION = 'v50';
+const MAX_SLOTS_RETURNED = 1;
 const BASE_URL = 'https://c1-aicoe-nodered-lb.prod.c1conversations.io/FabricWorkflow/api/chord';
+const DEFAULT_SCHEDULE_COLUMN_GUID = 'dda0b40c-ace5-4427-8b76-493bf9aa26f1';
+const SANDBOX_MIN_DATE = new Date(2026, 0, 13);
 
-// SANDBOX MINIMUM DATE: Cloud9 sandbox has no slots before this date
-const SANDBOX_MIN_DATE = new Date(2026, 0, 13); // January 13, 2026
+// v50: Progressive date expansion tiers (in days)
+const DATE_EXPANSION_TIERS = [14, 28, 56]; // 2 weeks, 4 weeks, 8 weeks
+const MIN_DATE_RANGE_DAYS = 14; // Minimum range to prevent single-day searches
+
+function encodeBookingToken(slot) {{
+    const data = {{
+        st: slot.startTime,
+        sv: slot.scheduleViewGUID,
+        sc: slot.scheduleColumnGUID,
+        at: slot.appointmentTypeGUID,
+        mn: slot.minutes
+    }};
+    return Buffer.from(JSON.stringify(data)).toString('base64');
+}}
+
+function decodeBookingToken(token) {{
+    try {{
+        const data = JSON.parse(Buffer.from(token, 'base64').toString('utf8'));
+        return {{
+            startTime: data.st,
+            scheduleViewGUID: data.sv,
+            scheduleColumnGUID: data.sc,
+            appointmentTypeGUID: data.at,
+            minutes: data.mn
+        }};
+    }} catch (e) {{
+        console.error('[decodeBookingToken] Failed to decode:', e.message);
+        return null;
+    }}
+}}
+
+function addBookingTokensToSlots(data) {{
+    if (data && data.slots && Array.isArray(data.slots)) {{
+        data.slots = data.slots.map(slot => ({{
+            displayTime: slot.startTime || slot.StartTime,
+            bookingToken: encodeBookingToken(slot)
+        }}));
+    }}
+    if (data && data.groups && Array.isArray(data.groups)) {{
+        data.groups = data.groups.map(group => ({{
+            groupTime: group.slots && group.slots[0] ? (group.slots[0].startTime || group.slots[0].StartTime) : null,
+            slots: group.slots ? group.slots.map(slot => ({{
+                displayTime: slot.startTime || slot.StartTime,
+                bookingToken: encodeBookingToken(slot)
+            }})) : []
+        }}));
+    }}
+    delete data.voiceSlots;
+    return data;
+}}
 
 const ACTIONS = {{
     slots: {{
-        endpoint: `${{BASE_URL}}/ortho/getApptSlots`,
+        endpoint: `${{BASE_URL}}/ortho-prd/getApptSlots`,
         method: 'POST',
         buildBody: (params, uui) => {{
-            const body = {{
-                uui: uui,
-                startDate: params.startDate,
-                endDate: params.endDate
-            }};
-            // v44: Only include scheduleViewGUIDs if explicitly provided (removed broken default)
-            if (params.scheduleViewGUIDs) {{
-                body.scheduleViewGUIDs = params.scheduleViewGUIDs;
-            }}
+            const body = {{ uui: uui, startDate: params.startDate, endDate: params.endDate }};
+            if (params.scheduleViewGUIDs) body.scheduleViewGUIDs = params.scheduleViewGUIDs;
             return body;
         }},
         validate: () => {{}},
         successLog: (data) => `Found ${{data.count || (data.slots ? data.slots.length : 0) || 0}} available slots`
     }},
     grouped_slots: {{
-        endpoint: `${{BASE_URL}}/ortho/getGroupedApptSlots`,
+        endpoint: `${{BASE_URL}}/ortho-prd/getGroupedApptSlots`,
         method: 'POST',
         buildBody: (params, uui) => {{
             const body = {{
@@ -53,82 +97,72 @@ const ACTIONS = {{
                 numberOfPatients: params.numberOfPatients || 2,
                 timeWindowMinutes: params.timeWindowMinutes || 30
             }};
-            // v44: Only include scheduleViewGUIDs if explicitly provided (removed broken default)
-            if (params.scheduleViewGUIDs) {{
-                body.scheduleViewGUIDs = params.scheduleViewGUIDs;
-            }}
+            if (params.scheduleViewGUIDs) body.scheduleViewGUIDs = params.scheduleViewGUIDs;
             return body;
         }},
         validate: () => {{}},
         successLog: (data) => `Found ${{data.totalGroups || (data.groups ? data.groups.length : 0) || 0}} grouped slot options`
     }},
     book_child: {{
-        endpoint: `${{BASE_URL}}/ortho/createAppt`,
+        endpoint: `${{BASE_URL}}/ortho-prd/createAppt`,
         method: 'POST',
-        buildBody: (params, uui) => ({{
-            uui: uui,
-            patientGUID: params.patientGUID,
-            startTime: params.startTime,
-            scheduleViewGUID: params.scheduleViewGUID,
-            scheduleColumnGUID: params.scheduleColumnGUID,
-            appointmentTypeGUID: params.appointmentTypeGUID || '8fc9d063-ae46-4975-a5ae-734c6efe341a',
-            minutes: params.minutes || 45,
-            childName: params.childName
-        }}),
-        validate: (params) => {{
-            const missing = [];
-            if (!params.patientGUID) missing.push('patientGUID');
-            if (!params.startTime) missing.push('startTime');
-            if (!params.scheduleViewGUID) missing.push('scheduleViewGUID');
-            if (!params.scheduleColumnGUID) missing.push('scheduleColumnGUID');
-            if (missing.length > 0) {{
-                throw new Error('BOOKING FAILED - Missing required fields: ' + missing.join(', '));
+        buildBody: (params, uui) => {{
+            if (!params.bookingToken) {{
+                throw new Error('BOOKING FAILED - bookingToken is required. Call slots first to get a bookingToken.');
             }}
+            const slotData = decodeBookingToken(params.bookingToken);
+            if (!slotData) {{
+                throw new Error('BOOKING FAILED - Invalid bookingToken. Call slots again to get a fresh token.');
+            }}
+            console.log('[book_child] Decoded bookingToken:', JSON.stringify(slotData));
+            return {{
+                uui: uui,
+                patientGUID: params.patientGUID,
+                startTime: slotData.startTime,
+                scheduleViewGUID: slotData.scheduleViewGUID,
+                scheduleColumnGUID: slotData.scheduleColumnGUID || DEFAULT_SCHEDULE_COLUMN_GUID,
+                appointmentTypeGUID: slotData.appointmentTypeGUID || 'f6c20c35-9abb-47c2-981a-342996016705',
+                minutes: slotData.minutes || 45,
+                childName: params.childName
+            }};
+        }},
+        validate: (params) => {{
+            if (!params.patientGUID) throw new Error('BOOKING FAILED - Missing patientGUID');
+            if (!params.bookingToken) throw new Error('BOOKING FAILED - Missing bookingToken. You must call slots first and use the bookingToken from the response.');
         }},
         successLog: () => 'Appointment booked successfully'
     }},
     cancel: {{
-        endpoint: `${{BASE_URL}}/ortho/cancelAppt`,
+        endpoint: `${{BASE_URL}}/ortho-prd/cancelAppt`,
         method: 'POST',
-        buildBody: (params, uui) => ({{
-            uui: uui,
-            appointmentGUID: params.appointmentGUID
-        }}),
-        validate: (params) => {{
-            if (!params.appointmentGUID) {{
-                throw new Error("appointmentGUID is required for 'cancel' action");
-            }}
-        }},
+        buildBody: (params, uui) => ({{ uui: uui, appointmentGUID: params.appointmentGUID }}),
+        validate: (params) => {{ if (!params.appointmentGUID) throw new Error("appointmentGUID required"); }},
         successLog: () => 'Appointment cancelled successfully'
     }}
 }};
 
 function getAuthHeader() {{
     try {{
-        const username = "workflowapi";
-        const password = "e^@V95&6sAJReTsb5!iq39mIC4HYIV";
-        const credentials = Buffer.from(`${{username}}:${{password}}`).toString('base64');
+        const credentials = Buffer.from('workflowapi:e^@V95&6sAJReTsb5!iq39mIC4HYIV').toString('base64');
         return `Basic ${{credentials}}`;
-    }} catch (e) {{
-        return null;
-    }}
+    }} catch (e) {{ return null; }}
 }}
 
 function checkForError(data) {{
     if (!data || typeof data !== 'object') return null;
-    if (data.success === false && !data.llm_guidance) return data.error || 'Operation failed';
+    if (data.success === false && !data.llm_guidance) return data.error || data.message || 'Operation failed';
     if (data.code === false) return Array.isArray(data.error) ? data.error.join(', ') : data.error;
     if (data.error && !data.slots && !data.groups && !data.appointmentGUID && !data.llm_guidance) {{
         return Array.isArray(data.error) ? data.error.join(', ') : data.error;
     }}
+    if (data.message && data.message.toLowerCase().includes('error') && !data.appointmentGUID) return data.message;
     return null;
 }}
 
 function formatDate(date) {{
     const mm = String(date.getMonth() + 1).padStart(2, '0');
     const dd = String(date.getDate()).padStart(2, '0');
-    const yyyy = date.getFullYear();
-    return `${{mm}}/${{dd}}/${{yyyy}}`;
+    return `${{mm}}/${{dd}}/${{date.getFullYear()}}`;
 }}
 
 function parseDate(dateStr) {{
@@ -138,86 +172,137 @@ function parseDate(dateStr) {{
     return new Date(parseInt(parts[2]), parseInt(parts[0]) - 1, parseInt(parts[1]));
 }}
 
-function correctDate(dateStr) {{
-    if (!dateStr) return dateStr;
-    const inputDate = parseDate(dateStr);
-    if (!inputDate) return dateStr;
-
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-
-    let targetDate = inputDate;
-    if (inputDate < today) {{
-        targetDate = tomorrow;
+// v50: Enhanced date range correction with minimum range enforcement
+function correctDateRange(startDate, endDate, expansionDays = DATE_EXPANSION_TIERS[0]) {{
+    let correctedStart = startDate ? parseDate(startDate) : null;
+    let correctedEnd = endDate ? parseDate(endDate) : null;
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    
+    if (!correctedStart || correctedStart < today) {{
+        correctedStart = new Date(Math.max(today.getTime(), SANDBOX_MIN_DATE.getTime()));
     }}
-    if (targetDate < SANDBOX_MIN_DATE) {{
-        targetDate = new Date(SANDBOX_MIN_DATE);
+    if (correctedStart < SANDBOX_MIN_DATE) correctedStart = new Date(SANDBOX_MIN_DATE);
+    
+    // v50: Calculate days between dates
+    let daysDiff = 0;
+    if (correctedEnd && correctedEnd > correctedStart) {{
+        daysDiff = Math.ceil((correctedEnd - correctedStart) / (1000 * 60 * 60 * 24));
     }}
-    if (targetDate.getTime() !== inputDate.getTime()) {{
-        return formatDate(targetDate);
+    
+    // v50: Enforce minimum range AND use expansion tier
+    if (!correctedEnd || correctedEnd <= correctedStart || daysDiff < MIN_DATE_RANGE_DAYS) {{
+        correctedEnd = new Date(correctedStart);
+        correctedEnd.setDate(correctedEnd.getDate() + expansionDays);
     }}
-    return dateStr;
-}}
-
-function correctDateRange(startDate, endDate) {{
-    let correctedStart = correctDate(startDate);
-    let correctedEnd = correctDate(endDate);
-
-    if (!correctedStart) {{
-        correctedStart = formatDate(new Date(SANDBOX_MIN_DATE));
-    }}
-
-    const start = parseDate(correctedStart);
-    const end = parseDate(correctedEnd);
-
-    if (!end || end <= start) {{
-        const newEnd = new Date(start);
-        newEnd.setDate(newEnd.getDate() + 14);
-        correctedEnd = formatDate(newEnd);
-    }} else {{
-        const daysDiff = Math.floor((end - start) / (1000 * 60 * 60 * 24));
-        if (daysDiff < 7) {{
-            const newEnd = new Date(start);
-            newEnd.setDate(newEnd.getDate() + 14);
-            correctedEnd = formatDate(newEnd);
-        }}
-    }}
-    return {{ startDate: correctedStart, endDate: correctedEnd }};
+    
+    return {{ startDate: formatDate(correctedStart), endDate: formatDate(correctedEnd), expansionDays: expansionDays }};
 }}
 
 function cleanParams(params) {{
     const cleaned = {{}};
     for (const [key, value] of Object.entries(params)) {{
-        if (value !== null && value !== undefined && value !== '' &&
-            value !== 'NULL' && value !== 'null' && value !== 'None' &&
-            value !== 'none' && value !== 'N/A' && value !== 'n/a') {{
+        if (value !== null && value !== undefined && value !== '' && value !== 'NULL' && value !== 'null' && value !== 'None') {{
             cleaned[key] = value;
         }}
     }}
     return cleaned;
 }}
 
+// v50: Dynamic slot search with progressive expansion
+async function searchSlotsWithExpansion(action, params, uui, headers) {{
+    const config = ACTIONS[action];
+    let lastError = null;
+    let searchExpanded = false;
+    let finalExpansionDays = DATE_EXPANSION_TIERS[0];
+    
+    for (let tierIndex = 0; tierIndex < DATE_EXPANSION_TIERS.length; tierIndex++) {{
+        const expansionDays = DATE_EXPANSION_TIERS[tierIndex];
+        const corrected = correctDateRange(params.startDate, params.endDate, expansionDays);
+        
+        const searchParams = {{ ...params, startDate: corrected.startDate, endDate: corrected.endDate }};
+        const body = config.buildBody(searchParams, uui);
+        
+        console.log('[v50] Tier ' + tierIndex + ' search: ' + corrected.startDate + ' to ' + corrected.endDate + ' (' + expansionDays + ' days)');
+        
+        try {{
+            const response = await fetch(config.endpoint, {{ method: config.method, headers: headers, body: JSON.stringify(body) }});
+            const responseText = await response.text();
+            let data;
+            try {{ data = JSON.parse(responseText); }} catch (e) {{ data = responseText; }}
+            
+            if (!response.ok) {{
+                lastError = 'HTTP ' + response.status + ': ' + response.statusText;
+                continue;
+            }}
+            
+            const errorMessage = checkForError(data);
+            if (errorMessage) {{
+                lastError = errorMessage;
+                continue;
+            }}
+            
+            // Check if we got slots/groups
+            const hasResults = (action === 'slots' && data.slots && data.slots.length > 0) ||
+                               (action === 'grouped_slots' && data.groups && data.groups.length > 0);
+            
+            if (hasResults) {{
+                // v50: Add metadata about the search
+                data._searchExpanded = tierIndex > 0;
+                data._expansionTier = tierIndex;
+                data._dateRange = {{ start: corrected.startDate, end: corrected.endDate, days: expansionDays }};
+                if (tierIndex > 0) {{
+                    console.log('[v50] Found slots after expanding to tier ' + tierIndex + ' (' + expansionDays + ' days)');
+                }}
+                return {{ success: true, data: data }};
+            }}
+            
+            // No results, try next tier
+            searchExpanded = true;
+            finalExpansionDays = expansionDays;
+            console.log('[v50] No slots found at tier ' + tierIndex + ', expanding...');
+            
+        }} catch (e) {{
+            lastError = e.message;
+            console.log('[v50] Search error at tier ' + tierIndex + ': ' + e.message);
+        }}
+    }}
+    
+    // v50: All tiers exhausted, no slots found
+    console.log('[v50] All expansion tiers exhausted, no slots found');
+    return {{
+        success: false,
+        data: {{
+            slots: [],
+            groups: [],
+            count: 0,
+            totalGroups: 0,
+            _toolVersion: TOOL_VERSION,
+            _searchExpanded: searchExpanded,
+            _expansionTier: DATE_EXPANSION_TIERS.length - 1,
+            _dateRange: {{ days: finalExpansionDays }},
+            _debug_error: lastError || 'No slots available after searching ' + finalExpansionDays + ' days',
+            llm_guidance: {{
+                error_type: 'no_slots_after_expansion',
+                voice_response: 'I apologize, but I was not able to find any available appointments within the next ' + Math.round(finalExpansionDays / 7) + ' weeks. Let me connect you with someone who can help schedule your appointment.',
+                action_required: 'transfer_to_agent',
+                transfer_reason: 'no_availability_after_8_week_search',
+                CRITICAL: 'All date expansion tiers exhausted. Transfer to agent for manual scheduling assistance.'
+            }}
+        }}
+    }};
+}}
+
 async function executeRequest() {{
     const toolName = 'schedule_appointment_ortho';
     const action = $action;
-
-    console.log('[' + toolName + '] ' + TOOL_VERSION + ' - 2026-01-04 - Removed DEFAULT_SCHEDULE_VIEW_GUID + fetch fix');
+    console.log('[' + toolName + '] ' + TOOL_VERSION + ' - DYNAMIC SLOT SEARCH');
     console.log('[' + toolName + '] Action: ' + action);
 
-    if (!action || !ACTIONS[action]) {{
-        throw new Error('Invalid action. Valid: ' + Object.keys(ACTIONS).join(', '));
-    }}
-
+    if (!action || !ACTIONS[action]) throw new Error('Invalid action. Valid: ' + Object.keys(ACTIONS).join(', '));
     const config = ACTIONS[action];
 
-    let uui;
-    if (!$vars || !$vars.c1mg_uui || $vars.c1mg_uui === 'c1mg_uui' || (typeof $vars.c1mg_uui === 'string' && $vars.c1mg_uui.trim() === '')) {{
-        uui = '765381306-000000000001030525-SR-000-000000000000DAL130-026DE427|333725|421458314VO|2d411063-3769-4618-86d1-925d3578c112|FSV';
-    }} else {{
-        uui = $vars.c1mg_uui;
-    }}
+    let uui = '765381306-000000000001030525-SR-000-000000000000DAL130-026DE427|333725|421458314VO|2d411063-3769-4618-86d1-925d3578c112|FSV';
+    if ($vars && $vars.c1mg_uui && $vars.c1mg_uui !== 'c1mg_uui' && $vars.c1mg_uui.trim() !== '') uui = $vars.c1mg_uui;
 
     const rawParams = {{
         startDate: typeof $startDate !== 'undefined' ? $startDate : null,
@@ -226,29 +311,50 @@ async function executeRequest() {{
         numberOfPatients: typeof $numberOfPatients !== 'undefined' ? $numberOfPatients : null,
         timeWindowMinutes: typeof $timeWindowMinutes !== 'undefined' ? $timeWindowMinutes : null,
         patientGUID: typeof $patientGUID !== 'undefined' ? $patientGUID : null,
-        startTime: typeof $startTime !== 'undefined' ? $startTime : null,
-        scheduleViewGUID: typeof $scheduleViewGUID !== 'undefined' ? $scheduleViewGUID : null,
-        scheduleColumnGUID: typeof $scheduleColumnGUID !== 'undefined' ? $scheduleColumnGUID : null,
-        appointmentTypeGUID: typeof $appointmentTypeGUID !== 'undefined' ? $appointmentTypeGUID : null,
-        minutes: typeof $minutes !== 'undefined' ? $minutes : null,
-        providerGUID: typeof $providerGUID !== 'undefined' ? $providerGUID : null,
-        locationGUID: typeof $locationGUID !== 'undefined' ? $locationGUID : null,
+        bookingToken: typeof $bookingToken !== 'undefined' ? $bookingToken : null,
         appointmentGUID: typeof $appointmentGUID !== 'undefined' ? $appointmentGUID : null,
         childName: typeof $childName !== 'undefined' ? $childName : null
     }};
     const params = cleanParams(rawParams);
 
-    const originalDates = {{ startDate: params.startDate, endDate: params.endDate }};
-
-    if (action === 'slots' || action === 'grouped_slots') {{
-        const corrected = correctDateRange(params.startDate, params.endDate);
-        if (corrected.startDate) params.startDate = corrected.startDate;
-        if (corrected.endDate) params.endDate = corrected.endDate;
-    }}
-
-    const correctedDates = {{ startDate: params.startDate, endDate: params.endDate }};
-
     try {{
+        // v50: Use dynamic search for slots/grouped_slots
+        if (action === 'slots' || action === 'grouped_slots') {{
+            const headers = {{ 'Content-Type': 'application/json' }};
+            const authHeader = getAuthHeader();
+            if (authHeader) headers['Authorization'] = authHeader;
+            
+            const searchResult = await searchSlotsWithExpansion(action, params, uui, headers);
+            
+            if (!searchResult.success) {{
+                // Return the no-slots response with guidance
+                return JSON.stringify(searchResult.data);
+            }}
+            
+            let data = searchResult.data;
+            console.log('[' + toolName + '] ' + config.successLog(data));
+            
+            // Add bookingTokens
+            data = addBookingTokensToSlots(data);
+            
+            // Truncate to MAX_SLOTS_RETURNED
+            if (data && data.slots && data.slots.length > MAX_SLOTS_RETURNED) {{
+                data.slots = data.slots.slice(0, MAX_SLOTS_RETURNED);
+                data.count = MAX_SLOTS_RETURNED;
+                data._truncated = true;
+                data._note = 'Use the bookingToken from this slot when calling book_child';
+            }}
+            if (data && data.groups && data.groups.length > MAX_SLOTS_RETURNED) {{
+                data.groups = data.groups.slice(0, MAX_SLOTS_RETURNED);
+                data.totalGroups = MAX_SLOTS_RETURNED;
+                data._truncated = true;
+            }}
+            
+            if (typeof data === 'object') data._toolVersion = TOOL_VERSION;
+            return JSON.stringify(data);
+        }}
+        
+        // Non-slot actions (book_child, cancel) - use original flow
         config.validate(params);
         const body = config.buildBody(params, uui);
         console.log('[' + toolName + '] Request:', JSON.stringify(body));
@@ -257,81 +363,49 @@ async function executeRequest() {{
         const authHeader = getAuthHeader();
         if (authHeader) headers['Authorization'] = authHeader;
 
-        const response = await fetch(config.endpoint, {{
-            method: config.method,
-            headers: headers,
-            body: JSON.stringify(body)
-        }});
-
-        // v44 FIX: Read body as text first, then parse JSON safely
+        const response = await fetch(config.endpoint, {{ method: config.method, headers: headers, body: JSON.stringify(body) }});
         const responseText = await response.text();
         let data;
-        try {{
-            data = JSON.parse(responseText);
-        }} catch (parseError) {{
-            data = responseText;
-        }}
+        try {{ data = JSON.parse(responseText); }} catch (e) {{ data = responseText; }}
 
-        if (!response.ok) {{
-            throw new Error('HTTP ' + response.status + ': ' + response.statusText);
-        }}
-
+        if (!response.ok) throw new Error('HTTP ' + response.status + ': ' + response.statusText);
         const errorMessage = checkForError(data);
         if (errorMessage) throw new Error(errorMessage);
 
         console.log('[' + toolName + '] ' + config.successLog(data));
-
-        if (data && data.slots && data.slots.length > MAX_SLOTS_RETURNED) {{
-            data.slots = data.slots.slice(0, MAX_SLOTS_RETURNED);
-            data.count = MAX_SLOTS_RETURNED;
-            data._truncated = true;
-        }}
-        if (data && data.groups && data.groups.length > MAX_SLOTS_RETURNED) {{
-            data.groups = data.groups.slice(0, MAX_SLOTS_RETURNED);
-            data.totalGroups = MAX_SLOTS_RETURNED;
-            data._truncated = true;
-        }}
-
-        if (typeof data === 'object') {{
-            data._toolVersion = TOOL_VERSION;
-        }}
-
-        var result = JSON.stringify(data);
-        console.log('[' + toolName + '] Response size: ' + result.length + ' bytes');
-        return result;
+        if (typeof data === 'object') data._toolVersion = TOOL_VERSION;
+        return JSON.stringify(data);
 
     }} catch (error) {{
         console.error('[' + toolName + '] Error:', error.message);
 
-        const isMissingSlotFields = error.message.includes('BOOKING FAILED');
-        if (isMissingSlotFields) {{
+        if (error.message.includes('BOOKING FAILED') || error.message.includes('bookingToken')) {{
             return JSON.stringify({{
-                success: false,
-                _toolVersion: TOOL_VERSION,
-                llm_guidance: {{
-                    error_type: 'missing_slot_data',
-                    voice_response: 'Let me verify that time for you.',
-                    action_required: 'refetch_slots_and_retry',
-                    CRITICAL: 'Do NOT transfer. Re-fetch slots then retry booking.'
+                success: false, _toolVersion: TOOL_VERSION, _debug_error: error.message,
+                llm_guidance: {{ 
+                    error_type: 'missing_booking_token', 
+                    voice_response: 'Let me check those times again.', 
+                    action_required: 'call_slots_then_use_bookingToken',
+                    CRITICAL: 'You MUST call slots action first, then use the bookingToken from the response when calling book_child. The bookingToken contains all the slot details.'
+                }}
+            }});
+        }}
+
+        if (error.message.includes('cannot be scheduled') || error.message.includes('time slot') || error.message.includes('not available')) {{
+            return JSON.stringify({{
+                success: false, _toolVersion: TOOL_VERSION, _debug_error: error.message,
+                llm_guidance: {{ 
+                    error_type: 'slot_no_longer_available', 
+                    voice_response: 'That time is no longer available. Let me find another option.', 
+                    action_required: 'call_slots_offer_new_time',
+                    CRITICAL: 'The slot is taken. Call slots again to get a new bookingToken and offer the new time to caller.'
                 }}
             }});
         }}
 
         return JSON.stringify({{
-            success: false,
-            _toolVersion: TOOL_VERSION,
-            _debug_error: error.message,
-            _debug_dates: {{
-                original: originalDates,
-                corrected: correctedDates,
-                action: action
-            }},
-            llm_guidance: {{
-                error_type: 'api_error',
-                voice_response: 'I want to connect you with a specialist. One moment while I transfer your call.',
-                action_required: 'transfer_to_agent',
-                CRITICAL: 'Do NOT mention error to caller. Transfer gracefully.'
-            }}
+            success: false, _toolVersion: TOOL_VERSION, _debug_error: error.message,
+            llm_guidance: {{ error_type: 'api_error', voice_response: 'Let me connect you with a specialist.', action_required: 'transfer_to_agent' }}
         }});
     }}
 }}

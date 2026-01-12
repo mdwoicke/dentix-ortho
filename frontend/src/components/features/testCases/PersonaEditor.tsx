@@ -381,21 +381,21 @@ export function PersonaEditor({ persona, onChange, readOnly = false }: PersonaEd
             ) : (
               <div />
             )}
-            <div>
-              <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
-                Preferred Time
-              </label>
-              <select
-                value={getFixedValue(inventory.preferredTimeOfDay, 'any')}
-                onChange={(e) => updateInventory('preferredTimeOfDay', e.target.value as string)}
-                disabled={readOnly}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm disabled:opacity-60 disabled:cursor-not-allowed"
-              >
-                <option value="any">Any time</option>
-                <option value="morning">Morning</option>
-                <option value="afternoon">Afternoon</option>
-              </select>
-            </div>
+            <DynamicFieldToggle
+              label="Preferred Time"
+              fieldType="timeOfDay"
+              value={inventory.preferredTimeOfDay || 'any'}
+              onChange={(value) => updateInventory('preferredTimeOfDay', value)}
+              inputType="select"
+              selectOptions={[
+                { value: 'any', label: 'Any time' },
+                { value: 'morning', label: 'Morning' },
+                { value: 'afternoon', label: 'Afternoon' },
+              ]}
+              showConstraints={true}
+              defaultConstraints={DEFAULT_FIELD_CONSTRAINTS.timeOfDay}
+              disabled={readOnly}
+            />
           </div>
 
           {/* Row 3: Previous Visit & Previous Treatment */}
@@ -428,36 +428,36 @@ export function PersonaEditor({ persona, onChange, readOnly = false }: PersonaEd
         </h4>
 
         <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
-              Verbosity
-            </label>
-            <select
-              value={persona.traits.verbosity}
-              onChange={(e) => updateTraits('verbosity', e.target.value as any)}
-              disabled={readOnly}
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm disabled:opacity-60 disabled:cursor-not-allowed"
-            >
-              <option value="terse">Terse (brief answers)</option>
-              <option value="normal">Normal</option>
-              <option value="verbose">Verbose (detailed answers)</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
-              Patience Level
-            </label>
-            <select
-              value={persona.traits.patienceLevel || 'patient'}
-              onChange={(e) => updateTraits('patienceLevel', e.target.value as any)}
-              disabled={readOnly}
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm disabled:opacity-60 disabled:cursor-not-allowed"
-            >
-              <option value="patient">Patient</option>
-              <option value="moderate">Moderate</option>
-              <option value="impatient">Impatient</option>
-            </select>
-          </div>
+          <DynamicFieldToggle
+            label="Verbosity"
+            fieldType="verbosity"
+            value={persona.traits.verbosity}
+            onChange={(value) => updateTraits('verbosity', typeof value === 'string' ? value as PersonaTraitsDTO['verbosity'] : value)}
+            inputType="select"
+            selectOptions={[
+              { value: 'terse', label: 'Terse (brief answers)' },
+              { value: 'normal', label: 'Normal' },
+              { value: 'verbose', label: 'Verbose (detailed answers)' },
+            ]}
+            showConstraints={true}
+            defaultConstraints={DEFAULT_FIELD_CONSTRAINTS.verbosity}
+            disabled={readOnly}
+          />
+          <DynamicFieldToggle
+            label="Patience Level"
+            fieldType="patienceLevel"
+            value={persona.traits.patienceLevel || 'patient'}
+            onChange={(value) => updateTraits('patienceLevel', typeof value === 'string' ? value as NonNullable<PersonaTraitsDTO['patienceLevel']> : value)}
+            inputType="select"
+            selectOptions={[
+              { value: 'patient', label: 'Patient' },
+              { value: 'moderate', label: 'Moderate' },
+              { value: 'impatient', label: 'Impatient' },
+            ]}
+            showConstraints={true}
+            defaultConstraints={DEFAULT_FIELD_CONSTRAINTS.patienceLevel}
+            disabled={readOnly}
+          />
         </div>
 
         <TristateToggle

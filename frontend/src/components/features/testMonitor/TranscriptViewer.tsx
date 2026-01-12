@@ -709,7 +709,7 @@ const InlineApiCall = forwardRef<HTMLDivElement, InlineApiCallProps>(
 /**
  * Group API calls by the conversation turn they belong to
  * API calls are associated with assistant turns - shown BEFORE the assistant's response
- * Window: from the user message until the assistant response timestamp
+ * Window: from the previous user message until the next user message (or assistant + buffer)
  */
 function groupApiCallsByTurn(
   transcript: ConversationTurn[],
@@ -746,15 +746,27 @@ function groupApiCallsByTurn(
         }
       }
 
-      // Window end is just after the assistant response (allow small buffer for concurrent calls)
-      // Add 5 second buffer after assistant response to capture any trailing API calls
-      const windowEnd = assistantTime + 5000;
+      // Find the NEXT user turn (window end boundary) to prevent overlap
+      let nextUserTime: number | null = null;
+      for (let j = i + 1; j < transcript.length; j++) {
+        if (transcript[j].role === 'user') {
+          nextUserTime = new Date(transcript[j].timestamp).getTime();
+          break;
+        }
+      }
+
+      // Window end: use the next user message time if available,
+      // otherwise use assistant time + small buffer (500ms for concurrent calls)
+      // This prevents API calls from the next turn being assigned to this one
+      const windowEnd = nextUserTime !== null
+        ? nextUserTime
+        : assistantTime + 500;
 
       // Find API calls in this window that haven't been assigned yet
       const turnApiCalls = sortedApiCalls.filter((call) => {
         if (assignedCallIds.has(call.id)) return false;
         const callTime = new Date(call.timestamp).getTime();
-        return callTime >= windowStart && callTime <= windowEnd;
+        return callTime >= windowStart && callTime < windowEnd;
       });
 
       if (turnApiCalls.length > 0) {

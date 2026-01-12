@@ -84,6 +84,7 @@ export interface Cloud9Appointment {
   LocationCode?: string;
   LocationName?: string;
   DurationMinutes?: number;
+  Chair?: string;
 }
 
 // Available Appointment Slot types (GetOnlineReservations response)

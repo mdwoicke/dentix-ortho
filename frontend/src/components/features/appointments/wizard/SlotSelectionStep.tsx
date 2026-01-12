@@ -18,8 +18,9 @@ import {
 } from '../../../../store/slices/appointmentSlice';
 import { useReference } from '../../../../hooks/useReference';
 import { Button } from '../../../ui/Button';
-import { Select } from '../../../ui/Select';
+import { SearchableSelect } from '../../../ui/SearchableSelect';
 import { Spinner } from '../../../ui/Spinner';
+import { GuidCopyButton } from '../../../ui/GuidCopyButton';
 import { cn } from '../../../../utils/cn';
 import type { AppointmentWizardData } from '../../../../types';
 import type { AvailableSlot } from '../../../../types';
@@ -292,49 +293,94 @@ export function SlotSelectionStep({
       <div className="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg p-4">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {/* Location */}
-          <Select
-            label="Location *"
-            value={localFilters.locationGuid}
-            onChange={(value) => handleFilterChange('locationGuid', value)}
-            disabled={refLoading}
-            required
-            placeholder="Select Location"
-            options={locations.map((loc) => ({
-              value: loc.guid,
-              label: loc.address?.city && loc.address?.state
-                ? `${loc.name} (${loc.address.city}, ${loc.address.state})`
-                : loc.address?.city
-                ? `${loc.name} (${loc.address.city})`
-                : loc.name,
-            }))}
-          />
+          <div className="flex items-end gap-1">
+            <div className="flex-1">
+              <SearchableSelect
+                label="Location *"
+                value={localFilters.locationGuid}
+                onChange={(value) => handleFilterChange('locationGuid', value)}
+                disabled={refLoading}
+                required
+                placeholder={refLoading ? 'Loading...' : 'Type to search or select...'}
+                options={locations.map((loc) => ({
+                  value: loc.guid,
+                  label: loc.address?.city && loc.address?.state
+                    ? `${loc.name} (${loc.address.city}, ${loc.address.state})`
+                    : loc.address?.city
+                    ? `${loc.name} (${loc.address.city})`
+                    : loc.name,
+                }))}
+              />
+            </div>
+            {refLoading ? (
+              <div className="p-2">
+                <Spinner size="sm" />
+              </div>
+            ) : (
+              <GuidCopyButton
+                label="Location GUID"
+                guid={localFilters.locationGuid}
+                disabled={!localFilters.locationGuid}
+              />
+            )}
+          </div>
 
           {/* Appointment Type */}
-          <Select
-            label="Appointment Type *"
-            value={localFilters.appointmentTypeGuid}
-            onChange={(value) => handleFilterChange('appointmentTypeGuid', value)}
-            disabled={refLoading}
-            required
-            placeholder="Select Type"
-            options={appointmentTypes.map((type) => ({
-              value: type.guid,
-              label: `${type.description} (${type.durationMinutes} min)`,
-            }))}
-          />
+          <div className="flex items-end gap-1">
+            <div className="flex-1">
+              <SearchableSelect
+                label="Appointment Type *"
+                value={localFilters.appointmentTypeGuid}
+                onChange={(value) => handleFilterChange('appointmentTypeGuid', value)}
+                disabled={refLoading}
+                required
+                placeholder={refLoading ? 'Loading...' : 'Type to search or select...'}
+                options={appointmentTypes.map((type) => ({
+                  value: type.guid,
+                  label: `${type.description} (${type.durationMinutes} min)`,
+                }))}
+              />
+            </div>
+            {refLoading ? (
+              <div className="p-2">
+                <Spinner size="sm" />
+              </div>
+            ) : (
+              <GuidCopyButton
+                label="Appointment Type GUID"
+                guid={localFilters.appointmentTypeGuid}
+                disabled={!localFilters.appointmentTypeGuid}
+              />
+            )}
+          </div>
 
           {/* Provider */}
-          <Select
-            label="Provider (Optional)"
-            value={localFilters.providerGuid}
-            onChange={(value) => handleFilterChange('providerGuid', value)}
-            disabled={refLoading || !localFilters.locationGuid}
-            placeholder="Any Provider"
-            options={filteredProviders.map((prov) => ({
-              value: prov.scheduleColumnGuid,
-              label: prov.scheduleColumnDescription,
-            }))}
-          />
+          <div className="flex items-end gap-1">
+            <div className="flex-1">
+              <SearchableSelect
+                label="Provider (Optional)"
+                value={localFilters.providerGuid}
+                onChange={(value) => handleFilterChange('providerGuid', value)}
+                disabled={refLoading || !localFilters.locationGuid}
+                placeholder={refLoading ? 'Loading...' : 'Type to search or select...'}
+                options={filteredProviders.map((prov) => ({
+                  value: prov.scheduleColumnGuid,
+                  label: prov.scheduleColumnDescription,
+                }))}
+              />
+            </div>
+            {refLoading ? (
+              <div className="p-2">
+                <Spinner size="sm" />
+              </div>
+            ) : (
+              <GuidCopyButton
+                label="Provider GUID"
+                guid={localFilters.providerGuid}
+                disabled={!localFilters.providerGuid}
+              />
+            )}
+          </div>
         </div>
 
         {/* Date Range Inputs */}

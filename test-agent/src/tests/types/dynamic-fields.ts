@@ -21,7 +21,9 @@ export type DynamicFieldType =
   | 'insuranceId'
   | 'location'
   | 'timeOfDay'
-  | 'specialNeeds';
+  | 'specialNeeds'
+  | 'verbosity'
+  | 'patienceLevel';
 
 /**
  * Constraints for field generation
@@ -242,6 +244,26 @@ export const dynamic = {
       probability: probability ?? 0.1,
     },
   }),
+
+  /**
+   * Generate a random verbosity level
+   * @param options - Custom pool of verbosity levels (uses default if not provided)
+   */
+  verbosity: (options?: string[]): DynamicFieldSpec<'terse' | 'normal' | 'verbose'> => ({
+    _dynamic: true,
+    fieldType: 'verbosity',
+    constraints: options ? { options } : undefined,
+  }),
+
+  /**
+   * Generate a random patience level
+   * @param options - Custom pool of patience levels (uses default if not provided)
+   */
+  patienceLevel: (options?: string[]): DynamicFieldSpec<'patient' | 'moderate' | 'impatient'> => ({
+    _dynamic: true,
+    fieldType: 'patienceLevel',
+    constraints: options ? { options } : undefined,
+  }),
 };
 
 /**
@@ -274,6 +296,24 @@ export const DEFAULT_POOLS = {
     'Down syndrome',
     'Cerebral palsy',
   ],
+
+  timeOfDay: [
+    'morning',
+    'afternoon',
+    'any',
+  ],
+
+  verbosity: [
+    'terse',
+    'normal',
+    'verbose',
+  ],
+
+  patienceLevel: [
+    'patient',
+    'moderate',
+    'impatient',
+  ],
 };
 
 /**
@@ -291,6 +331,8 @@ export const DEFAULT_CONSTRAINTS: Record<DynamicFieldType, FieldConstraints> = {
   insuranceProvider: { options: DEFAULT_POOLS.insuranceProviders },
   insuranceId: {},
   location: { options: DEFAULT_POOLS.locations },
-  timeOfDay: { options: ['morning', 'afternoon', 'any'] },
+  timeOfDay: { options: DEFAULT_POOLS.timeOfDay },
   specialNeeds: { options: DEFAULT_POOLS.specialNeeds, probability: 0.1 },
+  verbosity: { options: DEFAULT_POOLS.verbosity },
+  patienceLevel: { options: DEFAULT_POOLS.patienceLevel },
 };

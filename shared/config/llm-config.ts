@@ -17,6 +17,7 @@ dotenv.config();
 
 export interface LLMConfig {
   useClaudeCli: boolean;
+  strictCliMode: boolean;  // When true, don't fallback to API if CLI unavailable
   apiKey?: string;
   defaultModel: string;
   timeout: number;
@@ -131,6 +132,15 @@ export function isClaudeCliEnabled(): boolean {
 }
 
 /**
+ * Check if strict CLI mode is enabled
+ * When enabled, will NOT fall back to API if CLI is unavailable
+ * Set STRICT_CLI_MODE=true to enable
+ */
+export function isStrictCliMode(): boolean {
+  return process.env.STRICT_CLI_MODE === 'true';
+}
+
+/**
  * Get the full LLM configuration
  */
 export function getLLMConfig(): LLMConfig {
@@ -141,6 +151,7 @@ export function getLLMConfig(): LLMConfig {
 
   return {
     useClaudeCli: isClaudeCliEnabled(), // Respects REPLIT_MODE
+    strictCliMode: isStrictCliMode(),   // Don't fallback to API
     apiKey: getApiKey(),
     defaultModel: 'claude-sonnet-4-20250514',
     timeout: 120000, // 2 minutes

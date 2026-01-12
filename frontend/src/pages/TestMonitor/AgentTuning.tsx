@@ -497,7 +497,7 @@ export function AgentTuning() {
           </Card>
         </div>
 
-        {/* Right Column - Fix Details, Analytics & Prompt Versions (narrower) */}
+        {/* Right Column - Fix Details, Analytics & Project Artifacts (narrower) */}
         <div className="col-span-5 flex flex-col gap-6">
           {/* Fix Analytics (Phase 6) */}
           <FixAnalytics
@@ -579,11 +579,11 @@ export function AgentTuning() {
             </div>
           </Card>
 
-          {/* Prompt Versions */}
+          {/* Project Artifacts */}
           <Card className="flex-1 min-h-0">
             <div className="p-4 h-full flex flex-col">
               <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-                Prompt Versions
+                Project Artifacts
               </h3>
 
               {/* File List */}
@@ -664,7 +664,7 @@ export function AgentTuning() {
                   </div>
                 ) : (
                   <div className="text-center py-8 text-gray-500 dark:text-gray-400">
-                    Select a prompt file to view version history
+                    Select an artifact to view version history
                   </div>
                 )}
               </div>

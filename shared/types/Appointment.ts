@@ -33,6 +33,7 @@ export interface Appointment {
   location_address?: string;
   location_phone?: string;
   appointment_type_code?: string;
+  chair?: string;
   environment?: string;
   scheduled_at?: string; // ISO timestamp of when the appointment was booked/created
 

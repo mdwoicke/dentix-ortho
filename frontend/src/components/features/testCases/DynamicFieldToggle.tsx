@@ -200,7 +200,7 @@ export function DynamicFieldToggle({
   };
 
   // Determine if constraints panel should be shown
-  const hasConstraints = fieldType === 'dateOfBirth' || fieldType === 'insuranceProvider' || fieldType === 'location' || fieldType === 'boolean';
+  const hasConstraints = fieldType === 'dateOfBirth' || fieldType === 'insuranceProvider' || fieldType === 'location' || fieldType === 'boolean' || fieldType === 'timeOfDay' || fieldType === 'verbosity' || fieldType === 'patienceLevel' || fieldType === 'specialNeeds';
 
   return (
     <div className="space-y-2">

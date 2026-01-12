@@ -443,6 +443,18 @@ export type GoalTypeDTO =
   | 'custom';
 
 /**
+ * Default value configuration for a collectable field
+ */
+export interface FieldDefaultValueDTO {
+  /** Whether to use a random value from pool */
+  useRandom: boolean;
+  /** Fixed value (used when useRandom is false) */
+  fixedValue?: string;
+  /** Pool of values to pick from randomly (used when useRandom is true) */
+  randomPool?: string[];
+}
+
+/**
  * Conversation goal
  */
 export interface ConversationGoalDTO {
@@ -450,6 +462,8 @@ export interface ConversationGoalDTO {
   type: GoalTypeDTO;
   description: string;
   requiredFields?: CollectableFieldDTO[];
+  /** Default values for required fields (overrides persona if set) */
+  fieldDefaults?: Partial<Record<CollectableFieldDTO, FieldDefaultValueDTO>>;
   priority: number;
   required: boolean;
 }
@@ -531,7 +545,9 @@ export type DynamicFieldTypeDTO =
   | 'insuranceId'
   | 'location'
   | 'timeOfDay'
-  | 'specialNeeds';
+  | 'specialNeeds'
+  | 'verbosity'
+  | 'patienceLevel';
 
 /**
  * Constraints for field generation
@@ -692,6 +708,24 @@ export const DEFAULT_DYNAMIC_POOLS = {
     'Down syndrome',
     'Cerebral palsy',
   ],
+
+  timeOfDay: [
+    'morning',
+    'afternoon',
+    'any',
+  ],
+
+  verbosity: [
+    'terse',
+    'normal',
+    'verbose',
+  ],
+
+  patienceLevel: [
+    'patient',
+    'moderate',
+    'impatient',
+  ],
 };
 
 /**
@@ -709,8 +743,10 @@ export const DEFAULT_FIELD_CONSTRAINTS: Record<DynamicFieldTypeDTO, FieldConstra
   insuranceProvider: { options: DEFAULT_DYNAMIC_POOLS.insuranceProviders },
   insuranceId: {},
   location: { options: DEFAULT_DYNAMIC_POOLS.locations },
-  timeOfDay: { options: ['morning', 'afternoon', 'any'] },
+  timeOfDay: { options: DEFAULT_DYNAMIC_POOLS.timeOfDay },
   specialNeeds: { options: DEFAULT_DYNAMIC_POOLS.specialNeeds, probability: 0.1 },
+  verbosity: { options: DEFAULT_DYNAMIC_POOLS.verbosity },
+  patienceLevel: { options: DEFAULT_DYNAMIC_POOLS.patienceLevel },
 };
 
 /**
@@ -730,27 +766,38 @@ export const DYNAMIC_FIELD_TYPE_LABELS: Record<DynamicFieldTypeDTO, string> = {
   location: 'Location',
   timeOfDay: 'Time of Day',
   specialNeeds: 'Special Needs',
+  verbosity: 'Verbosity',
+  patienceLevel: 'Patience Level',
 };
 
 /**
- * Available collectable fields with labels
+ * Available collectable fields with labels and configuration
  */
-export const COLLECTABLE_FIELDS: { value: CollectableFieldDTO; label: string }[] = [
-  { value: 'parent_name', label: 'Parent Name' },
-  { value: 'parent_name_spelling', label: 'Name Spelling' },
-  { value: 'parent_phone', label: 'Phone Number' },
-  { value: 'parent_email', label: 'Email Address' },
-  { value: 'child_count', label: 'Child Count' },
-  { value: 'child_names', label: 'Child Names' },
-  { value: 'child_dob', label: 'Child DOB' },
-  { value: 'child_age', label: 'Child Age' },
-  { value: 'is_new_patient', label: 'New Patient Status' },
-  { value: 'previous_visit', label: 'Previous Visit' },
-  { value: 'previous_ortho', label: 'Previous Ortho' },
-  { value: 'insurance', label: 'Insurance' },
-  { value: 'special_needs', label: 'Special Needs' },
-  { value: 'time_preference', label: 'Time Preference' },
-  { value: 'location_preference', label: 'Location Preference' },
+export const COLLECTABLE_FIELDS: {
+  value: CollectableFieldDTO;
+  label: string;
+  /** Whether this field supports default value configuration */
+  supportsDefault: boolean;
+  /** Default pool for random selection (if applicable) */
+  defaultPool?: string[];
+  /** Input type for fixed value */
+  inputType?: 'text' | 'select' | 'boolean';
+}[] = [
+  { value: 'parent_name', label: 'Parent Name', supportsDefault: false },
+  { value: 'parent_name_spelling', label: 'Name Spelling', supportsDefault: false },
+  { value: 'parent_phone', label: 'Phone Number', supportsDefault: false },
+  { value: 'parent_email', label: 'Email Address', supportsDefault: false },
+  { value: 'child_count', label: 'Child Count', supportsDefault: false },
+  { value: 'child_names', label: 'Child Names', supportsDefault: false },
+  { value: 'child_dob', label: 'Child DOB', supportsDefault: false },
+  { value: 'child_age', label: 'Child Age', supportsDefault: false },
+  { value: 'is_new_patient', label: 'New Patient Status', supportsDefault: true, inputType: 'boolean', defaultPool: ['yes', 'no'] },
+  { value: 'previous_visit', label: 'Previous Visit', supportsDefault: true, inputType: 'boolean', defaultPool: ['yes', 'no'] },
+  { value: 'previous_ortho', label: 'Previous Ortho', supportsDefault: true, inputType: 'boolean', defaultPool: ['yes', 'no'] },
+  { value: 'insurance', label: 'Insurance', supportsDefault: true, inputType: 'select', defaultPool: ['Keystone First', 'Aetna Better Health', 'Blue Cross Blue Shield', 'United Healthcare', 'Cigna', 'AmeriHealth', 'No insurance'] },
+  { value: 'special_needs', label: 'Special Needs', supportsDefault: true, inputType: 'select', defaultPool: ['None', 'Autism', 'ADHD', 'Sensory sensitivity', 'Anxiety'] },
+  { value: 'time_preference', label: 'Time Preference', supportsDefault: true, inputType: 'select', defaultPool: ['morning', 'afternoon', 'any'] },
+  { value: 'location_preference', label: 'Location Preference', supportsDefault: true, inputType: 'select', defaultPool: ['Alleghany', 'Philadelphia', 'Any location'] },
 ];
 
 /**

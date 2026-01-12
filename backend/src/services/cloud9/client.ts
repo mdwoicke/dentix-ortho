@@ -11,6 +11,7 @@ import {
   buildSetPatientRequest,
   buildSetPatientDemographicInfoRequest,
   buildGetAppointmentListByPatientRequest,
+  buildGetAppointmentsByDateRequest,
   buildSetAppointmentRequest,
   buildSetAppointmentStatusConfirmedRequest,
   buildSetAppointmentStatusCanceledRequest,
@@ -23,6 +24,13 @@ import {
 import { parseXmlResponse, Cloud9Response } from './xmlParser';
 import logger, { loggers } from '../../utils/logger';
 import { Cloud9Procedure } from './procedures';
+
+/**
+ * Short-term cache for GetPatientInformation to prevent rate limiting
+ * Key: `${environment}:${patientGuid}`, Value: { response, timestamp }
+ */
+const patientInfoCache = new Map<string, { response: Cloud9Response; timestamp: number }>();
+const PATIENT_INFO_CACHE_TTL_MS = 60000; // 60 seconds
 
 /**
  * Cloud 9 API Client
@@ -174,11 +182,38 @@ export class Cloud9Client {
 
   /**
    * Get detailed patient information
+   * Uses short-term caching (60s) to prevent rate limiting from duplicate calls
    */
   async getPatientInformation(patientGuid: string): Promise<Cloud9Response> {
+    const cacheKey = `${this.environment}:${patientGuid}`;
+    const now = Date.now();
+
+    // Check cache first
+    const cached = patientInfoCache.get(cacheKey);
+    if (cached && (now - cached.timestamp) < PATIENT_INFO_CACHE_TTL_MS) {
+      logger.info('GetPatientInformation cache hit', { patientGuid, environment: this.environment });
+      return cached.response;
+    }
+
+    // Clean up expired entries periodically (simple cleanup)
+    if (patientInfoCache.size > 100) {
+      for (const [key, value] of patientInfoCache.entries()) {
+        if ((now - value.timestamp) >= PATIENT_INFO_CACHE_TTL_MS) {
+          patientInfoCache.delete(key);
+        }
+      }
+    }
+
     const credentials = getCredentials(this.environment);
     const xmlBody = buildGetPatientInformationRequest(credentials, patientGuid);
-    return this.makeRequest(xmlBody, Cloud9Procedure.GET_PATIENT_INFORMATION);
+    const response = await this.makeRequest(xmlBody, Cloud9Procedure.GET_PATIENT_INFORMATION);
+
+    // Cache successful responses only
+    if (response.status === 'Success') {
+      patientInfoCache.set(cacheKey, { response, timestamp: now });
+    }
+
+    return response;
   }
 
   /**
@@ -210,6 +245,15 @@ export class Cloud9Client {
     const credentials = getCredentials(this.environment);
     const xmlBody = buildGetAppointmentListByPatientRequest(credentials, patientGuid);
     return this.makeRequest(xmlBody, Cloud9Procedure.GET_APPOINTMENT_LIST_BY_PATIENT);
+  }
+
+  /**
+   * Get appointments by date and schedule view (includes Chair field)
+   */
+  async getAppointmentsByDate(appointmentDate: string, scheduleViewGuid: string): Promise<Cloud9Response> {
+    const credentials = getCredentials(this.environment);
+    const xmlBody = buildGetAppointmentsByDateRequest(credentials, appointmentDate, scheduleViewGuid);
+    return this.makeRequest(xmlBody, Cloud9Procedure.GET_APPOINTMENTS_BY_DATE);
   }
 
   /**

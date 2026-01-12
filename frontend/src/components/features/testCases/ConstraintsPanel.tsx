@@ -219,6 +219,39 @@ export function ConstraintsPanel({
         />
       );
 
+    case 'timeOfDay':
+      return (
+        <PoolConstraints
+          constraints={constraints}
+          onChange={onChange}
+          defaultPool={DEFAULT_DYNAMIC_POOLS.timeOfDay}
+          label="Pick from Time Preferences"
+          placeholder="morning\nafternoon\nany"
+        />
+      );
+
+    case 'verbosity':
+      return (
+        <PoolConstraints
+          constraints={constraints}
+          onChange={onChange}
+          defaultPool={DEFAULT_DYNAMIC_POOLS.verbosity}
+          label="Pick from Verbosity Levels"
+          placeholder="terse\nnormal\nverbose"
+        />
+      );
+
+    case 'patienceLevel':
+      return (
+        <PoolConstraints
+          constraints={constraints}
+          onChange={onChange}
+          defaultPool={DEFAULT_DYNAMIC_POOLS.patienceLevel}
+          label="Pick from Patience Levels"
+          placeholder="patient\nmoderate\nimpatient"
+        />
+      );
+
     case 'boolean':
       return <BooleanConstraints constraints={constraints} onChange={onChange} />;
 

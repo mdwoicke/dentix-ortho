@@ -550,11 +550,11 @@ export function AnalysisPage() {
             </div>
 
             <div className="col-span-5">
-              {/* Prompt Versions */}
+              {/* Project Artifacts */}
               <Card>
                 <div className="p-4">
                   <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-                    Prompt Versions
+                    Project Artifacts
                   </h3>
                   <div className="flex gap-2 mb-4 flex-wrap">
                     {promptFiles.map((file) => (
@@ -620,7 +620,7 @@ export function AnalysisPage() {
                       </div>
                     ) : (
                       <div className="text-center py-4 text-gray-500">
-                        Select a prompt file
+                        Select an artifact
                       </div>
                     )}
                   </div>

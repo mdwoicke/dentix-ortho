@@ -8,6 +8,7 @@ import { parseStringPromise } from 'xml2js';
 export interface Cloud9Response<T = any> {
   status: 'Success' | 'Error';
   records: T[];
+  errorCode?: number;
   errorMessage?: string;
 }
 
@@ -33,12 +34,18 @@ export async function parseXmlResponse<T = any>(
     const status = response.ResponseStatus || 'Error';
     const records = extractRecords(response.Records);
 
-    // Check for error in first record
-    const errorMessage = extractErrorMessage(records);
+    // Extract top-level error code and message (Cloud 9 API returns these for errors like rate limiting)
+    const errorCode = response.ErrorCode ? parseInt(response.ErrorCode, 10) : undefined;
+    const topLevelErrorMessage = response.ErrorMessage;
+
+    // Check for error in first record as fallback
+    const recordErrorMessage = extractErrorMessage(records);
+    const errorMessage = topLevelErrorMessage || recordErrorMessage;
 
     return {
       status: status as 'Success' | 'Error',
       records,
+      errorCode,
       errorMessage,
     };
   } catch (error) {

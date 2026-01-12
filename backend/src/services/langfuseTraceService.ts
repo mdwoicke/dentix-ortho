@@ -531,15 +531,24 @@ export class LangfuseTraceService {
 
     // Get traces with error count from observations
     // Count level='ERROR' or tool errors with success:false and _debug_error in output
+    // IMPORTANT: Filter to match transformToApiCalls logic in testMonitorController.ts
+    // - Exclude internal Langchain traces (RunnableMap, RunnableLambda, etc.)
+    // - Only count GENERATION, SPAN, or tool/api related observations
     const sql = `
       SELECT pt.*, lc.name as config_name, lc.host as langfuse_host,
         (SELECT COUNT(*) FROM production_trace_observations pto
          WHERE pto.trace_id = pt.trace_id
-         AND (pto.level = 'ERROR'
-              OR (pto.output LIKE '%"success"%' AND pto.output LIKE '%false%')
-              OR pto.output LIKE '%_debug_error%'
-              OR pto.output LIKE '%"error":%'
-              OR pto.status_message LIKE '%error%')) as error_count
+         AND (
+           -- Error detection criteria
+           pto.level = 'ERROR'
+           OR pto.output LIKE '%"success":false%' OR pto.output LIKE '%"success": false%'
+           OR pto.output LIKE '%_debug_error%'
+         )
+         AND (
+           -- Filter: Only count errors from actual tool calls
+           pto.name IN ('chord_ortho_patient', 'schedule_appointment_ortho', 'current_date_time', 'chord_handleEscalation')
+         )
+        ) as error_count
       FROM production_traces pt
       JOIN langfuse_configs lc ON pt.langfuse_config_id = lc.id
       WHERE ${whereClause}
@@ -625,17 +634,26 @@ export class LangfuseTraceService {
 
     // Get sessions with aggregated data including error count across all traces in session
     // Count level='ERROR' or tool errors with success:false and _debug_error in output
+    // IMPORTANT: Filter to match transformToApiCalls logic in testMonitorController.ts
+    // - Exclude internal Langchain traces (RunnableMap, RunnableLambda, etc.)
+    // - Only count GENERATION, SPAN, or tool/api related observations
     const sql = `
       SELECT ps.*, lc.name as config_name, lc.host as langfuse_host,
         (SELECT COUNT(*) FROM production_trace_observations pto
          JOIN production_traces pt ON pto.trace_id = pt.trace_id
          WHERE pt.session_id = ps.session_id
            AND pt.langfuse_config_id = ps.langfuse_config_id
-           AND (pto.level = 'ERROR'
-              OR (pto.output LIKE '%"success"%' AND pto.output LIKE '%false%')
-              OR pto.output LIKE '%_debug_error%'
-              OR pto.output LIKE '%"error":%'
-              OR pto.status_message LIKE '%error%')) as error_count,
+           AND (
+             -- Error detection criteria
+             pto.level = 'ERROR'
+             OR pto.output LIKE '%"success":false%' OR pto.output LIKE '%"success": false%'
+             OR pto.output LIKE '%_debug_error%'
+           )
+           AND (
+             -- Filter: Only count errors from actual tool calls
+             pto.name IN ('chord_ortho_patient', 'schedule_appointment_ortho', 'current_date_time', 'chord_handleEscalation')
+           )
+        ) as error_count,
         (SELECT COUNT(*) > 0 FROM production_trace_observations pto
          JOIN production_traces pt ON pto.trace_id = pt.trace_id
          WHERE pt.session_id = ps.session_id

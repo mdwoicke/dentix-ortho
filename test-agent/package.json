@@ -20,6 +20,7 @@
     "fix-report": "ts-node src/index.ts fix-report",
     "fix-status": "ts-node src/index.ts fix-status",
     "analyze": "ts-node src/index.ts analyze",
+    "llm-prompt": "ts-node src/llm-prompt.ts",
     "build": "tsc",
     "clean": "rimraf dist"
   },

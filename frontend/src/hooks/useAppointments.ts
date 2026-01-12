@@ -38,8 +38,13 @@ export function useAppointments() {
   ) => {
     try {
       await dispatch(fetchPatientAppointments({ patientGuid, params })).unwrap();
-    } catch (err) {
-      toast.showError(err as string);
+    } catch (err: unknown) {
+      // Skip showing error for cancelled requests (from condition callback)
+      if (err && typeof err === 'object' && 'name' in err && (err as Error).name === 'ConditionError') {
+        return; // Silently ignore - request was deduplicated
+      }
+      const message = typeof err === 'string' ? err : (err as Error)?.message || 'Failed to fetch appointments';
+      toast.showError(message);
     }
   };
 

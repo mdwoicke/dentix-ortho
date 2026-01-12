@@ -42,7 +42,9 @@ export const getLocations = asyncHandler(async (req: Request, res: Response) => 
   const response = await client.getLocations(false);
 
   if (response.status === 'Error' || response.errorMessage) {
-    throw new AppError(response.errorMessage || 'Failed to fetch locations', 500);
+    // Error code 8 = rate limiting
+    const statusCode = response.errorCode === 8 ? 429 : 500;
+    throw new AppError(response.errorMessage || 'Failed to fetch locations', statusCode);
   }
 
   // Transform field names for frontend
@@ -81,9 +83,11 @@ export const getAppointmentTypes = asyncHandler(async (req: Request, res: Respon
   const response = await client.getAppointmentTypes(false);
 
   if (response.status === 'Error' || response.errorMessage) {
+    // Error code 8 = rate limiting
+    const statusCode = response.errorCode === 8 ? 429 : 500;
     throw new AppError(
       response.errorMessage || 'Failed to fetch appointment types',
-      500
+      statusCode
     );
   }
 
@@ -121,7 +125,9 @@ export const getProviders = asyncHandler(async (req: Request, res: Response) => 
   const response = await client.getChairSchedules();
 
   if (response.status === 'Error' || response.errorMessage) {
-    throw new AppError(response.errorMessage || 'Failed to fetch providers', 500);
+    // Error code 8 = rate limiting
+    const statusCode = response.errorCode === 8 ? 429 : 500;
+    throw new AppError(response.errorMessage || 'Failed to fetch providers', statusCode);
   }
 
   // Transform field names for frontend

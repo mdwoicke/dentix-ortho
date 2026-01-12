@@ -8,6 +8,7 @@ import { Button } from '../../ui/Button';
 import { useToast } from '../../../hooks/useToast';
 import { generateCurlCommand } from '../../../services/api/postmanApi';
 import { cn } from '../../../utils/cn';
+import { copyToClipboard } from '../../../utils/clipboard';
 
 export interface CopyToPostmanButtonProps {
   procedure: string;
@@ -58,21 +59,15 @@ export function CopyToPostmanButton({
         parameters,
       });
 
-      // Copy to clipboard
-      await navigator.clipboard.writeText(curlCommand);
+      // Copy to clipboard (with fallback for non-secure contexts)
+      await copyToClipboard(curlCommand);
 
       // Show success message
       toast.showSuccess('cURL command copied to clipboard!');
     } catch (error) {
       // Handle errors
       console.error('Failed to copy cURL command:', error);
-
-      // Check if it's a clipboard error
-      if (error instanceof Error && error.name === 'NotAllowedError') {
-        toast.showError('Clipboard access denied. Please check permissions.');
-      } else {
-        toast.showError('Failed to generate cURL command');
-      }
+      toast.showError('Failed to generate or copy cURL command');
     } finally {
       setIsLoading(false);
     }

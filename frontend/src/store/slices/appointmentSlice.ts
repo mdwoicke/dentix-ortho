@@ -28,6 +28,7 @@ interface AppointmentState {
   slotsLoading: boolean;
   slotsError: string | null;
   slotFilters: GetAvailableApptsParams | null;
+  fetchingForPatientGuid: string | null; // Track which patient appointments are being fetched (for deduplication)
 }
 
 const initialState: AppointmentState = {
@@ -40,12 +41,14 @@ const initialState: AppointmentState = {
   slotsLoading: false,
   slotsError: null,
   slotFilters: null,
+  fetchingForPatientGuid: null,
 };
 
 // Async Thunks
 
 /**
  * Fetch appointments for a specific patient
+ * Uses condition callback to prevent duplicate requests (React Strict Mode double-invoke protection)
  */
 export const fetchPatientAppointments = createAsyncThunk(
   'appointments/fetchPatientAppointments',
@@ -55,12 +58,23 @@ export const fetchPatientAppointments = createAsyncThunk(
   ) => {
     try {
       const appointments = await appointmentApi.getPatientAppointments(patientGuid, params);
-      return { appointments, params };
+      return { appointments, params, patientGuid };
     } catch (error) {
       logError(error, 'fetchPatientAppointments');
       const formattedError = handleError(error, 'Failed to fetch patient appointments');
       return rejectWithValue(formattedError.message);
     }
+  },
+  {
+    // Prevent duplicate requests - skip if already fetching for this patient
+    condition: ({ patientGuid }, { getState }) => {
+      const state = getState() as RootState;
+      // Skip if already fetching appointments for this patient
+      if (state.appointments.fetchingForPatientGuid === patientGuid) {
+        return false;
+      }
+      return true;
+    },
   }
 );
 
@@ -198,13 +212,15 @@ export const appointmentSlice = createSlice({
   extraReducers: (builder) => {
     // Fetch Patient Appointments
     builder
-      .addCase(fetchPatientAppointments.pending, (state) => {
+      .addCase(fetchPatientAppointments.pending, (state, action) => {
         state.loading = true;
         state.error = null;
+        state.fetchingForPatientGuid = action.meta.arg.patientGuid; // Track which patient we're fetching for
       })
       .addCase(fetchPatientAppointments.fulfilled, (state, action) => {
         state.loading = false;
         state.appointments = action.payload.appointments;
+        state.fetchingForPatientGuid = null; // Clear tracking
         if (action.payload.params) {
           state.lastFetchParams = action.payload.params;
         }
@@ -212,6 +228,7 @@ export const appointmentSlice = createSlice({
       .addCase(fetchPatientAppointments.rejected, (state, action) => {
         state.loading = false;
         state.error = action.payload as string;
+        state.fetchingForPatientGuid = null; // Clear tracking
       });
 
     // Fetch Appointments

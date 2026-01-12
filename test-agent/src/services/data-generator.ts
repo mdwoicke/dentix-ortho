@@ -218,11 +218,21 @@ export class DataGeneratorService {
 
       case 'timeOfDay':
         return this.generateFromPool(
-          constraints.options || ['morning', 'afternoon', 'any']
+          constraints.options || DEFAULT_POOLS.timeOfDay
         );
 
       case 'specialNeeds':
         return this.generateSpecialNeeds(constraints);
+
+      case 'verbosity':
+        return this.generateFromPool(
+          constraints.options || DEFAULT_POOLS.verbosity
+        );
+
+      case 'patienceLevel':
+        return this.generateFromPool(
+          constraints.options || DEFAULT_POOLS.patienceLevel
+        );
 
       default:
         return faker.lorem.word();

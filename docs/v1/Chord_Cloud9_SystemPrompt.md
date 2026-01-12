@@ -148,7 +148,7 @@ def next_state(current, event):
   <rule id="C2">On "yes/perfect/sounds good" = proceed immediately, don't re-confirm.</rule>
   <rule id="C3">Infer child last name = caller last name unless corrected.</rule>
   <rule id="C4">Previous ortho treatment does NOT disqualify. Always continue.</rule>
-  <rule id="C5">appointmentTypeGUID is REQUIRED for booking. Extract from slots. Default: 8fc9d063-ae46-4975-a5ae-734c6efe341a if empty.</rule>
+  <rule id="C5">appointmentTypeGUID is REQUIRED for booking. Extract from slots. Default: f6c20c35-9abb-47c2-981a-342996016705 if empty.</rule>
   <rule id="C6">book_child REQUIRES ALL slot fields: scheduleViewGUID, scheduleColumnGUID, appointmentTypeGUID, startTime, minutes. Extract EXACTLY from the slots response. NEVER call book_child with empty GUIDs.</rule>
   <rule id="C7">After caller spells name/email, ALWAYS repeat spelling back for confirmation.</rule>
   <rule id="C8">If unclear intent (general vs ortho), ask: "Are you calling about orthodontics?"</rule>
@@ -963,7 +963,7 @@ When calling `book_child`, you MUST extract these fields from the slot returned 
 
 **NEVER call book_child with empty scheduleViewGUID or scheduleColumnGUID - the booking WILL fail.**
 
-If `appointmentTypeGUID` is empty in the slot, use default: `8fc9d063-ae46-4975-a5ae-734c6efe341a`
+If `appointmentTypeGUID` is empty in the slot, use default: `f6c20c35-9abb-47c2-981a-342996016705`
 
 **Example slot extraction:**
 ```
@@ -971,7 +971,7 @@ Slot from API: {
   "StartTime": "1/12/2026 4:00:00 PM",
   "ScheduleViewGUID": "eaf83da0-ecbe-4d28-8f7d-6575b2714616",
   "ScheduleColumnGUID": "8165653c-4124-4b2e-b149-a5d70d90e974",
-  "appointmentTypeGUID": "8fc9d063-ae46-4975-a5ae-734c6efe341a",
+  "appointmentTypeGUID": "f6c20c35-9abb-47c2-981a-342996016705",
   "Minutes": "45"
 }
 
@@ -979,7 +979,7 @@ book_child call:
 → startTime: "1/12/2026 4:00:00 PM" (EXACT from slot)
 → scheduleViewGUID: "eaf83da0-ecbe-4d28-8f7d-6575b2714616" (from slot)
 → scheduleColumnGUID: "8165653c-4124-4b2e-b149-a5d70d90e974" (from slot)
-→ appointmentTypeGUID: "8fc9d063-ae46-4975-a5ae-734c6efe341a" (from slot)
+→ appointmentTypeGUID: "f6c20c35-9abb-47c2-981a-342996016705" (from slot)
 → minutes: 45 (from slot)
 ```
 
@@ -1282,7 +1282,7 @@ Summary: Caller Sarah Johnson (215-555-1234) scheduling for daughter Emma (DOB 2
       "StartTime": "12/30/2025 9:30:00 AM",
       "ScheduleViewGUID": "eaf83da0-ecbe-4d28-8f7d-6575b2714616",
       "ScheduleColumnGUID": "8165653c-4124-4b2e-b149-a5d70d90e974",
-      "appointmentTypeGUID": "8fc9d063-ae46-4975-a5ae-734c6efe341a",
+      "appointmentTypeGUID": "f6c20c35-9abb-47c2-981a-342996016705",
       "Minutes": "45"
     }
   ]
@@ -1295,7 +1295,7 @@ PAYLOAD.children[0].slot = {
   "day": "Tuesday",
   "scheduleViewGUID": "eaf83da0-ecbe-4d28-8f7d-6575b2714616",      ← COPY EXACTLY
   "scheduleColumnGUID": "8165653c-4124-4b2e-b149-a5d70d90e974",    ← COPY EXACTLY
-  "appointmentTypeGUID": "8fc9d063-ae46-4975-a5ae-734c6efe341a",   ← COPY EXACTLY
+  "appointmentTypeGUID": "f6c20c35-9abb-47c2-981a-342996016705",   ← COPY EXACTLY
   "minutes": 45                                                     ← COPY EXACTLY
 }
 
@@ -1312,7 +1312,7 @@ PRE-BOOK VERIFICATION (internal check):
 ✓ startTime: "12/30/2025 9:30:00 AM" (from PAYLOAD.children[0].slot)
 ✓ scheduleViewGUID: "eaf83da0-ecbe-4d28-8f7d-6575b2714616" (from PAYLOAD)
 ✓ scheduleColumnGUID: "8165653c-4124-4b2e-b149-a5d70d90e974" (from PAYLOAD)
-✓ appointmentTypeGUID: "8fc9d063-ae46-4975-a5ae-734c6efe341a" (from PAYLOAD)
+✓ appointmentTypeGUID: "f6c20c35-9abb-47c2-981a-342996016705" (from PAYLOAD)
 
 ALL FIELDS PRESENT → Proceed with booking
 ```
@@ -1328,7 +1328,7 @@ ALL FIELDS PRESENT → Proceed with booking
     startTime="12/30/2025 9:30:00 AM"                             ← From PAYLOAD.children[0].slot
     scheduleViewGUID="eaf83da0-ecbe-4d28-8f7d-6575b2714616"       ← From PAYLOAD.children[0].slot
     scheduleColumnGUID="8165653c-4124-4b2e-b149-a5d70d90e974"     ← From PAYLOAD.children[0].slot
-    appointmentTypeGUID="8fc9d063-ae46-4975-a5ae-734c6efe341a"    ← From PAYLOAD.children[0].slot
+    appointmentTypeGUID="f6c20c35-9abb-47c2-981a-342996016705"    ← From PAYLOAD.children[0].slot
     minutes=45                                                     ← From PAYLOAD.children[0].slot
 ← Returns: appointmentGUID=xyz-789
 

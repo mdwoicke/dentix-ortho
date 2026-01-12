@@ -58,23 +58,61 @@ const NODRED_API_CONFIG = {
   }
 };
 
-// Cloud9 Direct API Configuration (Sandbox)
-// Uses Vite proxy to bypass CORS - actual endpoint is https://us-ea1-partnertest.cloud9ortho.com/GetData.ashx
-const CLOUD9_API_CONFIG = {
-  baseUrl: '/cloud9-api/GetData.ashx',
-  displayUrl: 'https://us-ea1-partnertest.cloud9ortho.com/GetData.ashx',
-  clientId: 'c15aa02a-adc1-40ae-a2b5-d2e39173ae56',
-  userName: 'IntelepeerTest',
-  password: '#!InteleP33rTest!#',
-  namespace: 'http://schemas.practica.ws/cloud9/partners/',
+// Cloud9 Direct API Configuration
+// Uses Vite proxy to bypass CORS
+type Cloud9Environment = 'sandbox' | 'production';
+
+interface Cloud9ApiConfig {
+  baseUrl: string;
+  displayUrl: string;
+  clientId: string;
+  userName: string;
+  password: string;
+  namespace: string;
   defaults: {
-    locationGUID: '1070d281-0952-4f01-9a6e-1a2e6926a7db',
-    providerGUID: '79ec29fe-c315-4982-845a-0005baefb5a8',
-    apptTypeGUID: '8fc9d063-ae46-4975-a5ae-734c6efe341a',
-    scheduleViewGUID: '2544683a-8e79-4b32-a4d4-bf851996bac3',
-    testPatientGUID: '64DA8F5C-7E54-4659-8AE1-7BB6A033D2A5'
+    locationGUID: string;
+    providerGUID: string;
+    apptTypeGUID: string;
+    scheduleViewGUID: string;
+    testPatientGUID: string;
+  };
+}
+
+const CLOUD9_CONFIGS: Record<Cloud9Environment, Cloud9ApiConfig> = {
+  sandbox: {
+    baseUrl: '/cloud9-api/GetData.ashx',
+    displayUrl: 'https://us-ea1-partnertest.cloud9ortho.com/GetData.ashx',
+    clientId: 'c15aa02a-adc1-40ae-a2b5-d2e39173ae56',
+    userName: 'IntelepeerTest',
+    password: '#!InteleP33rTest!#',
+    namespace: 'http://schemas.practica.ws/cloud9/partners/',
+    defaults: {
+      locationGUID: '1070d281-0952-4f01-9a6e-1a2e6926a7db',
+      providerGUID: '79ec29fe-c315-4982-845a-0005baefb5a8',
+      apptTypeGUID: '8fc9d063-ae46-4975-a5ae-734c6efe341a',
+      scheduleViewGUID: '2544683a-8e79-4b32-a4d4-bf851996bac3',
+      testPatientGUID: '64DA8F5C-7E54-4659-8AE1-7BB6A033D2A5'
+    }
+  },
+  production: {
+    baseUrl: '/cloud9-api-prod/GetData.ashx',
+    displayUrl: 'https://us-ea1-partner.cloud9ortho.com/GetData.ashx',
+    clientId: 'b42c51be-2529-4d31-92cb-50fd1a58c084',
+    userName: 'Intelepeer',
+    password: '$#1Nt-p33R-AwS#$',
+    namespace: 'http://schemas.practica.ws/cloud9/partners/',
+    defaults: {
+      locationGUID: '1070d281-0952-4f01-9a6e-1a2e6926a7db',
+      providerGUID: '79ec29fe-c315-4982-845a-0005baefb5a8',
+      apptTypeGUID: '8fc9d063-ae46-4975-a5ae-734c6efe341a',
+      scheduleViewGUID: '2544683a-8e79-4b32-a4d4-bf851996bac3',
+      testPatientGUID: '64DA8F5C-7E54-4659-8AE1-7BB6A033D2A5'
+    }
   }
 };
+
+// Default config for backward compatibility
+const CLOUD9_API_CONFIG = CLOUD9_CONFIGS.sandbox;
 
 // Legacy alias for backward compatibility
 const API_CONFIG = NODRED_API_CONFIG;
@@ -92,9 +130,29 @@ const CopyButton = ({ value, size = 'sm' }: { value: string; size?: 'sm' | 'xs' 
 
   const handleCopy = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    await navigator.clipboard.writeText(value);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    e.preventDefault();
+    try {
+      // Try modern clipboard API first
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(value);
+      } else {
+        // Fallback for non-secure contexts (like IP addresses)
+        const textArea = document.createElement('textarea');
+        textArea.value = value;
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-999999px';
+        textArea.style.top = '-999999px';
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textArea);
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch (err) {
+      console.error('Failed to copy:', err);
+    }
   };
 
   const sizeClasses = size === 'xs' ? 'w-3 h-3' : 'w-4 h-4';
@@ -102,6 +160,7 @@ const CopyButton = ({ value, size = 'sm' }: { value: string; size?: 'sm' | 'xs' 
 
   return (
     <button
+      type="button"
       onClick={handleCopy}
       className={`${buttonClasses} hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors inline-flex items-center justify-center`}
       title={copied ? 'Copied!' : 'Copy to clipboard'}
@@ -388,12 +447,12 @@ function escapeXml(str: string | null | undefined): string {
   );
 }
 
-function buildCloud9XmlRequest(procedure: string, params: Record<string, string> = {}): string {
+function buildCloud9XmlRequest(procedure: string, params: Record<string, string> = {}, config: Cloud9ApiConfig = CLOUD9_API_CONFIG): string {
   const paramElements = Object.entries(params)
     .filter(([, v]) => v !== null && v !== undefined && v !== '')
     .map(([k, v]) => `<${k}>${escapeXml(v)}</${k}>`)
     .join('');
-  return `<?xml version="1.0" encoding="utf-8"?><GetDataRequest xmlns="${CLOUD9_API_CONFIG.namespace}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><ClientID>${CLOUD9_API_CONFIG.clientId}</ClientID><UserName>${CLOUD9_API_CONFIG.userName}</UserName><Password>${escapeXml(CLOUD9_API_CONFIG.password)}</Password><Procedure>${procedure}</Procedure><Parameters>${paramElements}</Parameters></GetDataRequest>`;
+  return `<?xml version="1.0" encoding="utf-8"?><GetDataRequest xmlns="${config.namespace}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><ClientID>${config.clientId}</ClientID><UserName>${config.userName}</UserName><Password>${escapeXml(config.password)}</Password><Procedure>${procedure}</Procedure><Parameters>${paramElements}</Parameters></GetDataRequest>`;
 }
 
 function parseCloud9XmlResponse(xmlText: string): { status: string; records: Record<string, string>[]; error?: string } {
@@ -1242,6 +1301,10 @@ export function APITestingPage() {
   // API Mode State
   const [apiMode, setApiMode] = useState<ApiMode>('nodeRed');
 
+  // Cloud9 Environment State
+  const [cloud9Environment, setCloud9Environment] = useState<Cloud9Environment>('sandbox');
+  const cloud9Config = CLOUD9_CONFIGS[cloud9Environment];
+
   // Node Red State
   const [nodeRedResults, setNodeRedResults] = useState<Record<string, TestResult>>(
     Object.fromEntries(ENDPOINTS.map(e => [e.id, { status: 'pending' as TestStatus }]))
@@ -1327,9 +1390,9 @@ export function APITestingPage() {
     const startTime = Date.now();
 
     try {
-      const xmlBody = buildCloud9XmlRequest(endpoint.procedure, cloud9InputData[endpoint.id]);
+      const xmlBody = buildCloud9XmlRequest(endpoint.procedure, cloud9InputData[endpoint.id], cloud9Config);
 
-      const response = await fetch(CLOUD9_API_CONFIG.baseUrl, {
+      const response = await fetch(cloud9Config.baseUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'text/xml; charset=utf-8'
@@ -1369,7 +1432,7 @@ export function APITestingPage() {
         [endpoint.id]: { status: 'error', error: (error as Error).message, duration }
       }));
     }
-  }, [cloud9InputData]);
+  }, [cloud9InputData, cloud9Config]);
 
   // Run all tests for current mode
   const runAllNodeRedTests = useCallback(async (category?: EndpointCategory) => {
@@ -1451,11 +1514,51 @@ export function APITestingPage() {
             </button>
           </div>
         </div>
+
+        {/* Cloud9 Environment Selector */}
+        {apiMode === 'cloud9' && (
+          <div className="flex items-center justify-center gap-2 mt-4">
+            <span className="text-sm text-gray-500 mr-2">Environment:</span>
+            <div className="inline-flex rounded-lg border border-gray-200 dark:border-gray-700 p-1 bg-gray-100 dark:bg-gray-900">
+              <button
+                onClick={() => setCloud9Environment('sandbox')}
+                className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
+                  cloud9Environment === 'sandbox'
+                    ? 'bg-white dark:bg-gray-800 text-blue-600 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
+                }`}
+              >
+                Sandbox
+              </button>
+              <button
+                onClick={() => setCloud9Environment('production')}
+                className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
+                  cloud9Environment === 'production'
+                    ? 'bg-white dark:bg-gray-800 text-orange-600 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
+                }`}
+              >
+                Production
+              </button>
+            </div>
+            {cloud9Environment === 'production' && (
+              <span className="ml-2 px-2 py-1 text-xs font-medium bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300 rounded">
+                PRODUCTION
+              </span>
+            )}
+          </div>
+        )}
+
         <div className="text-center mt-2 text-xs text-gray-400">
           {apiMode === 'nodeRed' ? (
             <span>Endpoint: {NODRED_API_CONFIG.baseUrl}</span>
           ) : (
-            <span>Endpoint: {CLOUD9_API_CONFIG.displayUrl} (Sandbox)</span>
+            <span>
+              Endpoint: {cloud9Config.displayUrl}
+              <span className={`ml-1 ${cloud9Environment === 'production' ? 'text-orange-500' : 'text-blue-500'}`}>
+                ({cloud9Environment === 'production' ? 'Production' : 'Sandbox'})
+              </span>
+            </span>
           )}
         </div>
       </div>

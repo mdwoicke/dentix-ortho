@@ -10,8 +10,32 @@ import type {
   ConversationGoalDTO,
   GoalTypeDTO,
   CollectableFieldDTO,
+  FieldDefaultValueDTO,
 } from '../../../types/testMonitor.types';
 import { COLLECTABLE_FIELDS, GOAL_TYPES } from '../../../types/testMonitor.types';
+
+/**
+ * Map of collectable fields to their persona field equivalents.
+ * Fields with persona mappings get their values from the persona.
+ * Fields without mappings (null) can be configured at the goal level.
+ */
+const FIELD_PERSONA_MAPPING: Record<CollectableFieldDTO, string | null> = {
+  parent_name: 'parentFirstName/LastName',
+  parent_name_spelling: null, // No persona mapping - behavior flag
+  parent_phone: 'parentPhone',
+  parent_email: 'parentEmail',
+  child_count: 'children.length',
+  child_names: 'children[].firstName/lastName',
+  child_dob: 'children[].dateOfBirth',
+  child_age: 'children[].dateOfBirth',
+  is_new_patient: 'children[].isNewPatient',
+  previous_visit: 'previousVisitToOffice',
+  previous_ortho: 'previousOrthoTreatment',
+  insurance: 'hasInsurance/insuranceProvider',
+  special_needs: 'children[].specialNeeds',
+  time_preference: 'preferredTimeOfDay',
+  location_preference: 'preferredLocation',
+};
 
 export interface GoalsEditorProps {
   goals: ConversationGoalDTO[];
@@ -68,7 +92,30 @@ export function GoalsEditor({ goals, onChange }: GoalsEditorProps) {
     const newFields = currentFields.includes(field)
       ? currentFields.filter(f => f !== field)
       : [...currentFields, field];
-    updateGoal(index, { requiredFields: newFields });
+
+    // If removing a field, also remove its default value
+    if (!newFields.includes(field) && goal.fieldDefaults?.[field]) {
+      const newDefaults = { ...goal.fieldDefaults };
+      delete newDefaults[field];
+      updateGoal(index, { requiredFields: newFields, fieldDefaults: newDefaults });
+    } else {
+      updateGoal(index, { requiredFields: newFields });
+    }
+  };
+
+  const updateFieldDefault = (index: number, field: CollectableFieldDTO, defaultValue: FieldDefaultValueDTO | undefined) => {
+    const goal = goals[index];
+    const newDefaults = { ...goal.fieldDefaults };
+    if (defaultValue) {
+      newDefaults[field] = defaultValue;
+    } else {
+      delete newDefaults[field];
+    }
+    updateGoal(index, { fieldDefaults: newDefaults });
+  };
+
+  const getFieldConfig = (field: CollectableFieldDTO) => {
+    return COLLECTABLE_FIELDS.find(f => f.value === field);
   };
 
   const getGoalTypeInfo = (type: GoalTypeDTO) => {
@@ -214,25 +261,114 @@ export function GoalsEditor({ goals, onChange }: GoalsEditorProps) {
 
                 {/* Required Fields (only for data_collection) */}
                 {goal.type === 'data_collection' && (
-                  <div>
-                    <label className="block text-xs text-gray-500 dark:text-gray-400 mb-2">
-                      Required Fields to Collect
-                    </label>
-                    <div className="flex flex-wrap gap-2">
-                      {COLLECTABLE_FIELDS.map(field => (
-                        <button
-                          key={field.value}
-                          onClick={() => toggleField(index, field.value)}
-                          className={`px-2 py-1 text-xs rounded transition-colors ${
-                            goal.requiredFields?.includes(field.value)
-                              ? 'bg-primary-500 text-white'
-                              : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
-                          }`}
-                        >
-                          {field.label}
-                        </button>
-                      ))}
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-xs text-gray-500 dark:text-gray-400 mb-2">
+                        Required Fields to Collect
+                      </label>
+                      <div className="flex flex-wrap gap-2">
+                        {COLLECTABLE_FIELDS.map(field => {
+                          const hasPersonaMapping = FIELD_PERSONA_MAPPING[field.value] !== null;
+                          const isSelected = goal.requiredFields?.includes(field.value);
+                          const hasDefault = goal.fieldDefaults?.[field.value];
+                          return (
+                            <button
+                              key={field.value}
+                              onClick={() => toggleField(index, field.value)}
+                              title={hasDefault ? 'Has custom default value' : (hasPersonaMapping ? `Uses persona field: ${FIELD_PERSONA_MAPPING[field.value]}` : 'No persona mapping')}
+                              className={`px-2 py-1 text-xs rounded transition-colors ${
+                                isSelected
+                                  ? hasDefault
+                                    ? 'bg-purple-500 text-white'
+                                    : 'bg-primary-500 text-white'
+                                  : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
+                              }`}
+                            >
+                              {field.label}
+                              {isSelected && hasDefault && (
+                                <span className="ml-1" title="Has custom default">◆</span>
+                              )}
+                              {isSelected && !hasDefault && hasPersonaMapping && (
+                                <span className="ml-1 opacity-70" title="Value from Persona">●</span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <p className="mt-2 text-xs text-gray-400 dark:text-gray-500">
+                        <span className="text-primary-400">●</span> = From Persona | <span className="text-purple-400">◆</span> = Custom default
+                      </p>
                     </div>
+
+                    {/* Default Values Configuration */}
+                    {(() => {
+                      const fieldsWithDefaults = (goal.requiredFields || []).filter(fieldValue => {
+                        const config = getFieldConfig(fieldValue);
+                        return config?.supportsDefault;
+                      });
+
+                      if (fieldsWithDefaults.length === 0) {
+                        return (
+                          <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
+                            <p className="text-xs text-gray-400 dark:text-gray-500 italic">
+                              Select Time Preference, Location, Insurance, Special Needs, or boolean fields to configure default values.
+                            </p>
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
+                          <label className="block text-xs text-gray-500 dark:text-gray-400 mb-2">
+                            Field Values (🎲 Random by default, or select a fixed value)
+                          </label>
+                          <div className="space-y-2">
+                            {fieldsWithDefaults.map(fieldValue => {
+                              const config = getFieldConfig(fieldValue);
+                              if (!config) return null;
+                              const currentDefault = goal.fieldDefaults?.[fieldValue];
+                              const hasFixedDefault = currentDefault && !currentDefault.useRandom;
+
+                              return (
+                                <div key={fieldValue} className="flex items-center gap-2 p-2 bg-gray-50 dark:bg-gray-900/50 rounded">
+                                  <span className="text-xs font-medium text-gray-600 dark:text-gray-400 w-32">
+                                    {config.label}
+                                  </span>
+
+                                  {/* Value selector - first option is Random */}
+                                  <select
+                                    value={hasFixedDefault ? currentDefault.fixedValue : '_random_'}
+                                    onChange={(e) => {
+                                      const value = e.target.value;
+                                      if (value === '_random_') {
+                                        // Clear fixed default - will use random
+                                        updateFieldDefault(index, fieldValue, undefined);
+                                      } else {
+                                        // Set fixed default
+                                        updateFieldDefault(index, fieldValue, {
+                                          useRandom: false,
+                                          fixedValue: value,
+                                        });
+                                      }
+                                    }}
+                                    className={`flex-1 px-2 py-1 text-xs border rounded ${
+                                      hasFixedDefault
+                                        ? 'border-purple-400 dark:border-purple-600 bg-purple-50 dark:bg-purple-900/20 text-purple-700 dark:text-purple-300'
+                                        : 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white'
+                                    }`}
+                                  >
+                                    <option value="_random_">🎲 Random</option>
+                                    {config.defaultPool?.map(opt => (
+                                      <option key={opt} value={opt}>{opt}</option>
+                                    ))}
+                                  </select>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 )}
 

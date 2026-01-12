@@ -6,7 +6,7 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { claudeCliService, ClaudeCliRequest } from './claude-cli-service';
-import { getLLMConfig, isClaudeCliEnabled, getApiKey } from '../config/llm-config';
+import { getLLMConfig, isClaudeCliEnabled, isStrictCliMode, getApiKey } from '../config/llm-config';
 import { getLangfuseService } from './langfuse-service';
 import { getCurrentTraceContext } from './langfuse-context';
 import type { GenerationPurpose } from '../types/langfuse.types';
@@ -58,12 +58,19 @@ export interface LLMProviderStatus {
 export class LLMProvider {
   private anthropicClient: Anthropic | null = null;
   private useCliMode: boolean;
+  private strictCliMode: boolean;
 
   constructor() {
     this.useCliMode = isClaudeCliEnabled();
+    this.strictCliMode = isStrictCliMode();
 
     if (!this.useCliMode) {
       this.initializeApiClient();
+    }
+
+    // Log strict mode if enabled
+    if (this.useCliMode && this.strictCliMode) {
+      console.log('[LLMProvider] Strict CLI mode enabled - will NOT fallback to API');
     }
   }
 
@@ -99,7 +106,23 @@ export class LLMProvider {
         };
       }
 
-      // CLI not available, check for API fallback
+      // CLI not available - check if we should fallback to API
+      if (this.strictCliMode) {
+        // Strict mode: do NOT fallback to API
+        console.log('[LLMProvider] CLI unavailable, strict mode enabled - NOT falling back to API');
+        return {
+          available: false,
+          provider: 'none',
+          error: cliStatus.error || 'Claude CLI not available (strict mode - no API fallback)',
+          cliStatus: {
+            installed: cliStatus.installed,
+            authenticated: cliStatus.authenticated,
+            version: cliStatus.version,
+          },
+        };
+      }
+
+      // Non-strict mode: check for API fallback
       if (!this.anthropicClient) {
         this.initializeApiClient();
       }
@@ -170,7 +193,19 @@ export class LLMProvider {
         return this.executeViaCli(request);
       }
 
-      // Fallback to API if CLI unavailable
+      // CLI unavailable - check if we should fallback to API
+      if (this.strictCliMode) {
+        // Strict mode: do NOT fallback to API
+        console.warn('[LLMProvider] CLI unavailable, strict mode enabled - NOT falling back to API');
+        return {
+          success: false,
+          error: `Claude CLI not available: ${cliStatus.error}. Strict CLI mode enabled - no API fallback.`,
+          provider: 'none',
+          durationMs: Date.now() - startTime,
+        };
+      }
+
+      // Non-strict mode: fallback to API
       console.warn('[LLMProvider] CLI unavailable, attempting API fallback');
       if (!this.anthropicClient) {
         this.initializeApiClient();

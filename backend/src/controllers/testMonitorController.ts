@@ -8283,13 +8283,31 @@ function buildCombinedTranscript(traces: any[], observations: any[]): Conversati
 
     // Add assistant turn from trace output or final generation
     let assistantContent: string | null = null;
-    let assistantTimestamp: string = trace.started_at;
+    // Use trace.ended_at for assistant timestamp (when the response was ready)
+    // Fall back to finding the latest observation end time, then trace.started_at
+    let assistantTimestamp: string = trace.ended_at || trace.started_at;
+
+    // If no trace.ended_at, find the latest observation end time for better grouping
+    if (!trace.ended_at && traceObservations.length > 0) {
+      const latestObsTime = traceObservations
+        .map((o: any) => o.ended_at || o.started_at)
+        .filter(Boolean)
+        .sort()
+        .pop();
+      if (latestObsTime) {
+        assistantTimestamp = latestObsTime;
+      }
+    }
 
     // First try trace output
     if (trace.output) {
       try {
         const output = JSON.parse(trace.output);
         assistantContent = extractAssistantMessage(output);
+        // If we got content from trace output, use trace.ended_at as timestamp
+        if (assistantContent && trace.ended_at) {
+          assistantTimestamp = trace.ended_at;
+        }
       } catch {
         assistantContent = trace.output;
       }

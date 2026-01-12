@@ -42,11 +42,12 @@ function loadGoalTestsFromDatabase(): GoalOrientedTestCase[] {
 
   try {
     const db = new BetterSqlite3(dbPath, { readonly: true });
+    // Load ALL goal tests from database (including GOAL-HAPPY-* for UI overrides)
     const rows = db.prepare(`
       SELECT case_id, name, description, category, tags_json, persona_json,
              goals_json, constraints_json, response_config_json, initial_message
       FROM goal_test_cases
-      WHERE is_archived = 0 AND (case_id LIKE 'GOAL-EDGE-%' OR case_id LIKE 'GOAL-ERR-%')
+      WHERE is_archived = 0 AND case_id LIKE 'GOAL-%'
     `).all() as any[];
     db.close();
 
@@ -92,10 +93,14 @@ async function runGoalTests(
   const retryInfo = maxRetries > 0 ? ` (with ${maxRetries} retr${maxRetries > 1 ? 'ies' : 'y'})` : '';
   console.log(`Running ${scenarioIds.length} goal test(s) with concurrency ${concurrency}${retryInfo}\n`);
 
-  // Get all available goal scenarios (TypeScript + database)
+  // Get all available goal scenarios (database takes precedence over TypeScript)
   const dbScenarios = loadGoalTestsFromDatabase();
-  const allGoalScenarios: GoalOrientedTestCase[] = [...goalHappyPathScenarios, ...dbScenarios];
-  console.log(`[GoalTest] Loaded ${goalHappyPathScenarios.length} TS scenarios + ${dbScenarios.length} DB scenarios`);
+  const dbScenarioIds = new Set(dbScenarios.map(s => s.id));
+  // Filter out TypeScript scenarios that have database overrides
+  const tsOnlyScenarios = goalHappyPathScenarios.filter(s => !dbScenarioIds.has(s.id));
+  // Database scenarios come first (take precedence), then TS-only scenarios
+  const allGoalScenarios: GoalOrientedTestCase[] = [...dbScenarios, ...tsOnlyScenarios];
+  console.log(`[GoalTest] Loaded ${dbScenarios.length} DB scenarios + ${tsOnlyScenarios.length} TS-only scenarios (DB takes precedence)`);
 
   // Map scenario IDs to actual scenarios (preserving duplicates for run count feature)
   // This allows the same scenario to run multiple times when requested
@@ -507,9 +512,11 @@ program
 
       console.log('\n E2E Test Agent\n');
 
-      // Load goal tests for summary
+      // Load goal tests for summary (database takes precedence, deduplicate)
       const dbGoalTests = loadGoalTestsFromDatabase();
-      const allGoalTests = [...goalHappyPathScenarios, ...dbGoalTests];
+      const dbGoalTestIds = new Set(dbGoalTests.map(s => s.id));
+      const tsOnlyGoalTests = goalHappyPathScenarios.filter(s => !dbGoalTestIds.has(s.id));
+      const allGoalTests = [...dbGoalTests, ...tsOnlyGoalTests];
       const goalTestCount = allGoalTests.length;
 
       const summary = getScenarioSummary();
@@ -827,9 +834,11 @@ program
     try {
       const { allScenarios } = require('./tests/scenarios');
 
-      // Load goal tests (TypeScript + database)
+      // Load goal tests (database takes precedence over TypeScript)
       const dbGoalTests = loadGoalTestsFromDatabase();
-      const allGoalTests = [...goalHappyPathScenarios, ...dbGoalTests];
+      const dbGoalTestIds = new Set(dbGoalTests.map(s => s.id));
+      const tsOnlyGoalTests = goalHappyPathScenarios.filter(s => !dbGoalTestIds.has(s.id));
+      const allGoalTests = [...dbGoalTests, ...tsOnlyGoalTests];
 
       // Determine what to show
       const showGoalTests = options.goalTests || options.all || !options.category;
@@ -1447,9 +1456,11 @@ program
       const retryInfo = maxRetries > 0 ? ` with ${maxRetries} retr${maxRetries > 1 ? 'ies' : 'y'}` : '';
       console.log(`\n Running ${totalRuns} test iterations (${iterations} per variant), concurrency ${concurrency}${retryInfo}...\n`);
 
-      // Get goal test scenarios
+      // Get goal test scenarios (database takes precedence over TypeScript)
       const dbScenarios = loadGoalTestsFromDatabase();
-      const allGoalScenarios = [...goalHappyPathScenarios, ...dbScenarios];
+      const dbScenarioIds = new Set(dbScenarios.map(s => s.id));
+      const tsOnlyScenarios = goalHappyPathScenarios.filter(s => !dbScenarioIds.has(s.id));
+      const allGoalScenarios = [...dbScenarios, ...tsOnlyScenarios];
 
       // Get variant IDs for control and treatment
       const controlVariant = experiment.variants.find(v => v.role === 'control');

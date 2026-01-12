@@ -12,6 +12,9 @@ export type { InputProps } from './Input';
 export { Select } from './Select';
 export type { SelectProps } from './Select';
 
+export { SearchableSelect } from './SearchableSelect';
+export type { SearchableSelectProps } from './SearchableSelect';
+
 export { Card, CardHeader, CardBody, CardFooter } from './Card';
 export type { CardProps, CardHeaderProps, CardBodyProps, CardFooterProps } from './Card';
 
@@ -32,3 +35,6 @@ export type { SpinnerProps } from './Spinner';
 
 export { Toast, ToastContainer } from './Toast';
 export type { ToastProps, ToastContainerProps } from './Toast';
+
+export { GuidCopyButton } from './GuidCopyButton';
+export type { GuidCopyButtonProps } from './GuidCopyButton';

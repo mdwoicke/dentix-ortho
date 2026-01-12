@@ -46,7 +46,9 @@ export const searchPatients = asyncHandler(async (req: Request, res: Response) =
   const response = await client.searchPatients(query, pageIndex, pageSize);
 
   if (response.status === 'Error' || response.errorMessage) {
-    throw new AppError(response.errorMessage || 'Failed to search patients', 500);
+    // Error code 8 = rate limiting
+    const statusCode = response.errorCode === 8 ? 429 : 500;
+    throw new AppError(response.errorMessage || 'Failed to search patients', statusCode);
   }
 
   // Transform patient data
@@ -98,9 +100,11 @@ export const getPatient = asyncHandler(async (req: Request, res: Response) => {
   const response = await client.getPatientInformation(patientGuid);
 
   if (response.status === 'Error' || response.errorMessage) {
+    // Error code 8 = rate limiting
+    const statusCode = response.errorCode === 8 ? 429 : 500;
     throw new AppError(
       response.errorMessage || 'Failed to fetch patient information',
-      500
+      statusCode
     );
   }
 
@@ -209,7 +213,9 @@ export const createPatient = asyncHandler(async (req: Request, res: Response) =>
   const response = await client.createPatient(params);
 
   if (response.status === 'Error' || response.errorMessage) {
-    throw new AppError(response.errorMessage || 'Failed to create patient', 500);
+    // Error code 8 = rate limiting
+    const statusCode = response.errorCode === 8 ? 429 : 500;
+    throw new AppError(response.errorMessage || 'Failed to create patient', statusCode);
   }
 
   // Extract patient GUID from response
@@ -283,14 +289,16 @@ export const updatePatient = asyncHandler(async (req: Request, res: Response) =>
     const errorMessage = response.errorMessage || 'Failed to update patient';
 
     // Check for authorization errors (error code 10)
-    if (errorMessage.includes('not authorized')) {
+    if (errorMessage.includes('not authorized') || response.errorCode === 10) {
       throw new AppError(
         'Patient update is not available. The SetPatientDemographicInfo procedure is not authorized for this API account. Please contact Cloud 9 support to enable this feature.',
         403
       );
     }
 
-    throw new AppError(errorMessage, 500);
+    // Error code 8 = rate limiting
+    const statusCode = response.errorCode === 8 ? 429 : 500;
+    throw new AppError(errorMessage, statusCode);
   }
 
   // Fetch updated patient information

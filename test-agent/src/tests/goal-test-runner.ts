@@ -38,6 +38,7 @@ import type { UserPersona, DynamicUserPersona, ResolvedPersona } from './types/p
 import type { CollectableField } from './types/goals';
 import { config } from '../config/config';
 import { getCurrentTraceContext } from '../../../shared/services';
+import { resolveTemplate } from '../services/template-resolver';
 
 /**
  * Pattern definitions for extracting volunteered data from user messages.
@@ -367,9 +368,13 @@ export class GoalTestRunner {
 
     try {
       // Resolve initial message (can be string or function)
-      const initialMessage = typeof testCase.initialMessage === 'function'
-        ? testCase.initialMessage(testCase.persona)
+      // Use personaToUse (resolved persona) for template resolution
+      let initialMessage = typeof testCase.initialMessage === 'function'
+        ? testCase.initialMessage(personaToUse)
         : testCase.initialMessage;
+
+      // Resolve any {{placeholder}} templates in the initial message
+      initialMessage = resolveTemplate(initialMessage, personaToUse);
 
       // Send initial message
       const initialResponse = await this.sendMessage(

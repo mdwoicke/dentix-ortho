@@ -814,9 +814,9 @@ export function TestRunDetail() {
             />
           </ExpandablePanel>
 
-          {/* Prompt Versions */}
+          {/* Project Artifacts */}
           <ExpandablePanel
-            title="Prompt Versions"
+            title="Project Artifacts"
             subtitle={promptFiles.length > 0 ? `(${promptFiles.length} files)` : undefined}
             contentClassName="p-2"
             maxContentHeight="300px"

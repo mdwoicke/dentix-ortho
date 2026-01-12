@@ -25,6 +25,7 @@ interface PatientState {
   lastSearchParams: PatientSearchParams | null;
   patientDetailsCache: Record<string, Patient>;    // Cache fetched details by patient_guid
   patientDetailsLoading: Record<string, boolean>;  // Loading state per patient
+  fetchingPatientGuid: string | null;              // Currently fetching patient GUID (for deduplication)
 }
 
 const initialState: PatientState = {
@@ -36,6 +37,7 @@ const initialState: PatientState = {
   lastSearchParams: null,
   patientDetailsCache: {},
   patientDetailsLoading: {},
+  fetchingPatientGuid: null,
 };
 
 // Async Thunks
@@ -59,6 +61,7 @@ export const searchPatients = createAsyncThunk(
 
 /**
  * Fetch a specific patient by GUID
+ * Uses condition callback to prevent duplicate requests (React Strict Mode double-invoke protection)
  */
 export const fetchPatient = createAsyncThunk(
   'patients/fetchPatient',
@@ -71,6 +74,21 @@ export const fetchPatient = createAsyncThunk(
       const formattedError = handleError(error, 'Failed to fetch patient');
       return rejectWithValue(formattedError.message);
     }
+  },
+  {
+    // Prevent duplicate requests - skip if already fetching this patient or if already loaded
+    condition: (patientGuid, { getState }) => {
+      const state = getState() as RootState;
+      // Skip if already fetching this patient
+      if (state.patients.fetchingPatientGuid === patientGuid) {
+        return false;
+      }
+      // Skip if this patient is already selected (cached)
+      if (state.patients.selectedPatient?.patient_guid === patientGuid) {
+        return false;
+      }
+      return true;
+    },
   }
 );
 
@@ -193,13 +211,15 @@ export const patientSlice = createSlice({
 
     // Fetch Patient
     builder
-      .addCase(fetchPatient.pending, (state) => {
+      .addCase(fetchPatient.pending, (state, action) => {
         state.loading = true;
         state.error = null;
+        state.fetchingPatientGuid = action.meta.arg; // Track which patient is being fetched
       })
       .addCase(fetchPatient.fulfilled, (state, action) => {
         state.loading = false;
         state.selectedPatient = action.payload;
+        state.fetchingPatientGuid = null; // Clear tracking
 
         // Update patient in patients array if it exists
         const index = state.patients.findIndex(
@@ -214,6 +234,7 @@ export const patientSlice = createSlice({
       .addCase(fetchPatient.rejected, (state, action) => {
         state.loading = false;
         state.error = action.payload as string;
+        state.fetchingPatientGuid = null; // Clear tracking
       });
 
     // Create Patient

@@ -216,6 +216,25 @@ export function buildGetAppointmentListByPatientRequest(
 }
 
 /**
+ * Helper function to build GetAppointmentsByDate request
+ * Returns appointments for a specific date and schedule view (includes Chair field)
+ */
+export function buildGetAppointmentsByDateRequest(
+  credentials: Cloud9Credentials,
+  appointmentDate: string,  // Format: MM/DD/YYYY
+  scheduleViewGuid: string
+): string {
+  return buildXmlRequest({
+    procedure: 'GetAppointmentsByDate',
+    parameters: {
+      dtAppointment: appointmentDate,
+      schdvwGUID: scheduleViewGuid,
+    },
+    credentials,
+  });
+}
+
+/**
  * Helper function to build SetAppointment request (Create appointment)
  */
 export interface CreateAppointmentParams {

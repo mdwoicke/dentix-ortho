@@ -58,6 +58,9 @@ export class ClaudeCliService {
 
   /**
    * Check if Claude CLI is installed and authenticated
+   * Note: We only verify CLI installation and credentials file exists
+   * We don't make an actual API call during auth check, as that would fail
+   * if the user has low credits, even though CLI itself is working fine.
    */
   async checkStatus(): Promise<ClaudeCliStatus> {
     // Return cached status if fresh
@@ -78,29 +81,40 @@ export class ClaudeCliService {
         return this.statusCache;
       }
 
-      // Check if authenticated by running a minimal prompt via temp file
-      const tempFile = path.join(os.tmpdir(), `claude-auth-check-${Date.now()}.txt`);
-      fs.writeFileSync(tempFile, 'respond with only: ok', 'utf8');
-      const authResult = await this.runCommand([
-        '--print',
-        '--output-format', 'json',
-        '--model', 'haiku',
-      ], 30000, tempFile); // Increased timeout for auth check
-      try { fs.unlinkSync(tempFile); } catch { /* ignore */ }
+      // Check if credentials file exists (indicates CLI is authenticated)
+      // This avoids making an actual API call which could fail due to low credits
+      const credentialsPath = path.join(os.homedir(), '.claude', '.credentials.json');
+      const hasCredentials = fs.existsSync(credentialsPath);
 
-      // Debug: Log auth check result
-      if (!authResult.success) {
-        console.log('[ClaudeCLI] Auth check failed:', authResult.error);
-        if (authResult.result) {
-          console.log('[ClaudeCLI] Auth check output:', authResult.result.substring(0, 200));
+      if (hasCredentials) {
+        // Verify credentials file has valid OAuth token
+        try {
+          const credContent = fs.readFileSync(credentialsPath, 'utf8');
+          const creds = JSON.parse(credContent);
+          const hasOAuthToken = !!(creds.claudeAiOauth?.accessToken);
+
+          if (hasOAuthToken) {
+            console.log('[ClaudeCLI] Credentials found with OAuth token - assuming authenticated');
+            this.statusCache = {
+              installed: true,
+              authenticated: true,
+              version: versionResult.result?.trim(),
+            };
+            this.statusCacheTime = Date.now();
+            return this.statusCache;
+          }
+        } catch (parseError) {
+          console.warn('[ClaudeCLI] Could not parse credentials file:', parseError);
         }
       }
 
+      // No credentials file or no OAuth token - CLI is not authenticated
+      console.log('[ClaudeCLI] No valid credentials found');
       this.statusCache = {
         installed: true,
-        authenticated: authResult.success,
+        authenticated: false,
         version: versionResult.result?.trim(),
-        error: authResult.success ? undefined : `Claude CLI auth check failed: ${authResult.error || 'unknown error'}`,
+        error: 'Claude CLI not authenticated - run "claude login" to authenticate',
       };
       this.statusCacheTime = Date.now();
       return this.statusCache;
