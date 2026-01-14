@@ -8,12 +8,11 @@ import { Button, GuidCopyButton } from '../../ui';
 import { formatDate, formatTime } from '../../../utils/formatters';
 import type { Appointment } from '../../../types';
 
-// Default GUIDs for CDH Allegheny (used when appointment doesn't have values)
+// Fallback GUIDs for rare edge cases where appointment data is incomplete
+// Note: Schedule View and Column GUIDs are only shown when available from appointment data
 const DEFAULT_GUIDS = {
-  location: '799d413a-5e1a-46a2-b169-e2108bf517d6',       // CDH - Allegheny 300M
-  scheduleView: 'b1946f40-3b0b-4e01-87a9-c5060b88443e',  // Default schedule view
-  appointmentType: 'f6c20c35-9abb-47c2-981a-342996016705', // Default appointment type
-  scheduleColumn: 'dda0b40c-ace5-4427-8b76-493bf9aa26f1', // Default schedule column
+  location: '799d413a-5e1a-46a2-b169-e2108bf517d6',       // CDH - Allegheny 300M (fallback)
+  appointmentType: 'f6c20c35-9abb-47c2-981a-342996016705', // Default appointment type (fallback)
 };
 
 export interface AppointmentCardProps {
@@ -374,29 +373,37 @@ export function AppointmentCard({
               </div>
             )}
 
-            {/* Schedule View GUID (Default Reference) */}
-            <div className="flex items-center justify-between text-sm bg-green-50 rounded px-3 py-2">
-              <div className="flex-1 min-w-0">
-                <span className="font-medium text-gray-700">Schedule View GUID:</span>
-                <code className="ml-2 text-xs font-mono text-gray-600 break-all">
-                  {DEFAULT_GUIDS.scheduleView}
-                </code>
-                <span className="ml-2 text-xs text-green-600">(default)</span>
+            {/* Schedule View GUID - only show if available from appointment data */}
+            {appointment.schedule_view_guid && (
+              <div className="flex items-center justify-between text-sm bg-green-50 rounded px-3 py-2">
+                <div className="flex-1 min-w-0">
+                  <span className="font-medium text-gray-700">Schedule View GUID:</span>
+                  <code className="ml-2 text-xs font-mono text-gray-600 break-all">
+                    {appointment.schedule_view_guid}
+                  </code>
+                  {appointment.schedule_view_description && (
+                    <span className="ml-2 text-xs text-green-600">({appointment.schedule_view_description})</span>
+                  )}
+                </div>
+                <GuidCopyButton label="Schedule View GUID" guid={appointment.schedule_view_guid} />
               </div>
-              <GuidCopyButton label="Schedule View GUID" guid={DEFAULT_GUIDS.scheduleView} />
-            </div>
+            )}
 
-            {/* Schedule Column GUID (Default Reference) */}
-            <div className="flex items-center justify-between text-sm bg-amber-50 rounded px-3 py-2">
-              <div className="flex-1 min-w-0">
-                <span className="font-medium text-gray-700">Schedule Column GUID:</span>
-                <code className="ml-2 text-xs font-mono text-gray-600 break-all">
-                  {DEFAULT_GUIDS.scheduleColumn}
-                </code>
-                <span className="ml-2 text-xs text-amber-600">(default)</span>
+            {/* Schedule Column GUID - only show if available from appointment data */}
+            {appointment.schedule_column_guid && (
+              <div className="flex items-center justify-between text-sm bg-amber-50 rounded px-3 py-2">
+                <div className="flex-1 min-w-0">
+                  <span className="font-medium text-gray-700">Schedule Column GUID:</span>
+                  <code className="ml-2 text-xs font-mono text-gray-600 break-all">
+                    {appointment.schedule_column_guid}
+                  </code>
+                  {appointment.schedule_column_description && (
+                    <span className="ml-2 text-xs text-amber-600">({appointment.schedule_column_description})</span>
+                  )}
+                </div>
+                <GuidCopyButton label="Schedule Column GUID" guid={appointment.schedule_column_guid} />
               </div>
-              <GuidCopyButton label="Schedule Column GUID" guid={DEFAULT_GUIDS.scheduleColumn} />
-            </div>
+            )}
           </div>
           )}
         </div>

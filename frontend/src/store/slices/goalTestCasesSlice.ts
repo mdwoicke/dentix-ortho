@@ -236,6 +236,9 @@ export interface RunGoalTestsConfig {
   concurrency?: number;
   timeout?: number;
   retryFailedTests?: boolean;
+  environmentPresetId?: number;
+  flowiseConfigId?: number | null;
+  langfuseConfigId?: number | null;
 }
 
 export const runGoalTests = createAsyncThunk(
@@ -274,6 +277,10 @@ export const runGoalTests = createAsyncThunk(
         timeout: config?.timeout || 60000,
         retryFailedTests: config?.retryFailedTests || false,
         stopOnFirstFailure: false,
+        // Environment configuration - pass to backend for Flowise/Langfuse endpoint selection
+        environmentPresetId: config?.environmentPresetId,
+        flowiseConfigId: config?.flowiseConfigId ?? undefined,
+        langfuseConfigId: config?.langfuseConfigId ?? undefined,
       };
 
       console.log('[runGoalTests] Running goal tests:', { goalCaseIds, scenarioIds, config: executionConfig });

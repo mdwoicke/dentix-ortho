@@ -22,9 +22,9 @@ export interface ComparisonRequest {
 
 export interface TestComparisonResult {
   testId: string;
-  production: { passed: boolean; turnCount: number; durationMs: number } | null;
-  sandboxA: { passed: boolean; turnCount: number; durationMs: number } | null;
-  sandboxB: { passed: boolean; turnCount: number; durationMs: number } | null;
+  production: { passed: boolean; turnCount: number; durationMs: number; ranAt?: string } | null;
+  sandboxA: { passed: boolean; turnCount: number; durationMs: number; ranAt?: string } | null;
+  sandboxB: { passed: boolean; turnCount: number; durationMs: number; ranAt?: string } | null;
 }
 
 export interface ComparisonResult {

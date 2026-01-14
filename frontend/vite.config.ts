@@ -14,6 +14,14 @@ export default defineConfig({
         target: 'http://localhost:3333',
         changeOrigin: true,
       },
+      // Proxy Cloud9 API calls (production) to bypass CORS
+      // NOTE: Must come BEFORE /cloud9-api to avoid prefix matching issues
+      '/cloud9-api-prod': {
+        target: 'https://us-ea1-partner.cloud9ortho.com',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/cloud9-api-prod/, ''),
+        secure: true,
+      },
       // Proxy Cloud9 API calls (sandbox) to bypass CORS
       '/cloud9-api': {
         target: 'https://us-ea1-partnertest.cloud9ortho.com',

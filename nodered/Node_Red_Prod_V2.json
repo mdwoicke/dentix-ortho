@@ -38,27 +38,27 @@
             },
             {
                 "name": "defaultProviderGUID",
-                "value": "a79ec244-9503-44b2-87e4-5920b6e60392",
+                "value": "79ec29fe-c315-4982-845a-0005baefb5a8",
                 "type": "str"
             },
             {
                 "name": "defaultLocationGUID",
-                "value": "799d413a-5e1a-46a2-b169-e2108bf517d6",
+                "value": "1070d281-0952-4f01-9a6e-1a2e6926a7db",
                 "type": "str"
             },
             {
                 "name": "defaultApptTypeGUID",
-                "value": "f6c20c35-9abb-47c2-981a-342996016705",
+                "value": "8fc9d063-ae46-4975-a5ae-734c6efe341a",
                 "type": "str"
             },
             {
                 "name": "defaultScheduleViewGUID",
-                "value": "b1946f40-3b0b-4e01-87a9-c5060b88443e",
+                "value": "2544683a-8e79-4b32-a4d4-bf851996bac3",
                 "type": "str"
             },
             {
                 "name": "defaultScheduleColumnGUID",
-                "value": "dda0b40c-ace5-4427-8b76-493bf9aa26f1",
+                "value": "e062b81f-1fff-40fc-b4a4-1cf9ecc2f32b",
                 "type": "str"
             },
             {

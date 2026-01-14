@@ -59,6 +59,8 @@ import {
 } from '../../store/slices/testMonitorSlice';
 import { subscribeToExecution } from '../../services/api/testMonitorApi';
 import type { ExecutionStreamEvent } from '../../services/api/testMonitorApi';
+import { getTestEnvironmentPresets } from '../../services/api/appSettingsApi';
+import type { TestEnvironmentPresetWithNames } from '../../types/appSettings.types';
 
 import type {
   GoalTestCaseRecord,
@@ -420,6 +422,9 @@ function ExecutionConfigPanel({
   onStopExecution,
   testCount,
   selectedCount,
+  environmentPresets,
+  selectedPresetId,
+  onPresetChange,
 }: {
   concurrency: number;
   setConcurrency: (v: number) => void;
@@ -436,9 +441,13 @@ function ExecutionConfigPanel({
   onStopExecution: () => void;
   testCount: number;
   selectedCount: number;
+  environmentPresets: TestEnvironmentPresetWithNames[];
+  selectedPresetId: number | null;
+  onPresetChange: (presetId: number) => void;
 }) {
   const effectiveCount = selectedCount > 0 ? selectedCount : testCount;
   const totalRuns = effectiveCount * runCount;
+  const selectedPreset = environmentPresets.find(p => p.id === selectedPresetId);
 
   return (
     <div className="space-y-3">
@@ -446,6 +455,30 @@ function ExecutionConfigPanel({
         <Icons.Settings />
         Execution Config
       </h4>
+
+      {/* Environment Preset Selector */}
+      <div>
+        <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">
+          Environment
+        </label>
+        <select
+          value={selectedPresetId || ''}
+          onChange={(e) => onPresetChange(parseInt(e.target.value))}
+          className="w-full px-2 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-white font-medium"
+          disabled={isExecuting}
+        >
+          {environmentPresets.map((preset) => (
+            <option key={preset.id} value={preset.id}>
+              {preset.name}{preset.isDefault ? ' (Default)' : ''}
+            </option>
+          ))}
+        </select>
+        {selectedPreset && (
+          <div className="mt-1 text-[10px] text-gray-500 dark:text-gray-400 truncate">
+            {selectedPreset.flowiseConfigName || 'No Flowise'} / {selectedPreset.langfuseConfigName || 'No Langfuse'}
+          </div>
+        )}
+      </div>
 
       <div className="grid grid-cols-2 gap-3">
         {/* Concurrency */}
@@ -588,6 +621,13 @@ export function TestsPage() {
   const [enableSemanticEval, setEnableSemanticEval] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
 
+  // Environment presets state
+  const [environmentPresets, setEnvironmentPresets] = useState<TestEnvironmentPresetWithNames[]>([]);
+  const [selectedPresetId, setSelectedPresetId] = useState<number | null>(null);
+  const [presetsLoading, setPresetsLoading] = useState(true);
+  // Filter for runs by environment preset
+  const [runFilterPresetId, setRunFilterPresetId] = useState<number | null | 'all'>(null);
+
   // Execution state
   const [executionState, setExecutionState] = useState<ExecutionState>({
     isExecuting: false,
@@ -634,6 +674,30 @@ export function TestsPage() {
     dispatch(fetchTestRuns({}));
   }, [dispatch]);
 
+  // Fetch environment presets on mount
+  useEffect(() => {
+    const fetchPresets = async () => {
+      setPresetsLoading(true);
+      try {
+        const presets = await getTestEnvironmentPresets();
+        setEnvironmentPresets(presets);
+        // Set the default preset as selected (Prod is default)
+        const defaultPreset = presets.find(p => p.isDefault) || presets[0];
+        if (defaultPreset) {
+          setSelectedPresetId(defaultPreset.id);
+          console.log('[TestsPage] Default preset selected:', defaultPreset.name, '(id:', defaultPreset.id, ')');
+        } else {
+          console.warn('[TestsPage] No default preset found!');
+        }
+      } catch (error) {
+        console.error('[TestsPage] Failed to fetch environment presets:', error);
+      } finally {
+        setPresetsLoading(false);
+      }
+    };
+    fetchPresets();
+  }, []);
+
   // Auto-poll test runs when any run is "running"
   useEffect(() => {
     const hasRunningRun = recentRuns.some(run => run.status === 'running');
@@ -676,9 +740,17 @@ export function TestsPage() {
     return editingTestCase || selectedTestCase;
   }, [selectedTestCase, editingTestCase]);
 
+  // Filter runs by environment preset
+  const filteredRuns = useMemo(() => {
+    if (runFilterPresetId === 'all' || runFilterPresetId === null) {
+      return recentRuns;
+    }
+    return recentRuns.filter(run => run.environmentPresetId === runFilterPresetId);
+  }, [recentRuns, runFilterPresetId]);
+
   // Prepare trend data for chart
   const trendData = useMemo(() => {
-    return recentRuns
+    return filteredRuns
       .slice(0, 10)
       .reverse()
       .map((run) => ({
@@ -686,11 +758,18 @@ export function TestsPage() {
         passRate: run.totalTests > 0 ? Math.round((run.passed / run.totalTests) * 100) : 0,
         runId: run.runId,
       }));
-  }, [recentRuns]);
+  }, [filteredRuns]);
 
   // Handlers
   const handleStartExecution = async () => {
     try {
+      // Ensure a preset is selected
+      if (!selectedPresetId) {
+        console.error('[TestsPage] No environment preset selected! Cannot run tests.');
+        alert('Please select an environment preset before running tests.');
+        return;
+      }
+
       const baseCaseIds = selectedTestCount > 0
         ? filteredTestCases.filter(tc => selectedTestCaseIds.includes(String(tc.id))).map(tc => tc.caseId)
         : filteredTestCases.map(tc => tc.caseId);
@@ -699,9 +778,27 @@ export function TestsPage() {
         ? Array.from({ length: runCount }, () => baseCaseIds).flat()
         : baseCaseIds;
 
+      // Get the selected environment preset's config IDs
+      const selectedPreset = environmentPresets.find(p => p.id === selectedPresetId);
+
+      console.log('[TestsPage] Starting execution with:', {
+        presetId: selectedPresetId,
+        presetName: selectedPreset?.name,
+        flowiseConfigId: selectedPreset?.flowiseConfigId,
+        langfuseConfigId: selectedPreset?.langfuseConfigId,
+        testCount: caseIds.length,
+      });
+
       const result = await dispatch(runGoalTests({
         caseIds,
-        config: { concurrency, timeout: testTimeout, retryFailedTests: retryFailed },
+        config: {
+          concurrency,
+          timeout: testTimeout,
+          retryFailedTests: retryFailed,
+          environmentPresetId: selectedPresetId,
+          flowiseConfigId: selectedPreset?.flowiseConfigId || undefined,
+          langfuseConfigId: selectedPreset?.langfuseConfigId || undefined,
+        },
       })).unwrap();
 
       setExecutionState({
@@ -750,10 +847,29 @@ export function TestsPage() {
 
   const handleRunSelectedTest = async () => {
     if (!selectedTestCase) return;
+    if (!selectedPresetId) {
+      console.error('[TestsPage] No environment preset selected! Cannot run tests.');
+      alert('Please select an environment preset before running tests.');
+      return;
+    }
     try {
+      // Get the selected environment preset's config IDs
+      const selectedPreset = environmentPresets.find(p => p.id === selectedPresetId);
+
+      console.log('[TestsPage] Running single test with:', {
+        presetId: selectedPresetId,
+        presetName: selectedPreset?.name,
+        testId: selectedTestCase.caseId,
+      });
+
       const result = await dispatch(runGoalTests({
         caseIds: [selectedTestCase.caseId],
-        config: { concurrency: 1 },
+        config: {
+          concurrency: 1,
+          environmentPresetId: selectedPresetId,
+          flowiseConfigId: selectedPreset?.flowiseConfigId || undefined,
+          langfuseConfigId: selectedPreset?.langfuseConfigId || undefined,
+        },
       })).unwrap();
 
       setExecutionState({
@@ -927,6 +1043,9 @@ export function TestsPage() {
               onStopExecution={handleStopExecution}
               testCount={filteredTestCases.length}
               selectedCount={selectedTestCount}
+              environmentPresets={environmentPresets}
+              selectedPresetId={selectedPresetId}
+              onPresetChange={setSelectedPresetId}
             />
           </Card>
         </div>
@@ -1132,11 +1251,29 @@ export function TestsPage() {
           {/* Recent Runs */}
           <Card className="flex-1 overflow-hidden">
             <div className="p-3 h-full flex flex-col">
-              <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-2">
-                Recent Runs
-              </h4>
+              <div className="flex items-center justify-between mb-2">
+                <h4 className="text-sm font-semibold text-gray-900 dark:text-white">
+                  Recent Runs
+                </h4>
+                {/* Environment Filter Dropdown */}
+                <select
+                  value={runFilterPresetId === null ? 'all' : runFilterPresetId}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setRunFilterPresetId(val === 'all' ? null : parseInt(val, 10));
+                  }}
+                  className="text-[10px] px-1.5 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300"
+                >
+                  <option value="all">All Environments</option>
+                  {environmentPresets.map((preset) => (
+                    <option key={preset.id} value={preset.id}>
+                      {preset.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
               <div className="flex-1 overflow-y-auto space-y-2">
-                {recentRuns.slice(0, 5).map((run) => {
+                {filteredRuns.slice(0, 5).map((run) => {
                   const passRate = run.totalTests > 0
                     ? Math.round((run.passed / run.totalTests) * 100)
                     : 0;
@@ -1182,16 +1319,21 @@ export function TestsPage() {
                           </span>
                         )}
                       </div>
-                      <div className="flex gap-2 text-[10px] text-gray-500 dark:text-gray-400">
+                      <div className="flex items-center gap-2 text-[10px] text-gray-500 dark:text-gray-400">
                         <span>{run.passed} passed</span>
                         <span>{run.failed} failed</span>
+                        {run.environmentPresetName && (
+                          <span className="ml-auto px-1 py-0.5 bg-gray-100 dark:bg-gray-700 rounded text-gray-600 dark:text-gray-400 truncate max-w-[60px]" title={run.environmentPresetName}>
+                            {run.environmentPresetName}
+                          </span>
+                        )}
                       </div>
                     </button>
                   );
                 })}
-                {recentRuns.length === 0 && (
+                {filteredRuns.length === 0 && (
                   <div className="text-center text-xs text-gray-500 py-4">
-                    No runs yet
+                    {runFilterPresetId !== null ? 'No runs for this environment' : 'No runs yet'}
                   </div>
                 )}
               </div>

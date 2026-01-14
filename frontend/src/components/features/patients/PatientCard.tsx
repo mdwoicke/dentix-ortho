@@ -57,6 +57,14 @@ export function PatientCard({ patient, onSchedule }: PatientCardProps) {
                 </span>
               </div>
             )}
+            {patient.created_at && (
+              <div className="text-sm">
+                <span className="font-medium text-gray-700 dark:text-gray-300">Created:</span>
+                <span className="ml-2 text-gray-900 dark:text-white">
+                  {formatDate(patient.created_at, 'MMM d, yyyy h:mm a')}
+                </span>
+              </div>
+            )}
             {patient.email && (
               <div className="text-sm">
                 <span className="font-medium text-gray-700 dark:text-gray-300">Email:</span>

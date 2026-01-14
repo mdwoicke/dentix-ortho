@@ -1,13 +1,17 @@
 /**
  * Test Cloud9 API directly (bypass Node Red)
+ * Testing PROD credentials with different parameter variations
  */
 const fetch = require('node-fetch');
 
-// Cloud9 Sandbox credentials
-const SANDBOX_ENDPOINT = 'https://us-ea1-partnertest.cloud9ortho.com/GetData.ashx';
-const CLIENT_ID = 'c15aa02a-adc1-40ae-a2b5-d2e39173ae56';
-const USERNAME = 'IntelepeerTest';
-const PASSWORD = '#!InteleP33rTest!#';
+// Cloud9 PROD credentials
+const ENDPOINT = 'https://us-ea1-partner.cloud9ortho.com/GetData.ashx';
+const CLIENT_ID = 'b42c51be-2529-4d31-92cb-50fd1a58c084';
+const USERNAME = 'Intelepeer';
+const PASSWORD = '$#1Nt-p33R-AwS#$';
+
+// Target GUIDs
+const TARGET_SV = '4c9e9333-4951-4eb0-8d97-e1ad83ef422d';
 
 function buildXmlRequest(procedure, params = '') {
   return `<?xml version="1.0" encoding="utf-8"?>
@@ -28,7 +32,7 @@ async function callCloud9(procedure, params = '', label = '') {
   const xml = buildXmlRequest(procedure, params);
 
   try {
-    const response = await fetch(SANDBOX_ENDPOINT, {
+    const response = await fetch(ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'text/xml' },
       body: xml
@@ -67,49 +71,44 @@ async function callCloud9(procedure, params = '', label = '') {
 }
 
 async function main() {
-  console.log('Testing Cloud9 Sandbox API Directly');
-  console.log('Endpoint:', SANDBOX_ENDPOINT);
-  console.log('Client ID:', CLIENT_ID);
+  console.log('=== CLOUD9 PROD API - PARAMETER VARIATIONS TEST ===');
+  console.log('Endpoint:', ENDPOINT);
+  console.log('Target ScheduleViewGUID:', TARGET_SV);
+  console.log('');
 
-  // Test 1: Get locations (basic connectivity test)
-  await callCloud9('GetLocations', '', 'Test 1: GetLocations');
-
-  // Test 2: Get providers
-  await callCloud9('GetProviders', '', 'Test 2: GetProviders');
-
-  // Test 3: Get appointment types
-  await callCloud9('GetApptTypes', '', 'Test 3: GetApptTypes');
-
-  // Test 4: Get schedule views (needed for availability)
-  await callCloud9('GetScheduleViews', '', 'Test 4: GetScheduleViews');
-
-  // Test 5: Get online reservations (available slots) for Jan 13-27
-  const slotsParams = `
-    <startDate>01/13/2026 7:00:00 AM</startDate>
-    <endDate>01/27/2026 5:00:00 PM</endDate>
+  // Base date params
+  const baseDates = `
+    <startDate>01/14/2026 7:00:00 AM</startDate>
+    <endDate>03/15/2026 5:00:00 PM</endDate>
     <morning>True</morning>
-    <afternoon>True</afternoon>
-  `;
-  await callCloud9('GetOnlineReservations', slotsParams, 'Test 5: GetOnlineReservations (Jan 13-27)');
+    <afternoon>True</afternoon>`;
 
-  // Test 6: Try with specific schedule view GUID
-  const slotsParamsWithGuid = `
-    <startDate>01/13/2026 7:00:00 AM</startDate>
-    <endDate>01/27/2026 5:00:00 PM</endDate>
-    <morning>True</morning>
-    <afternoon>True</afternoon>
-    <schdvwGUIDs>2544683a-8e79-4b32-a4d4-bf851996bac3</schdvwGUIDs>
-  `;
-  await callCloud9('GetOnlineReservations', slotsParamsWithGuid, 'Test 6: GetOnlineReservations with Schedule View GUID');
+  // Test 1: No filter (baseline)
+  await callCloud9('GetOnlineReservations', baseDates, 'Test 1: NO FILTER (baseline)');
 
-  // Test 7: Try February dates
-  const febParams = `
-    <startDate>02/01/2026 7:00:00 AM</startDate>
-    <endDate>02/28/2026 5:00:00 PM</endDate>
-    <morning>True</morning>
-    <afternoon>True</afternoon>
-  `;
-  await callCloud9('GetOnlineReservations', febParams, 'Test 7: GetOnlineReservations (Feb 2026)');
+  // Test 2: schdvwGUIDs (plural - current usage)
+  await callCloud9('GetOnlineReservations', baseDates + `
+    <schdvwGUIDs>${TARGET_SV}</schdvwGUIDs>`, 'Test 2: schdvwGUIDs (plural)');
+
+  // Test 3: schdvwGUID (singular)
+  await callCloud9('GetOnlineReservations', baseDates + `
+    <schdvwGUID>${TARGET_SV}</schdvwGUID>`, 'Test 3: schdvwGUID (singular)');
+
+  // Test 4: ScheduleViewGUID
+  await callCloud9('GetOnlineReservations', baseDates + `
+    <ScheduleViewGUID>${TARGET_SV}</ScheduleViewGUID>`, 'Test 4: ScheduleViewGUID');
+
+  // Test 5: scheduleViewGUID (camelCase)
+  await callCloud9('GetOnlineReservations', baseDates + `
+    <scheduleViewGUID>${TARGET_SV}</scheduleViewGUID>`, 'Test 5: scheduleViewGUID (camelCase)');
+
+  // Test 6: schdvwGUIDs with pipe separator
+  await callCloud9('GetOnlineReservations', baseDates + `
+    <schdvwGUIDs>${TARGET_SV}|</schdvwGUIDs>`, 'Test 6: schdvwGUIDs with pipe');
+
+  console.log('\n=== SUMMARY ===');
+  console.log('If all filtered tests return 0 but baseline has records,');
+  console.log('the Cloud9 API may not support filtering by schedule view GUID.');
 }
 
 main().catch(console.error);

@@ -95,25 +95,75 @@ The hook `.claude/hooks/sync-v1-to-langfuse.js` attempts to sync both automatica
 3. **The script automatically:**
    - Extracts only the `func` field from the tool JSON
    - Saves it to a separate `.js` file (e.g., `docs/v1/scheduling_tool_func.js`)
-   - **Creates an ESCAPED version** with `{{` `}}` for Flowise Mustache templates
    - Updates the database with just the JavaScript content
 
-**CRITICAL - Flowise curly bracket escaping (ONLY when needed):**
+---
+## ⚠️⚠️⚠️ CRITICAL - ESCAPING RULES (READ CAREFULLY) ⚠️⚠️⚠️
 
-Only escape curly brackets (`{` → `{{`, `}` → `}}`) when generating:
-1. **System prompts** (`Chord_Cloud9_SystemPrompt.md` → `system_prompt_escaped.md`)
-2. **Tools that generate JavaScript** (`scheduling_tool_func.js` → `scheduling_tool_func_escaped.js`)
+### ONLY ESCAPE SYSTEM PROMPTS - NEVER ESCAPE TOOLS!
 
-Do NOT escape curly brackets in other contexts (regular code, JSON configs, etc.).
+| Content Type | Escape Curly Brackets? | Why |
+|--------------|----------------------|-----|
+| **System Prompts** (`.md`) | ✅ YES - `{` → `{{` | Flowise uses Mustache templates for prompts |
+| **Tool JavaScript** (`.js`) | ❌ **NEVER** | Tools are raw JavaScript - escaping breaks the code! |
+| **JSON configs** | ❌ NEVER | JSON needs valid syntax |
+| **Regular code** | ❌ NEVER | Code needs valid syntax |
 
-**Output files:**
-- `docs/v1/scheduling_tool_func.js` - Raw JavaScript (for reference only)
-- `docs/v1/scheduling_tool_func_escaped.js` - **USE THIS FOR FLOWISE** (auto-escaped)
-- `docs/v1/patient_tool_func.js` - Raw JavaScript (for reference only)
-- `docs/v1/patient_tool_func_escaped.js` - **USE THIS FOR FLOWISE** (auto-escaped)
-- `docs/v1/system_prompt_escaped.md` - **USE THIS FOR FLOWISE** (auto-escaped)
+### Files and Their Escaping Status:
+
+| File | Escaped? | Use For |
+|------|----------|---------|
+| `docs/v1/system_prompt_escaped.md` | ✅ YES | **DEPLOY TO FLOWISE** |
+| `docs/v1/Chord_Cloud9_SystemPrompt.md` | ❌ NO | Source/reference only |
+| `docs/v1/scheduling_tool_func.js` | ❌ NO | **DEPLOY TO FLOWISE** |
+| `docs/v1/patient_tool_func.js` | ❌ NO | **DEPLOY TO FLOWISE** |
+
+### Why Tools Must NOT Be Escaped:
+- Tools contain JavaScript code that runs directly in Node.js
+- Escaping `{` to `{{` creates invalid JavaScript syntax
+- Example: `const obj = {{ key: value }}` is BROKEN JavaScript
+- Flowise does NOT apply Mustache templating to tool code
+
+### Why Prompts MUST Be Escaped:
+- Flowise applies Mustache templating to system prompts
+- Variables like `{{input}}` are replaced by Flowise
+- To show literal `{` in prompts, escape as `{{`
+
+---
 
 **NEVER save the entire tool JSON to the database** - only the JavaScript func portion is needed for versioning and deployment.
+
+---
+## ⚠️ MANDATORY - Sandbox File Sync (DO NOT FORGET!)
+
+**EVERY TIME you update a source file in `/docs/v1/`, you MUST ALSO update the corresponding sandbox files in the database!**
+
+| Source File | Database Table | Sandbox Column |
+|-------------|----------------|----------------|
+| `docs/v1/scheduling_tool_func.js` | `ab_sandbox_files` | `sandbox_a`, `sandbox_b` |
+| `docs/v1/patient_tool_func.js` | `ab_sandbox_files` | `sandbox_a`, `sandbox_b` |
+| `docs/v1/Chord_Cloud9_SystemPrompt.md` | `ab_sandbox_files` | `sandbox_a`, `sandbox_b` |
+
+**How to update sandbox files:**
+```javascript
+// In test-agent directory:
+const BetterSqlite3 = require('better-sqlite3');
+const fs = require('fs');
+const db = new BetterSqlite3('./data/test-results.db');
+
+// Read the source file
+const content = fs.readFileSync('../docs/v1/scheduling_tool_func.js', 'utf-8');
+
+// Update sandbox_b (file_type = 'scheduling_tool', sandbox = 'sandbox_b')
+db.prepare(`UPDATE ab_sandbox_files SET content = ?, version = version + 1, updated_at = ? WHERE file_type = ? AND sandbox = ?`)
+  .run(content, new Date().toISOString(), 'scheduling_tool', 'sandbox_b');
+
+db.close();
+```
+
+**NO EXCEPTIONS. Source file changes MUST be synced to sandbox files or A/B testing will use stale code!**
+
+---
 
 **ALWAYS add new versions to App UI:**
 

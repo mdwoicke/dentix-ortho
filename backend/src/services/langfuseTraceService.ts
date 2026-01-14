@@ -85,8 +85,33 @@ export class LangfuseTraceService {
 
   /**
    * Get Langfuse config by ID
+   * Handles both regular configs (positive IDs from langfuse_configs table)
+   * and sandbox configs (negative IDs: -1 = sandbox_a, -2 = sandbox_b from ab_sandboxes table)
    */
   getConfig(configId: number): LangfuseConfig | null {
+    // Handle sandbox configs (negative IDs)
+    if (configId < 0) {
+      const sandboxId = configId === -1 ? 'sandbox_a' : 'sandbox_b';
+      const row = this.db.prepare(`
+        SELECT sandbox_id, name, langfuse_host, langfuse_public_key, langfuse_secret_key
+        FROM ab_sandboxes
+        WHERE sandbox_id = ?
+          AND langfuse_host IS NOT NULL AND langfuse_host != ''
+          AND langfuse_public_key IS NOT NULL AND langfuse_public_key != ''
+      `).get(sandboxId) as any;
+
+      if (!row) return null;
+
+      return {
+        id: configId,
+        name: row.name,
+        host: row.langfuse_host,
+        publicKey: row.langfuse_public_key,
+        secretKey: row.langfuse_secret_key,
+      };
+    }
+
+    // Handle regular configs (positive IDs)
     const row = this.db.prepare(`
       SELECT id, name, host, public_key, secret_key
       FROM langfuse_configs
@@ -102,6 +127,55 @@ export class LangfuseTraceService {
       publicKey: row.public_key,
       secretKey: row.secret_key,
     };
+  }
+
+  /**
+   * Ensure sandbox config exists in langfuse_configs table for FK constraints
+   * Called before import to ensure negative IDs have corresponding rows
+   */
+  private ensureSandboxConfigSynced(configId: number): void {
+    if (configId >= 0) return; // Only handle sandbox configs (negative IDs)
+
+    const sandboxId = configId === -1 ? 'sandbox_a' : 'sandbox_b';
+    const sandbox = this.db.prepare(`
+      SELECT sandbox_id, name, langfuse_host, langfuse_public_key, langfuse_secret_key
+      FROM ab_sandboxes
+      WHERE sandbox_id = ?
+    `).get(sandboxId) as any;
+
+    if (!sandbox) return;
+
+    // Upsert into langfuse_configs with the negative ID
+    const existing = this.db.prepare(`
+      SELECT id FROM langfuse_configs WHERE id = ?
+    `).get(configId);
+
+    if (!existing) {
+      this.db.prepare(`
+        INSERT INTO langfuse_configs (id, name, host, public_key, secret_key, is_default, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, 0, datetime('now'), datetime('now'))
+      `).run(
+        configId,
+        sandbox.name,
+        sandbox.langfuse_host,
+        sandbox.langfuse_public_key,
+        sandbox.langfuse_secret_key
+      );
+      console.log(`[LangfuseTraceService] Synced sandbox config ${sandbox.name} to langfuse_configs with id ${configId}`);
+    } else {
+      // Update existing entry in case settings changed
+      this.db.prepare(`
+        UPDATE langfuse_configs
+        SET name = ?, host = ?, public_key = ?, secret_key = ?, updated_at = datetime('now')
+        WHERE id = ?
+      `).run(
+        sandbox.name,
+        sandbox.langfuse_host,
+        sandbox.langfuse_public_key,
+        sandbox.langfuse_secret_key,
+        configId
+      );
+    }
   }
 
   /**
@@ -124,6 +198,10 @@ export class LangfuseTraceService {
    */
   async importTraces(options: ImportOptions): Promise<ImportResult> {
     const { configId, fromDate, toDate, limit = 50 } = options;
+
+    // For sandbox configs (negative IDs), ensure they're synced to langfuse_configs table
+    // This is needed for foreign key constraints
+    this.ensureSandboxConfigSynced(configId);
 
     // Get config
     const config = this.getConfig(configId);
@@ -618,11 +696,11 @@ export class LangfuseTraceService {
       params.push(configId);
     }
     if (fromDate) {
-      whereClauses.push('ps.last_trace_at >= ?');
+      whereClauses.push('ps.first_trace_at >= ?');  // Session started on or after fromDate
       params.push(fromDate);
     }
     if (toDate) {
-      whereClauses.push('ps.first_trace_at <= ?');
+      whereClauses.push('ps.last_trace_at <= ?');   // Session ended on or before toDate
       params.push(toDate);
     }
     if (userId) {

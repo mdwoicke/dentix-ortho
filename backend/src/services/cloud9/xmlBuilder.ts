@@ -112,15 +112,23 @@ export function buildGetPortalPatientLookupRequest(
 
 /**
  * Helper function to build GetPatientList request
+ * @param credentials - Cloud 9 API credentials
+ * @param locationGuids - Optional array of location GUIDs to filter by
+ * @param modifiedSince - Optional date string (MM/DD/YYYY HH:MM:SS AM/PM) to get only patients modified since
  */
 export function buildGetPatientListRequest(
   credentials: Cloud9Credentials,
-  locationGuids?: string[]
+  locationGuids?: string[],
+  modifiedSince?: string
 ): string {
   const parameters: Record<string, any> = {};
 
   if (locationGuids && locationGuids.length > 0) {
     parameters.LocGUIDs = locationGuids.join(',');
+  }
+
+  if (modifiedSince) {
+    parameters.ModifiedSince = modifiedSince;
   }
 
   return buildXmlRequest({

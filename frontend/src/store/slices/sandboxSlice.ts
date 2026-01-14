@@ -319,8 +319,71 @@ export const resetSandbox = createAsyncThunk(
 );
 
 // ============================================================================
+// LOCAL STORAGE HELPERS
+// ============================================================================
+
+const COMPARISON_STORAGE_KEY = 'sandbox_running_comparison';
+
+/**
+ * Save running comparison ID to localStorage
+ */
+function saveRunningComparisonId(comparisonId: string | null): void {
+  if (comparisonId) {
+    localStorage.setItem(COMPARISON_STORAGE_KEY, JSON.stringify({
+      comparisonId,
+      startedAt: new Date().toISOString(),
+    }));
+  } else {
+    localStorage.removeItem(COMPARISON_STORAGE_KEY);
+  }
+}
+
+/**
+ * Get running comparison ID from localStorage
+ */
+function getRunningComparisonId(): { comparisonId: string; startedAt: string } | null {
+  try {
+    const stored = localStorage.getItem(COMPARISON_STORAGE_KEY);
+    if (!stored) return null;
+    return JSON.parse(stored);
+  } catch {
+    return null;
+  }
+}
+
+// ============================================================================
 // ASYNC THUNKS - COMPARISON
 // ============================================================================
+
+/**
+ * Check for running comparison on page load (persist state across refresh)
+ */
+export const checkForRunningComparison = createAsyncThunk(
+  'sandbox/checkForRunningComparison',
+  async (_, { dispatch, rejectWithValue }) => {
+    try {
+      const stored = getRunningComparisonId();
+      if (!stored) return null;
+
+      // Check if this comparison still exists and is running
+      const run = await sandboxApi.getComparisonRun(stored.comparisonId);
+
+      if (run.status === 'running') {
+        // Resume polling
+        dispatch(pollComparisonStatus(stored.comparisonId));
+        return run;
+      } else {
+        // Completed or failed - clear storage and return the result
+        saveRunningComparisonId(null);
+        return run;
+      }
+    } catch (error) {
+      // Comparison not found, clear storage
+      saveRunningComparisonId(null);
+      return null;
+    }
+  }
+);
 
 /**
  * Fetch available tests for comparison
@@ -352,8 +415,10 @@ export const startComparison = createAsyncThunk(
       // API now returns immediately with { comparisonId, status: 'running' }
       const result = await sandboxApi.startComparison(request);
 
-      // Start polling for status updates
+      // Save to localStorage for persistence across page refresh
       if (result.comparisonId) {
+        saveRunningComparisonId(result.comparisonId);
+        // Start polling for status updates
         dispatch(pollComparisonStatus(result.comparisonId));
       }
 
@@ -386,12 +451,15 @@ export const pollComparisonStatus = createAsyncThunk(
 
         // Check if completed or failed
         if (run.status === 'completed' || run.status === 'failed') {
+          // Clear localStorage on completion
+          saveRunningComparisonId(null);
           return run as ComparisonResult;
         }
 
         // Continue polling if still running
         pollCount++;
         if (pollCount >= MAX_POLLS) {
+          saveRunningComparisonId(null);
           throw new Error('Comparison timed out after maximum polling attempts');
         }
 
@@ -399,6 +467,7 @@ export const pollComparisonStatus = createAsyncThunk(
         await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL));
         return poll();
       } catch (error) {
+        saveRunningComparisonId(null);
         throw error;
       }
     };
@@ -612,17 +681,62 @@ export const sandboxSlice = createSlice({
      */
     updatePollingResult: (state, action: PayloadAction<ComparisonResult>) => {
       state.comparison.currentComparisonId = action.payload.comparisonId;
-      // Update lastResult with current state (may still be running)
-      state.comparison.lastResult = action.payload;
 
-      // Also update rawComparisonData if results are available
+      // Build testResults from raw results if available
       const run = action.payload as any;
       if (run.productionResults || run.sandboxAResults || run.sandboxBResults) {
+        // Get all test IDs from raw results
+        const testIds = new Set<string>([
+          ...Object.keys(run.productionResults || {}),
+          ...Object.keys(run.sandboxAResults || {}),
+          ...Object.keys(run.sandboxBResults || {}),
+        ]);
+
+        // Build testResults with ranAt timestamps
+        const testResults = Array.from(testIds).map(testId => {
+          const prod = run.productionResults?.[testId];
+          const sandA = run.sandboxAResults?.[testId];
+          const sandB = run.sandboxBResults?.[testId];
+          return {
+            testId,
+            production: prod ? {
+              passed: prod.passed,
+              turnCount: prod.turnCount,
+              durationMs: prod.durationMs,
+              ranAt: prod.ranAt,
+            } : null,
+            sandboxA: sandA ? {
+              passed: sandA.passed,
+              turnCount: sandA.turnCount,
+              durationMs: sandA.durationMs,
+              ranAt: sandA.ranAt,
+            } : null,
+            sandboxB: sandB ? {
+              passed: sandB.passed,
+              turnCount: sandB.turnCount,
+              durationMs: sandB.durationMs,
+              ranAt: sandB.ranAt,
+            } : null,
+          };
+        });
+
+        // Update lastResult with built testResults and timestamps
+        state.comparison.lastResult = {
+          ...action.payload,
+          testResults,
+          completedAt: run.completedAt,
+          startedAt: run.startedAt,
+        };
+
+        // Also update rawComparisonData
         state.comparison.rawComparisonData = {
           productionResults: run.productionResults || {},
           sandboxAResults: run.sandboxAResults || {},
           sandboxBResults: run.sandboxBResults || {},
         };
+      } else {
+        // No raw results yet, just update with payload
+        state.comparison.lastResult = action.payload;
       }
     },
   },
@@ -810,6 +924,89 @@ export const sandboxSlice = createSlice({
         state.comparison.error = action.payload as string;
       });
 
+    // Check for running comparison on page load
+    builder
+      .addCase(checkForRunningComparison.pending, (state) => {
+        state.comparison.error = null;
+      })
+      .addCase(checkForRunningComparison.fulfilled, (state, action) => {
+        if (action.payload) {
+          const run = action.payload as any;
+          state.comparison.currentComparisonId = run.comparisonId;
+
+          if (run.status === 'running') {
+            // Comparison is still running - restore running state
+            state.comparison.isRunning = true;
+            state.comparison.lastResult = {
+              comparisonId: run.comparisonId,
+              status: 'running',
+              testResults: [],
+              summary: {
+                productionPassRate: 0,
+                sandboxAPassRate: 0,
+                sandboxBPassRate: 0,
+                totalTests: 0,
+                improvements: [],
+                regressions: [],
+              },
+              message: 'Comparison resumed after page refresh...',
+            };
+          } else if (run.status === 'completed' && run.summary) {
+            // Load completed comparison results
+            const testIds = new Set<string>([
+              ...Object.keys(run.productionResults || {}),
+              ...Object.keys(run.sandboxAResults || {}),
+              ...Object.keys(run.sandboxBResults || {}),
+            ]);
+
+            const testResults = Array.from(testIds).map(testId => {
+              const prod = run.productionResults?.[testId];
+              const sandA = run.sandboxAResults?.[testId];
+              const sandB = run.sandboxBResults?.[testId];
+              return {
+                testId,
+                production: prod ? {
+                  passed: prod.passed,
+                  turnCount: prod.turnCount,
+                  durationMs: prod.durationMs,
+                  ranAt: prod.ranAt,
+                } : null,
+                sandboxA: sandA ? {
+                  passed: sandA.passed,
+                  turnCount: sandA.turnCount,
+                  durationMs: sandA.durationMs,
+                  ranAt: sandA.ranAt,
+                } : null,
+                sandboxB: sandB ? {
+                  passed: sandB.passed,
+                  turnCount: sandB.turnCount,
+                  durationMs: sandB.durationMs,
+                  ranAt: sandB.ranAt,
+                } : null,
+              };
+            });
+
+            state.comparison.lastResult = {
+              comparisonId: run.comparisonId,
+              status: run.status,
+              testResults,
+              summary: run.summary,
+              completedAt: run.completedAt,
+              startedAt: run.startedAt,
+            };
+
+            state.comparison.rawComparisonData = {
+              productionResults: run.productionResults || {},
+              sandboxAResults: run.sandboxAResults || {},
+              sandboxBResults: run.sandboxBResults || {},
+            };
+          }
+        }
+      })
+      .addCase(checkForRunningComparison.rejected, (state) => {
+        // Silently ignore errors - just means no running comparison
+      });
+
     // Start Comparison (now async - keeps running until polling completes)
     builder
       .addCase(startComparison.pending, (state) => {
@@ -847,16 +1044,61 @@ export const sandboxSlice = createSlice({
       .addCase(pollComparisonStatus.fulfilled, (state, action) => {
         state.comparison.isRunning = false;
         state.comparison.currentComparisonId = action.payload.comparisonId;
-        state.comparison.lastResult = action.payload;
 
-        // Also populate rawComparisonData for detail panel (same as fetchComparisonRun)
-        const run = action.payload;
-        if (run.status === 'completed' && run.productionResults) {
+        // Build testResults from raw results
+        const run = action.payload as any;
+        if (run.productionResults || run.sandboxAResults || run.sandboxBResults) {
+          // Get all test IDs from raw results
+          const testIds = new Set<string>([
+            ...Object.keys(run.productionResults || {}),
+            ...Object.keys(run.sandboxAResults || {}),
+            ...Object.keys(run.sandboxBResults || {}),
+          ]);
+
+          // Build testResults with ranAt timestamps
+          const testResults = Array.from(testIds).map(testId => {
+            const prod = run.productionResults?.[testId];
+            const sandA = run.sandboxAResults?.[testId];
+            const sandB = run.sandboxBResults?.[testId];
+            return {
+              testId,
+              production: prod ? {
+                passed: prod.passed,
+                turnCount: prod.turnCount,
+                durationMs: prod.durationMs,
+                ranAt: prod.ranAt,
+              } : null,
+              sandboxA: sandA ? {
+                passed: sandA.passed,
+                turnCount: sandA.turnCount,
+                durationMs: sandA.durationMs,
+                ranAt: sandA.ranAt,
+              } : null,
+              sandboxB: sandB ? {
+                passed: sandB.passed,
+                turnCount: sandB.turnCount,
+                durationMs: sandB.durationMs,
+                ranAt: sandB.ranAt,
+              } : null,
+            };
+          });
+
+          // Update lastResult with built testResults and timestamps
+          state.comparison.lastResult = {
+            ...action.payload,
+            testResults,
+            completedAt: run.completedAt,
+            startedAt: run.startedAt,
+          };
+
+          // Also populate rawComparisonData for detail panel
           state.comparison.rawComparisonData = {
             productionResults: run.productionResults || {},
             sandboxAResults: run.sandboxAResults || {},
             sandboxBResults: run.sandboxBResults || {},
           };
+        } else {
+          state.comparison.lastResult = action.payload;
         }
       })
       .addCase(pollComparisonStatus.rejected, (state, action) => {
@@ -886,16 +1128,41 @@ export const sandboxSlice = createSlice({
             ...Object.keys(run.sandboxBResults || {}),
           ]);
 
+          // Build testResults with ranAt timestamps
+          const testResults = Array.from(testIds).map(testId => {
+            const prod = run.productionResults?.[testId];
+            const sandA = run.sandboxAResults?.[testId];
+            const sandB = run.sandboxBResults?.[testId];
+            return {
+              testId,
+              production: prod ? {
+                passed: prod.passed,
+                turnCount: prod.turnCount,
+                durationMs: prod.durationMs,
+                ranAt: prod.ranAt,
+              } : null,
+              sandboxA: sandA ? {
+                passed: sandA.passed,
+                turnCount: sandA.turnCount,
+                durationMs: sandA.durationMs,
+                ranAt: sandA.ranAt,
+              } : null,
+              sandboxB: sandB ? {
+                passed: sandB.passed,
+                turnCount: sandB.turnCount,
+                durationMs: sandB.durationMs,
+                ranAt: sandB.ranAt,
+              } : null,
+            };
+          });
+
           state.comparison.lastResult = {
             comparisonId: run.comparisonId,
             status: run.status,
-            testResults: Array.from(testIds).map(testId => ({
-              testId,
-              production: run.productionResults?.[testId] || null,
-              sandboxA: run.sandboxAResults?.[testId] || null,
-              sandboxB: run.sandboxBResults?.[testId] || null,
-            })),
+            testResults,
             summary: run.summary,
+            completedAt: run.completedAt,
+            startedAt: run.startedAt,
           };
 
           // Store raw comparison data for detail panel

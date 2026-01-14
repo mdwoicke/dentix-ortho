@@ -90,3 +90,4 @@ export async function updatePatient(
   );
   return response.data;
 }
+

@@ -109,6 +109,7 @@ export interface EndpointTestResult {
   passed: boolean;
   turnCount: number;
   durationMs: number;
+  ranAt?: string;
 }
 
 /**
@@ -157,6 +158,9 @@ export interface ComparisonResult {
   productionResults?: Record<string, any> | null;
   sandboxAResults?: Record<string, any> | null;
   sandboxBResults?: Record<string, any> | null;
+  // Timestamps from comparison run
+  startedAt?: string | null;
+  completedAt?: string | null;
 }
 
 /**

@@ -10,15 +10,18 @@ import type { PatientSearchParams } from '../../../types';
 export interface PatientSearchBarProps {
   onSearch: (params: PatientSearchParams) => void;
   isLoading?: boolean;
+  initialValues?: PatientSearchParams;
 }
 
-export function PatientSearchBar({ onSearch, isLoading = false }: PatientSearchBarProps) {
-  const [firstName, setFirstName] = useState('');
-  const [lastName, setLastName] = useState('');
-  const [birthdate, setBirthdate] = useState('');
-  const [email, setEmail] = useState('');
-  const [phoneNumber, setPhoneNumber] = useState('');
-  const [showAdvanced, setShowAdvanced] = useState(false);
+export function PatientSearchBar({ onSearch, isLoading = false, initialValues }: PatientSearchBarProps) {
+  const [firstName, setFirstName] = useState(initialValues?.firstName || '');
+  const [lastName, setLastName] = useState(initialValues?.lastName || '');
+  const [birthdate, setBirthdate] = useState(initialValues?.birthdate || '');
+  const [email, setEmail] = useState(initialValues?.email || '');
+  const [phoneNumber, setPhoneNumber] = useState(initialValues?.phoneNumber || '');
+  const [showAdvanced, setShowAdvanced] = useState(
+    !!(initialValues?.email || initialValues?.phoneNumber)
+  );
 
   const handleSearch = () => {
     const hasSearchCriteria =

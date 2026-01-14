@@ -81,17 +81,93 @@ interface WorkItem {
 }
 
 /**
+ * Environment configuration options for test runs
+ */
+interface EnvOptions {
+  flowiseConfigId?: number;
+  flowiseConfigName?: string;
+  flowiseEndpoint?: string;
+  flowiseApiKey?: string;
+  langfuseConfigId?: number;
+  langfuseConfigName?: string;
+  langfuseHost?: string;
+  langfusePublicKey?: string;
+  langfuseSecretKey?: string;
+  environmentPresetId?: number;
+  environmentPresetName?: string;
+}
+
+/**
+ * Resolve environment preset by name to get its config IDs
+ */
+function resolveEnvironmentPreset(presetName: string): { flowiseConfigId?: number; langfuseConfigId?: number } | null {
+  const dbPath = path.resolve(__dirname, '../data/test-results.db');
+  if (!fs.existsSync(dbPath)) {
+    console.warn(`[resolvePreset] Database not found`);
+    return null;
+  }
+
+  try {
+    const db = new BetterSqlite3(dbPath, { readonly: true });
+    const preset = db.prepare(`
+      SELECT flowise_config_id, langfuse_config_id
+      FROM environment_presets
+      WHERE name = ?
+    `).get(presetName) as { flowise_config_id?: number; langfuse_config_id?: number } | undefined;
+    db.close();
+
+    if (preset) {
+      console.log(`[resolvePreset] Resolved "${presetName}" -> Flowise: ${preset.flowise_config_id}, Langfuse: ${preset.langfuse_config_id}`);
+      return {
+        flowiseConfigId: preset.flowise_config_id || undefined,
+        langfuseConfigId: preset.langfuse_config_id || undefined,
+      };
+    } else {
+      console.warn(`[resolvePreset] Preset "${presetName}" not found in database`);
+      return null;
+    }
+  } catch (error: any) {
+    console.error(`[resolvePreset] Error: ${error.message}`);
+    return null;
+  }
+}
+
+/**
  * Run goal-oriented tests with parallel worker execution
  */
 async function runGoalTests(
   scenarioIds: string[],
   concurrency: number,
   db: Database,
-  maxRetries: number = 0
+  maxRetries: number = 0,
+  envOptions?: EnvOptions
 ): Promise<TestSuiteResult> {
   console.log('\n=== Goal-Oriented Test Runner ===\n');
   const retryInfo = maxRetries > 0 ? ` (with ${maxRetries} retr${maxRetries > 1 ? 'ies' : 'y'})` : '';
   console.log(`Running ${scenarioIds.length} goal test(s) with concurrency ${concurrency}${retryInfo}\n`);
+
+  // Log environment configuration if provided
+  if (envOptions?.environmentPresetName) {
+    console.log(`Environment: ${envOptions.environmentPresetName}`);
+  }
+  if (envOptions?.flowiseEndpoint) {
+    console.log(`Flowise Endpoint: ${envOptions.flowiseEndpoint.substring(0, 60)}...`);
+  } else if (envOptions?.flowiseConfigName) {
+    console.log(`Flowise Config: ${envOptions.flowiseConfigName}${envOptions.flowiseConfigId ? ` (ID: ${envOptions.flowiseConfigId})` : ''}`);
+  }
+  if (envOptions?.langfuseHost) {
+    console.log(`Langfuse Host: ${envOptions.langfuseHost}`);
+    // Configure Langfuse service with direct settings
+    const langfuseService = getLangfuseService();
+    langfuseService.configureWithDirectSettings(
+      envOptions.langfuseHost,
+      envOptions.langfusePublicKey || '',
+      envOptions.langfuseSecretKey || ''
+    );
+  } else if (envOptions?.langfuseConfigName) {
+    console.log(`Langfuse Config: ${envOptions.langfuseConfigName}${envOptions.langfuseConfigId ? ` (ID: ${envOptions.langfuseConfigId})` : ''}`);
+  }
+  if (envOptions) console.log('');
 
   // Get all available goal scenarios (database takes precedence over TypeScript)
   const dbScenarios = loadGoalTestsFromDatabase();
@@ -128,8 +204,15 @@ async function runGoalTests(
 
   console.log(`Found ${scenariosToRun.length} goal test(s) to run\n`);
 
-  // Create run record
-  const runId = db.createTestRun();
+  // Create run record with environment info
+  const runId = db.createTestRun(envOptions ? {
+    environmentPresetId: envOptions.environmentPresetId,
+    environmentPresetName: envOptions.environmentPresetName,
+    flowiseConfigId: envOptions.flowiseConfigId,
+    flowiseConfigName: envOptions.flowiseConfigName,
+    langfuseConfigId: envOptions.langfuseConfigId,
+    langfuseConfigName: envOptions.langfuseConfigName,
+  } : undefined);
   const startTime = Date.now();
   const results: TestResult[] = [];
   let runCompleted = false;
@@ -232,14 +315,21 @@ async function runGoalTests(
 
       console.log(`[Worker ${workerId}] Starting: ${testIdWithRun}${retryLabel} - ${scenario.name}`);
 
-      // Create per-test runner with fresh session using active config from settings
+      // Create per-test runner with fresh session using config from settings or env options
       // Pass the persona's phone number as a session variable to simulate telephony caller ID
       const sessionVars: Record<string, string> = {};
       if (scenario.persona?.inventory?.parentPhone) {
         sessionVars.c1mg_variable_caller_id_number = scenario.persona.inventory.parentPhone;
         console.log(`[Worker ${workerId}] Using caller ID: ${scenario.persona.inventory.parentPhone}`);
       }
-      const flowiseClient = await FlowiseClient.forActiveConfig(undefined, sessionVars);
+      // Use direct Flowise endpoint if provided, otherwise use config ID or default
+      let flowiseClient: FlowiseClient;
+      if (envOptions?.flowiseEndpoint) {
+        console.log(`[Worker ${workerId}] Using direct Flowise endpoint: ${envOptions.flowiseEndpoint.substring(0, 60)}...`);
+        flowiseClient = FlowiseClient.forSandbox(envOptions.flowiseEndpoint, undefined, envOptions.flowiseApiKey, sessionVars);
+      } else {
+        flowiseClient = await FlowiseClient.forActiveConfig(undefined, sessionVars, envOptions?.flowiseConfigId);
+      }
       const intentDetector = new IntentDetector();
       const runner = new GoalTestRunner(flowiseClient, db, intentDetector);
 
@@ -502,13 +592,26 @@ program
   .option('-n, --concurrency <number>', 'Number of parallel workers (1-20, default: 1)', '1')
   .option('-r, --retries <number>', 'Number of retries for flaky tests (0-3, default: 0)', '0')
   .option('--adaptive', 'Enable adaptive concurrency scaling based on API latency')
+  // Environment configuration options
+  .option('--flowise-config-id <id>', 'Use specific Flowise config by ID')
+  .option('--flowise-config-name <name>', 'Flowise config name (for display/logging)')
+  .option('--flowise-endpoint <url>', 'Direct Flowise prediction API endpoint URL')
+  .option('--flowise-api-key <key>', 'Direct Flowise API key')
+  .option('--langfuse-config-id <id>', 'Use specific Langfuse config by ID')
+  .option('--langfuse-config-name <name>', 'Langfuse config name (for display/logging)')
+  .option('--langfuse-host <url>', 'Direct Langfuse host URL')
+  .option('--langfuse-public-key <key>', 'Direct Langfuse public key')
+  .option('--langfuse-secret-key <key>', 'Direct Langfuse secret key')
+  .option('--environment-preset-id <id>', 'Environment preset ID')
+  .option('--environment-preset-name <name>', 'Environment preset name (for display/logging)')
   .action(async (options) => {
     try {
       // Cleanup stale runs at startup
       cleanupStaleRuns();
 
-      const agent = new TestAgent();
-      agent.initialize();
+      // NOTE: TestAgent is created lazily below (only for non-GOAL tests)
+      // to avoid initializing FlowiseClient with wrong config before preset resolution
+      let agent: TestAgent | null = null;
 
       console.log('\n E2E Test Agent\n');
 
@@ -562,6 +665,31 @@ program
         }
       }
 
+      // Parse environment options from CLI
+      // Resolve preset name to get config IDs if provided
+      let resolvedPreset: { flowiseConfigId?: number; langfuseConfigId?: number } | null = null;
+      if (options.environmentPresetName) {
+        resolvedPreset = resolveEnvironmentPreset(options.environmentPresetName);
+      }
+
+      const hasEnvOptions = options.flowiseConfigId || options.flowiseEndpoint ||
+                            options.langfuseConfigId || options.langfuseHost ||
+                            options.environmentPresetId || options.environmentPresetName;
+      const envOptions: EnvOptions | undefined = hasEnvOptions ? {
+        // Use explicit config ID first, then fall back to resolved preset
+        flowiseConfigId: options.flowiseConfigId ? parseInt(options.flowiseConfigId, 10) : resolvedPreset?.flowiseConfigId,
+        flowiseConfigName: options.flowiseConfigName,
+        flowiseEndpoint: options.flowiseEndpoint,
+        flowiseApiKey: options.flowiseApiKey,
+        langfuseConfigId: options.langfuseConfigId ? parseInt(options.langfuseConfigId, 10) : resolvedPreset?.langfuseConfigId,
+        langfuseConfigName: options.langfuseConfigName,
+        langfuseHost: options.langfuseHost,
+        langfusePublicKey: options.langfusePublicKey,
+        langfuseSecretKey: options.langfuseSecretKey,
+        environmentPresetId: options.environmentPresetId ? parseInt(options.environmentPresetId, 10) : undefined,
+        environmentPresetName: options.environmentPresetName,
+      } : undefined;
+
       let result;
 
       if (hasGoalTests && goalScenarioIds.length > 0) {
@@ -569,11 +697,16 @@ program
         console.log('\nDetected goal-oriented test IDs, using GoalTestRunner...\n');
         const db = new Database();
         db.initialize();
-        result = await runGoalTests(goalScenarioIds, concurrency, db, maxRetries);
+        result = await runGoalTests(goalScenarioIds, concurrency, db, maxRetries, envOptions);
 
         // If there are also regular tests, run those too
         if (regularScenarioIds && regularScenarioIds.length > 0) {
           console.log('\nAlso running regular tests...\n');
+          // Lazily create TestAgent only when needed for regular tests
+          if (!agent) {
+            agent = new TestAgent();
+            agent.initialize();
+          }
           const regularResult = await agent.run({
             category: options.category,
             scenarioIds: regularScenarioIds,
@@ -595,7 +728,11 @@ program
           };
         }
       } else {
-        // Run regular tests using TestAgent
+        // Run regular tests using TestAgent - create lazily
+        if (!agent) {
+          agent = new TestAgent();
+          agent.initialize();
+        }
         result = await agent.run({
           category: options.category,
           scenarioIds, // Unified handling for single and multiple scenarios
@@ -608,6 +745,11 @@ program
 
       // Save recommendations if there were failures
       if (result.failed > 0) {
+        // Create agent if needed for recommendations
+        if (!agent) {
+          agent = new TestAgent();
+          agent.initialize();
+        }
         const recommendations = await agent.generateRecommendations(result.results);
         const db = new Database();
         db.initialize();

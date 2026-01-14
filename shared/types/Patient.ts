@@ -18,6 +18,7 @@ export interface Patient {
   provider_guid?: string;
   location_guid?: string;
   environment?: string;
+  created_at?: string;
 }
 
 export interface CreatePatientRequest {

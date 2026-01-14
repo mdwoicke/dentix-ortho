@@ -46,8 +46,11 @@ export class Cloud9Client {
 
   /**
    * Make a generic request to the Cloud 9 API
+   * @param xmlBody - XML request body
+   * @param procedure - Procedure name for logging
+   * @param timeoutMs - Optional custom timeout in milliseconds (default: 30000)
    */
-  private async makeRequest(xmlBody: string, procedure: string): Promise<Cloud9Response> {
+  private async makeRequest(xmlBody: string, procedure: string, timeoutMs: number = 30000): Promise<Cloud9Response> {
     const endpoint = getEndpoint(this.environment);
 
     try {
@@ -58,7 +61,7 @@ export class Cloud9Client {
           'Content-Type': 'application/xml',
         },
         data: xmlBody,
-        timeout: 30000, // 30 second timeout
+        timeout: timeoutMs,
       });
 
       const parsedResponse = await parseXmlResponse(response.data);
@@ -172,12 +175,15 @@ export class Cloud9Client {
   }
 
   /**
-   * Get patient list (optionally filtered by location)
+   * Get patient list (optionally filtered by location and/or modified since date)
+   * @param locationGuids - Optional array of location GUIDs to filter by
+   * @param modifiedSince - Optional date string (MM/DD/YYYY HH:MM:SS AM/PM) for incremental sync
+   * @param timeoutMs - Optional timeout in ms (default: 120000 for full sync, which can be slow)
    */
-  async getPatientList(locationGuids?: string[]): Promise<Cloud9Response> {
+  async getPatientList(locationGuids?: string[], modifiedSince?: string, timeoutMs: number = 120000): Promise<Cloud9Response> {
     const credentials = getCredentials(this.environment);
-    const xmlBody = buildGetPatientListRequest(credentials, locationGuids);
-    return this.makeRequest(xmlBody, Cloud9Procedure.GET_PATIENT_LIST);
+    const xmlBody = buildGetPatientListRequest(credentials, locationGuids, modifiedSince);
+    return this.makeRequest(xmlBody, Cloud9Procedure.GET_PATIENT_LIST, timeoutMs);
   }
 
   /**

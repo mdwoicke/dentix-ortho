@@ -1,23 +1,24 @@
 /**
  * ============================================================================
  * CHORD SCHEDULING DSO - Appointment Scheduling Tool (Node Red Version)
- * Version: v50 | Updated: 2026-01-12
+ * Version: v53 | Updated: 2026-01-13
  * ============================================================================
  * Actions: slots, grouped_slots, book_child, cancel
  *
+ * v53 FIX: BOOKING SEQUENCE GUIDANCE - Add explicit llm_guidance to slots response
+ *          - Tells agent to create patient FIRST, then call book_child
+ *          - Includes BOOKING_SEQUENCE_MANDATORY array with step-by-step instructions
+ *          - Prevents agent from calling book_child before patient is created
+ * v52 FIX: INDIVIDUAL GUIDs FOR BOOKING - Accept individual params for book_child
+ * v51 FIX: FUTURE DATE VALIDATION - Auto-correct dates too far in the future
  * v50 FIX: DYNAMIC SLOT SEARCH - Progressive date expansion when no slots found
- *          - Auto-expands search: 2 weeks -> 4 weeks -> 8 weeks
- *          - Minimum 14-day range enforced (prevents single-day searches)
- *          - Auto-retries with expanded range before returning empty
- *          - Transfer only after all expansion tiers exhausted
  * v49 FIX: STRIP GUIDs FROM SLOTS RESPONSE
- * v48 FIX: ENFORCE BOOKINGTOKEN
  * ============================================================================
  */
 
 const fetch = require('node-fetch');
 
-const TOOL_VERSION = 'v50';
+const TOOL_VERSION = 'v53';
 const MAX_SLOTS_RETURNED = 1;
 const BASE_URL = 'https://c1-aicoe-nodered-lb.prod.c1conversations.io/FabricWorkflow/api/chord';
 const DEFAULT_SCHEDULE_COLUMN_GUID = 'dda0b40c-ace5-4427-8b76-493bf9aa26f1';
@@ -26,6 +27,8 @@ const SANDBOX_MIN_DATE = new Date(2026, 0, 13);
 // v50: Progressive date expansion tiers (in days)
 const DATE_EXPANSION_TIERS = [14, 28, 56]; // 2 weeks, 4 weeks, 8 weeks
 const MIN_DATE_RANGE_DAYS = 14; // Minimum range to prevent single-day searches
+// v51: Maximum days in the future to accept (prevents LLM hallucinated dates)
+const MAX_FUTURE_DAYS = 90; // ~3 months - anything beyond this is likely an error
 
 function encodeBookingToken(slot) {
     const data = {
@@ -54,11 +57,16 @@ function decodeBookingToken(token) {
     }
 }
 
-function addBookingTokensToSlots(data) {
+// v52: Return individual GUIDs in slots response for direct booking
+function formatSlotsResponse(data) {
     if (data && data.slots && Array.isArray(data.slots)) {
         data.slots = data.slots.map(slot => ({
             displayTime: slot.startTime || slot.StartTime,
-            bookingToken: encodeBookingToken(slot)
+            startTime: slot.startTime || slot.StartTime,
+            scheduleViewGUID: slot.scheduleViewGUID,
+            scheduleColumnGUID: slot.scheduleColumnGUID,
+            appointmentTypeGUID: slot.appointmentTypeGUID,
+            minutes: slot.minutes
         }));
     }
     if (data && data.groups && Array.isArray(data.groups)) {
@@ -66,7 +74,11 @@ function addBookingTokensToSlots(data) {
             groupTime: group.slots && group.slots[0] ? (group.slots[0].startTime || group.slots[0].StartTime) : null,
             slots: group.slots ? group.slots.map(slot => ({
                 displayTime: slot.startTime || slot.StartTime,
-                bookingToken: encodeBookingToken(slot)
+                startTime: slot.startTime || slot.StartTime,
+                scheduleViewGUID: slot.scheduleViewGUID,
+                scheduleColumnGUID: slot.scheduleColumnGUID,
+                appointmentTypeGUID: slot.appointmentTypeGUID,
+                minutes: slot.minutes
             })) : []
         }));
     }
@@ -107,28 +119,23 @@ const ACTIONS = {
         endpoint: `${BASE_URL}/ortho-prd/createAppt`,
         method: 'POST',
         buildBody: (params, uui) => {
-            if (!params.bookingToken) {
-                throw new Error('BOOKING FAILED - bookingToken is required. Call slots first to get a bookingToken.');
-            }
-            const slotData = decodeBookingToken(params.bookingToken);
-            if (!slotData) {
-                throw new Error('BOOKING FAILED - Invalid bookingToken. Call slots again to get a fresh token.');
-            }
-            console.log('[book_child] Decoded bookingToken:', JSON.stringify(slotData));
+            // v52: Accept individual GUIDs directly (for Sandbox A)
+            console.log('[book_child v52] Using individual params:', JSON.stringify(params));
             return {
                 uui: uui,
                 patientGUID: params.patientGUID,
-                startTime: slotData.startTime,
-                scheduleViewGUID: slotData.scheduleViewGUID,
-                scheduleColumnGUID: slotData.scheduleColumnGUID || DEFAULT_SCHEDULE_COLUMN_GUID,
-                appointmentTypeGUID: slotData.appointmentTypeGUID || 'f6c20c35-9abb-47c2-981a-342996016705',
-                minutes: slotData.minutes || 45,
+                startTime: params.startTime,
+                scheduleViewGUID: params.scheduleViewGUID,
+                scheduleColumnGUID: params.scheduleColumnGUID || DEFAULT_SCHEDULE_COLUMN_GUID,
+                appointmentTypeGUID: params.appointmentTypeGUID || 'f6c20c35-9abb-47c2-981a-342996016705',
+                minutes: params.minutes || 45,
                 childName: params.childName
             };
         },
         validate: (params) => {
             if (!params.patientGUID) throw new Error('BOOKING FAILED - Missing patientGUID');
-            if (!params.bookingToken) throw new Error('BOOKING FAILED - Missing bookingToken. You must call slots first and use the bookingToken from the response.');
+            if (!params.startTime) throw new Error('BOOKING FAILED - Missing startTime');
+            if (!params.scheduleViewGUID) throw new Error('BOOKING FAILED - Missing scheduleViewGUID');
         },
         successLog: () => 'Appointment booked successfully'
     },
@@ -172,12 +179,31 @@ function parseDate(dateStr) {
     return new Date(parseInt(parts[2]), parseInt(parts[0]) - 1, parseInt(parts[1]));
 }
 
-// v50: Enhanced date range correction with minimum range enforcement
+// v51: Enhanced date range correction with future date validation
 function correctDateRange(startDate, endDate, expansionDays = DATE_EXPANSION_TIERS[0]) {
     let correctedStart = startDate ? parseDate(startDate) : null;
     let correctedEnd = endDate ? parseDate(endDate) : null;
     const today = new Date(); today.setHours(0, 0, 0, 0);
+    let datesCorrected = false;
+    let originalStart = startDate;
+    let originalEnd = endDate;
     
+    // v51: Check if dates are too far in the future (LLM hallucination detection)
+    const maxFutureDate = new Date(today);
+    maxFutureDate.setDate(maxFutureDate.getDate() + MAX_FUTURE_DAYS);
+    
+    if (correctedStart && correctedStart > maxFutureDate) {
+        console.log('[v51] WARNING: startDate ' + startDate + ' is ' + Math.ceil((correctedStart - today) / (1000 * 60 * 60 * 24)) + ' days in future - AUTO-CORRECTING to today');
+        correctedStart = null; // Will be set to today below
+        datesCorrected = true;
+    }
+    if (correctedEnd && correctedEnd > maxFutureDate) {
+        console.log('[v51] WARNING: endDate ' + endDate + ' is too far in future - will be recalculated');
+        correctedEnd = null; // Will be recalculated below
+        datesCorrected = true;
+    }
+    
+    // Fix dates in the past or missing
     if (!correctedStart || correctedStart < today) {
         correctedStart = new Date(Math.max(today.getTime(), SANDBOX_MIN_DATE.getTime()));
     }
@@ -195,7 +221,12 @@ function correctDateRange(startDate, endDate, expansionDays = DATE_EXPANSION_TIE
         correctedEnd.setDate(correctedEnd.getDate() + expansionDays);
     }
     
-    return { startDate: formatDate(correctedStart), endDate: formatDate(correctedEnd), expansionDays: expansionDays };
+    // v51: Log when dates were auto-corrected
+    if (datesCorrected) {
+        console.log('[v51] Date auto-correction: original=' + originalStart + ' to ' + originalEnd + ' -> corrected=' + formatDate(correctedStart) + ' to ' + formatDate(correctedEnd));
+    }
+    
+    return { startDate: formatDate(correctedStart), endDate: formatDate(correctedEnd), expansionDays: expansionDays, datesCorrected: datesCorrected };
 }
 
 function cleanParams(params) {
@@ -311,7 +342,11 @@ async function executeRequest() {
         numberOfPatients: typeof $numberOfPatients !== 'undefined' ? $numberOfPatients : null,
         timeWindowMinutes: typeof $timeWindowMinutes !== 'undefined' ? $timeWindowMinutes : null,
         patientGUID: typeof $patientGUID !== 'undefined' ? $patientGUID : null,
-        bookingToken: typeof $bookingToken !== 'undefined' ? $bookingToken : null,
+        startTime: typeof $startTime !== 'undefined' ? $startTime : null,
+        scheduleViewGUID: typeof $scheduleViewGUID !== 'undefined' ? $scheduleViewGUID : null,
+        scheduleColumnGUID: typeof $scheduleColumnGUID !== 'undefined' ? $scheduleColumnGUID : null,
+        appointmentTypeGUID: typeof $appointmentTypeGUID !== 'undefined' ? $appointmentTypeGUID : null,
+        minutes: typeof $minutes !== 'undefined' ? $minutes : null,
         appointmentGUID: typeof $appointmentGUID !== 'undefined' ? $appointmentGUID : null,
         childName: typeof $childName !== 'undefined' ? $childName : null
     };
@@ -334,15 +369,14 @@ async function executeRequest() {
             let data = searchResult.data;
             console.log('[' + toolName + '] ' + config.successLog(data));
             
-            // Add bookingTokens
-            data = addBookingTokensToSlots(data);
+            // v52: Format slots with individual GUIDs for direct booking
+            data = formatSlotsResponse(data);
             
             // Truncate to MAX_SLOTS_RETURNED
             if (data && data.slots && data.slots.length > MAX_SLOTS_RETURNED) {
                 data.slots = data.slots.slice(0, MAX_SLOTS_RETURNED);
                 data.count = MAX_SLOTS_RETURNED;
                 data._truncated = true;
-                data._note = 'Use the bookingToken from this slot when calling book_child';
             }
             if (data && data.groups && data.groups.length > MAX_SLOTS_RETURNED) {
                 data.groups = data.groups.slice(0, MAX_SLOTS_RETURNED);
@@ -350,7 +384,25 @@ async function executeRequest() {
                 data._truncated = true;
             }
             
-            if (typeof data === 'object') data._toolVersion = TOOL_VERSION;
+            if (typeof data === 'object') {
+                data._toolVersion = TOOL_VERSION;
+                // v53: Add explicit booking sequence guidance
+                data.llm_guidance = {
+                    timestamp: new Date().toISOString(),
+                    confirmation_triggers: ['yes', 'yeah', 'yep', 'yup', 'sure', 'okay', 'ok', 'alright', 'that works', 'works for me', 'perfect', 'sounds good'],
+                    goodbye_triggers: ["that's all", 'thats all', "that's it", 'thats it', 'no thank you', 'no thanks'],
+                    BOOKING_SEQUENCE_MANDATORY: [
+                        'STEP 1: Offer the slot time to the caller and wait for confirmation',
+                        'STEP 2: When caller confirms, FIRST call chord_ortho_patient action=create to create the patient',
+                        'STEP 3: Get the patientGUID from the chord_ortho_patient response',
+                        'STEP 4: THEN call schedule_appointment_ortho action=book_child with patientGUID from step 3 AND slot GUIDs from this response',
+                        'CRITICAL: NEVER call book_child before chord_ortho_patient create. The patientGUID is REQUIRED.'
+                    ],
+                    next_action: 'offer_time_to_caller_and_wait_for_confirmation',
+                    on_caller_confirms: 'call_chord_ortho_patient_action_create_FIRST_then_book_child',
+                    slot_fields_for_booking: 'startTime, scheduleViewGUID, scheduleColumnGUID, appointmentTypeGUID, minutes'
+                };
+            }
             return JSON.stringify(data);
         }
         
@@ -379,14 +431,14 @@ async function executeRequest() {
     } catch (error) {
         console.error('[' + toolName + '] Error:', error.message);
 
-        if (error.message.includes('BOOKING FAILED') || error.message.includes('bookingToken')) {
+        if (error.message.includes('BOOKING FAILED') || error.message.includes('Missing')) {
             return JSON.stringify({
                 success: false, _toolVersion: TOOL_VERSION, _debug_error: error.message,
                 llm_guidance: { 
-                    error_type: 'missing_booking_token', 
-                    voice_response: 'Let me check those times again.', 
-                    action_required: 'call_slots_then_use_bookingToken',
-                    CRITICAL: 'You MUST call slots action first, then use the bookingToken from the response when calling book_child. The bookingToken contains all the slot details.'
+                    error_type: 'missing_params', 
+                    voice_response: 'Let me check those details again.', 
+                    action_required: 'provide_required_params',
+                    CRITICAL: 'book_child requires: patientGUID, startTime, scheduleViewGUID. Call slots first to get slot details.'
                 }
             });
         }

@@ -94,6 +94,22 @@ export class LangfuseService {
   private activeSpans: Map<string, LangfuseSpanClient> = new Map();
   private activeGenerations: Map<string, LangfuseGenerationClient> = new Map();
 
+  // Direct config override (set before initialization)
+  private directConfig: LangfuseConfig | null = null;
+
+  /**
+   * Configure the service with direct settings (call before ensureInitialized)
+   * Use this for A/B sandbox testing with custom Langfuse endpoints
+   */
+  configureWithDirectSettings(host: string, publicKey: string, secretKey: string): void {
+    if (this.client) {
+      console.warn('[Langfuse] Already initialized, direct config will be ignored');
+      return;
+    }
+    this.directConfig = { host, publicKey, secretKey };
+    console.log(`[Langfuse] Direct config set: ${host}`);
+  }
+
   /**
    * Ensure the Langfuse client is initialized
    * Returns true if successfully initialized, false otherwise
@@ -114,8 +130,8 @@ export class LangfuseService {
    */
   private async initialize(): Promise<boolean> {
     try {
-      // Try to load config from backend API
-      const config = await this.loadConfig();
+      // Use direct config if provided, otherwise load from backend API
+      const config = this.directConfig || await this.loadConfig();
 
       if (!config) {
         console.log('[Langfuse] No configuration found, tracing disabled');

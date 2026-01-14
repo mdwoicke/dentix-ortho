@@ -69,8 +69,10 @@ export const getPatientAppointments = asyncHandler(
     // Create maps from chair schedules:
     // 1. location GUID -> schedule view GUIDs (for fetching chair info)
     // 2. schedule column GUID -> description (for direct chair lookup)
+    // 3. location + svcOrder -> description (for translating Chair number from GetAppointmentsByDate)
     const locationScheduleViewMap = new Map<string, string[]>();
     const scheduleColumnDescriptionMap = new Map<string, string>();
+    const svcOrderToChairMap = new Map<string, string>(); // key: "locationGUID:svcOrder"
 
     if (chairSchedulesResponse.status === 'Success' && chairSchedulesResponse.records) {
       chairSchedulesResponse.records.forEach((schedule: Cloud9Provider) => {
@@ -84,6 +86,12 @@ export const getPatientAppointments = asyncHandler(
         // Build schedule column GUID -> description map (for direct chair lookup)
         if (schedule.schdcolGUID && schedule.schdcolDescription) {
           scheduleColumnDescriptionMap.set(schedule.schdcolGUID, schedule.schdcolDescription);
+        }
+
+        // Build location + svcOrder -> description map (for translating Chair number)
+        if (schedule.locGUID && schedule.svcOrder && schedule.schdcolDescription) {
+          const key = `${schedule.locGUID}:${schedule.svcOrder}`;
+          svcOrderToChairMap.set(key, schedule.schdcolDescription);
         }
       });
     }
@@ -248,7 +256,15 @@ export const getPatientAppointments = asyncHandler(
                 if (response.status === 'Success' && response.records) {
                   for (const record of response.records) {
                     if (record.AppointmentGUID && record.Chair) {
-                      appointmentChairMap.set(record.AppointmentGUID, record.Chair);
+                      // Translate Chair number (svcOrder) to chair name using location
+                      const locationGuid = record.LocationGUID;
+                      if (locationGuid) {
+                        const svcOrderKey = `${locationGuid}:${record.Chair}`;
+                        const chairName = svcOrderToChairMap.get(svcOrderKey);
+                        appointmentChairMap.set(record.AppointmentGUID, chairName || record.Chair);
+                      } else {
+                        appointmentChairMap.set(record.AppointmentGUID, record.Chair);
+                      }
                     }
                   }
                 }
@@ -320,6 +336,11 @@ export const getPatientAppointments = asyncHandler(
           (localAppt?.schedule_column_guid ? scheduleColumnDescriptionMap.get(localAppt.schedule_column_guid) : null) ||
           appointmentChairMap.get(appt.AppointmentGUID) ||
           null,
+        // Schedule view and column info (only available for appointments created through our system)
+        schedule_view_guid: localAppt?.schedule_view_guid || null,
+        schedule_view_description: localAppt?.schedule_view_description || null,
+        schedule_column_guid: localAppt?.schedule_column_guid || null,
+        schedule_column_description: localAppt?.schedule_column_description || null,
         environment,
         scheduled_at: localAppt?.cached_at || null,
       };

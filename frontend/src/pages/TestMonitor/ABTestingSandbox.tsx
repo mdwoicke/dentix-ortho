@@ -45,6 +45,8 @@ import {
   fetchAvailableTests,
   startComparison,
   fetchComparisonHistory,
+  fetchComparisonRun,
+  checkForRunningComparison,
   // Selectors
   selectSandboxes,
   selectSandboxesLoading,
@@ -60,6 +62,7 @@ import {
   selectHasUnsavedChanges,
   selectEditedContent,
   selectComparisonState,
+  selectComparisonHistory,
   selectAvailableTests,
   selectSelectedTestIds,
   selectSandboxError,
@@ -86,6 +89,7 @@ export function ABTestingSandbox() {
   const hasUnsavedChanges = useSelector(selectHasUnsavedChanges);
   const editedContent = useSelector(selectEditedContent);
   const comparisonState = useSelector(selectComparisonState);
+  const comparisonHistory = useSelector(selectComparisonHistory);
   const availableTests = useSelector(selectAvailableTests);
   const selectedTestIds = useSelector(selectSelectedTestIds);
   const error = useSelector(selectSandboxError);
@@ -97,6 +101,8 @@ export function ABTestingSandbox() {
     dispatch(fetchSandboxes());
     dispatch(fetchAvailableTests());
     dispatch(fetchComparisonHistory(10));
+    // Check for any running comparison (persisted from page refresh)
+    dispatch(checkForRunningComparison());
   }, [dispatch]);
 
   // Load files when sandbox changes
@@ -208,6 +214,10 @@ export function ABTestingSandbox() {
 
   const handleCloseDetails = useCallback(() => {
     dispatch(clearDetailTest());
+  }, [dispatch]);
+
+  const handleLoadHistoricalRun = useCallback((comparisonId: string) => {
+    dispatch(fetchComparisonRun(comparisonId));
   }, [dispatch]);
 
   if (sandboxesLoading && sandboxes.length === 0) {
@@ -372,6 +382,7 @@ export function ABTestingSandbox() {
             sandboxes={sandboxes}
             isRunning={comparisonState.isRunning}
             progress={comparisonState.progress}
+            lastResult={comparisonState.lastResult}
             onStartComparison={handleStartComparison}
           />
         </div>
@@ -381,7 +392,9 @@ export function ABTestingSandbox() {
       <Card className="p-6">
         <ComparisonResults
           result={comparisonState.lastResult}
+          history={comparisonHistory}
           onViewDetails={handleViewDetails}
+          onLoadHistoricalRun={handleLoadHistoricalRun}
         />
       </Card>
 

@@ -19,7 +19,7 @@ const fetch = require('node-fetch');
 // 🔧 DEFAULT GUIDS - Production values for CDH Allegheny
 // ============================================================================
 
-const DEFAULT_LOCATION_GUID = '799d413a-5e1a-46a2-b169-e2108bf517d6';  // CDH - Allegheny 300M
+const DEFAULT_LOCATION_GUID = '1fef9297-7c8b-426b-b0d1-f2275136e48b';  // CDH - Allegheny 202 (PROD)
 const DEFAULT_PROVIDER_GUID = 'a79ec244-9503-44b2-87e4-5920b6e60392';  // Default Orthodontist
 
 function isValidGUID(value) {

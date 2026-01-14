@@ -21,6 +21,25 @@ export interface TestRun {
   failed: number;
   skipped: number;
   summary?: string;
+  // Environment tracking fields
+  environmentPresetId?: number;
+  environmentPresetName?: string;
+  flowiseConfigId?: number;
+  flowiseConfigName?: string;
+  langfuseConfigId?: number;
+  langfuseConfigName?: string;
+}
+
+/**
+ * Environment configuration for test runs
+ */
+export interface EnvironmentConfig {
+  environmentPresetId?: number;
+  environmentPresetName?: string;
+  flowiseConfigId?: number;
+  flowiseConfigName?: string;
+  langfuseConfigId?: number;
+  langfuseConfigName?: string;
 }
 
 export interface TestResult {
@@ -292,9 +311,23 @@ export class Database {
   private dbPath: string;
 
   constructor() {
-    // Use __dirname to ensure consistent path regardless of where the process runs from
-    // This ensures backend and test-agent use the same database file
-    this.dbPath = path.resolve(__dirname, '../../data/test-results.db');
+    // Determine the correct database path regardless of whether we're running from
+    // source (test-agent/src/storage/) or compiled (test-agent/dist/test-agent/src/storage/)
+    // We always want to use test-agent/data/test-results.db
+
+    // Check if we're in a dist directory (compiled code)
+    const currentDir = __dirname;
+    if (currentDir.includes('dist')) {
+      // Compiled: __dirname is test-agent/dist/test-agent/src/storage/
+      // Navigate up to test-agent/ then down to data/
+      const testAgentRoot = path.resolve(currentDir, '../../../../');
+      this.dbPath = path.join(testAgentRoot, 'data/test-results.db');
+    } else {
+      // Source: __dirname is test-agent/src/storage/
+      this.dbPath = path.resolve(currentDir, '../../data/test-results.db');
+    }
+
+    console.log(`[Database] Using path: ${this.dbPath}`);
   }
 
   /**
@@ -1129,6 +1162,17 @@ export class Database {
     // Add index for context-based queries (db already declared at top of method)
     db.exec(`CREATE INDEX IF NOT EXISTS idx_ai_enhancement_context ON ai_enhancement_history(context, file_key)`);
 
+    // Migration: Add environment tracking columns to test_runs for environment-aware test execution
+    this.addColumnIfNotExists('test_runs', 'environment_preset_id', 'INTEGER');
+    this.addColumnIfNotExists('test_runs', 'environment_preset_name', 'TEXT');
+    this.addColumnIfNotExists('test_runs', 'flowise_config_id', 'INTEGER');
+    this.addColumnIfNotExists('test_runs', 'flowise_config_name', 'TEXT');
+    this.addColumnIfNotExists('test_runs', 'langfuse_config_id', 'INTEGER');
+    this.addColumnIfNotExists('test_runs', 'langfuse_config_name', 'TEXT');
+
+    // Add index for environment filtering
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_test_runs_environment ON test_runs(environment_preset_name)`);
+
     // Initialize built-in enhancement templates
     this.initializeBuiltInTemplates();
   }
@@ -1296,16 +1340,30 @@ export class Database {
   }
 
   /**
-   * Create a new test run
+   * Create a new test run with optional environment configuration
    */
-  createTestRun(): string {
+  createTestRun(envConfig?: EnvironmentConfig): string {
     const db = this.getDb();
     const runId = `run-${new Date().toISOString().slice(0, 10)}-${uuidv4().slice(0, 8)}`;
 
     db.prepare(`
-      INSERT INTO test_runs (run_id, started_at, status)
-      VALUES (?, ?, 'running')
-    `).run(runId, new Date().toISOString());
+      INSERT INTO test_runs (
+        run_id, started_at, status,
+        environment_preset_id, environment_preset_name,
+        flowise_config_id, flowise_config_name,
+        langfuse_config_id, langfuse_config_name
+      )
+      VALUES (?, ?, 'running', ?, ?, ?, ?, ?, ?)
+    `).run(
+      runId,
+      new Date().toISOString(),
+      envConfig?.environmentPresetId ?? null,
+      envConfig?.environmentPresetName ?? null,
+      envConfig?.flowiseConfigId ?? null,
+      envConfig?.flowiseConfigName ?? null,
+      envConfig?.langfuseConfigId ?? null,
+      envConfig?.langfuseConfigName ?? null
+    );
 
     return runId;
   }

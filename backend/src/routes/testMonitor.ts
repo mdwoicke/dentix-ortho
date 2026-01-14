@@ -422,6 +422,9 @@ router.get('/flowise-configs/active', testMonitorController.getActiveFlowiseConf
 // GET /api/test-monitor/flowise-configs - Get all Flowise configurations
 router.get('/flowise-configs', testMonitorController.getFlowiseConfigs);
 
+// GET /api/test-monitor/flowise-configs/:id - Get specific Flowise config by ID
+router.get('/flowise-configs/:id', testMonitorController.getFlowiseConfigById);
+
 // POST /api/test-monitor/flowise-configs - Create new Flowise configuration
 router.post('/flowise-configs', testMonitorController.createFlowiseConfig);
 
@@ -464,6 +467,28 @@ router.post('/langfuse-configs/:id/test', testMonitorController.testLangfuseConf
 
 // GET /api/test-monitor/langfuse/session/:sessionId/agent-executor - Get Agent Executor observation ID
 router.get('/langfuse/session/:sessionId/agent-executor', testMonitorController.getLangfuseAgentExecutorId);
+
+// ============================================================================
+// TEST ENVIRONMENT PRESETS ROUTES
+// ============================================================================
+
+// GET /api/test-monitor/environment-presets/active - Get active (default) environment preset
+router.get('/environment-presets/active', testMonitorController.getActiveEnvironmentPreset);
+
+// GET /api/test-monitor/environment-presets - Get all environment presets
+router.get('/environment-presets', testMonitorController.getEnvironmentPresets);
+
+// POST /api/test-monitor/environment-presets - Create new environment preset
+router.post('/environment-presets', testMonitorController.createEnvironmentPreset);
+
+// PUT /api/test-monitor/environment-presets/:id - Update environment preset
+router.put('/environment-presets/:id', testMonitorController.updateEnvironmentPreset);
+
+// DELETE /api/test-monitor/environment-presets/:id - Delete environment preset
+router.delete('/environment-presets/:id', testMonitorController.deleteEnvironmentPreset);
+
+// POST /api/test-monitor/environment-presets/:id/set-default - Set as default
+router.post('/environment-presets/:id/set-default', testMonitorController.setEnvironmentPresetDefault);
 
 // ============================================================================
 // PRODUCTION CALLS (LANGFUSE TRACES) ROUTES

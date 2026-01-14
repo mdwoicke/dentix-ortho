@@ -12,20 +12,19 @@ import { CopyToPostmanButton } from '../../components/features/postman/CopyToPos
 import { PatientForm } from '../../components/forms';
 import { usePatients } from '../../hooks';
 import { useAppSelector } from '../../store/hooks';
-import { selectLastSearchParams } from '../../store/slices/patientSlice';
+import { selectLastSearchParams, selectHasSearchResults } from '../../store/slices/patientSlice';
 import type { PatientFormData, PatientSearchParams, Patient } from '../../types';
 
 export function PatientList() {
   const { searchResults, loading, search, createPatient } = usePatients();
   const lastSearchParams = useAppSelector(selectLastSearchParams);
+  const hasSearchResults = useAppSelector(selectHasSearchResults);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
-  const [hasSearched, setHasSearched] = useState(false);
   const [wizardOpen, setWizardOpen] = useState(false);
   const [selectedPatientForSchedule, setSelectedPatientForSchedule] = useState<Patient | null>(null);
 
   const handleSearch = (params: PatientSearchParams) => {
     search(params);
-    setHasSearched(true);
   };
 
   const handleCreatePatient = async (data: PatientFormData) => {
@@ -53,8 +52,6 @@ export function PatientList() {
     setSelectedPatientForSchedule(null);
   };
 
-  const patients = searchResults?.data || [];
-
   // Construct query string for cURL (same logic as patientApi)
   const getCurlQueryString = (): string => {
     if (!lastSearchParams) return '';
@@ -77,14 +74,7 @@ export function PatientList() {
   };
 
   const curlQueryString = getCurlQueryString();
-
-  // DEBUG: Log search results
-  console.log('[PatientList] searchResults:', searchResults);
-  console.log('[PatientList] searchResults type:', typeof searchResults);
-  console.log('[PatientList] searchResults is array?:', Array.isArray(searchResults));
-  console.log('[PatientList] searchResults.data:', searchResults?.data);
-  console.log('[PatientList] patients:', patients);
-  console.log('[PatientList] patients length:', patients.length);
+  const patients = searchResults?.data || [];
 
   return (
     <div>
@@ -115,11 +105,11 @@ export function PatientList() {
 
       {/* Search Bar */}
       <div className="mb-6">
-        <PatientSearchBar onSearch={handleSearch} isLoading={loading} />
+        <PatientSearchBar onSearch={handleSearch} isLoading={loading} initialValues={lastSearchParams || undefined} />
       </div>
 
       {/* Results */}
-      {hasSearched && (
+      {hasSearchResults && (
         <div className="bg-white dark:bg-slate-800 rounded-lg shadow-md dark:shadow-xl border border-gray-200 dark:border-slate-700 transition-colors">
           {searchResults && (
             <div className="p-4 border-b border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-900/50 transition-colors">
@@ -139,7 +129,7 @@ export function PatientList() {
         </div>
       )}
 
-      {!hasSearched && (
+      {!hasSearchResults && (
         <div className="bg-white dark:bg-slate-800 rounded-lg shadow-md dark:shadow-xl border border-gray-200 dark:border-slate-700 p-12 text-center transition-colors">
           <p className="text-gray-500 dark:text-slate-400">
             Enter search criteria above to find patients

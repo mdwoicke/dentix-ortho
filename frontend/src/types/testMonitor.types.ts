@@ -14,6 +14,13 @@ export interface TestRun {
   failed: number;
   skipped: number;
   summary?: Record<string, any>;
+  // Environment tracking fields
+  environmentPresetId?: number;
+  environmentPresetName?: string;
+  flowiseConfigId?: number;
+  flowiseConfigName?: string;
+  langfuseConfigId?: number;
+  langfuseConfigName?: string;
 }
 
 export interface TestResult {
@@ -189,6 +196,10 @@ export interface ExecutionConfig {
   retryFailed: boolean;
   timeoutMs: number;
   enableSemanticEval: boolean;
+  // Environment configuration - which Flowise and Langfuse endpoints to use
+  environmentPresetId?: number;
+  flowiseConfigId?: number;
+  langfuseConfigId?: number;
 }
 
 export interface WorkerStatus {

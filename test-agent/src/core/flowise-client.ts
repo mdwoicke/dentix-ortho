@@ -46,13 +46,16 @@ export class FlowiseClient {
   /**
    * Create a new FlowiseClient
    * @param sessionId - Optional session ID (generates UUID if not provided)
-   * @param endpoint - Optional endpoint URL override (uses config default if not provided)
+   * @param endpoint - Required endpoint URL - NO hardcoded fallbacks
    * @param apiKey - Optional API key for authentication
    * @param sessionVars - Optional session variables (e.g., c1mg_variable_caller_id_number)
    */
-  constructor(sessionId?: string, endpoint?: string, apiKey?: string, sessionVars?: Record<string, string>) {
+  constructor(sessionId: string | undefined, endpoint: string, apiKey?: string, sessionVars?: Record<string, string>) {
+    if (!endpoint) {
+      throw new Error('[FlowiseClient] Endpoint is required - no hardcoded fallbacks allowed');
+    }
     this.sessionId = sessionId || uuidv4();
-    this.endpoint = endpoint || config.flowise.endpoint;
+    this.endpoint = endpoint;
     this.apiKey = apiKey;
     this.sessionVars = sessionVars || {};
 
@@ -87,28 +90,23 @@ export class FlowiseClient {
   }
 
   /**
-   * Create a FlowiseClient using the default production endpoint from hardcoded config
-   * @deprecated Use forActiveConfig() instead to use settings from the app
+   * @deprecated REMOVED - Use forActiveConfig() instead. No hardcoded fallbacks allowed.
    */
   static forProduction(sessionId?: string, sessionVars?: Record<string, string>): FlowiseClient {
-    return new FlowiseClient(sessionId, config.flowise.endpoint, undefined, sessionVars);
+    throw new Error('[FlowiseClient] forProduction() is deprecated and removed. Use forActiveConfig() to get settings from the app.');
   }
 
   /**
    * Create a FlowiseClient using the active configuration from app settings
-   * Falls back to hardcoded config if settings unavailable
+   * Throws error if settings unavailable - NO hardcoded fallbacks
    * @param sessionId - Optional session ID
    * @param sessionVars - Optional session variables (e.g., { c1mg_variable_caller_id_number: '5551234567' })
+   * @param configId - Optional specific Flowise config ID to use instead of active/default
    */
-  static async forActiveConfig(sessionId?: string, sessionVars?: Record<string, string>): Promise<FlowiseClient> {
-    try {
-      const settings = await getFlowiseEndpoint();
-      console.log(`[FlowiseClient] Using active config: ${settings.url.substring(0, 60)}...`);
-      return new FlowiseClient(sessionId, settings.url, settings.apiKey, sessionVars);
-    } catch (error: any) {
-      console.warn(`[FlowiseClient] Failed to get active config, using fallback: ${error.message}`);
-      return new FlowiseClient(sessionId, config.flowise.endpoint, undefined, sessionVars);
-    }
+  static async forActiveConfig(sessionId?: string, sessionVars?: Record<string, string>, configId?: number): Promise<FlowiseClient> {
+    const settings = await getFlowiseEndpoint(configId);
+    console.log(`[FlowiseClient] Using ${configId ? `config ID ${configId}` : 'active config'}: ${settings.url.substring(0, 60)}...`);
+    return new FlowiseClient(sessionId, settings.url, settings.apiKey, sessionVars);
   }
 
   /**
@@ -264,29 +262,64 @@ export class FlowiseClient {
 
   /**
    * Extract text from various Flowise response formats
+   * Filters out PAYLOAD section - only returns the ANSWER portion for TTS
    */
   private extractText(data: any): string {
+    let rawText: string;
+
     if (typeof data === 'string') {
-      return data;
+      rawText = data;
+    } else if (data.text) {
+      rawText = data.text;
+    } else if (data.answer) {
+      rawText = data.answer;
+    } else if (data.response) {
+      rawText = data.response;
+    } else if (data.output) {
+      rawText = data.output;
+    } else {
+      rawText = JSON.stringify(data);
     }
 
-    if (data.text) {
-      return data.text;
+    // Filter out PAYLOAD section - only return the ANSWER portion for TTS
+    return this.extractAnswerOnly(rawText);
+  }
+
+  /**
+   * Extract only the ANSWER portion from a response, filtering out PAYLOAD
+   * The IVA returns responses in format:
+   * ANSWER: [spoken text]
+   * PAYLOAD: { JSON }
+   *
+   * Only the ANSWER should be spoken to the caller
+   */
+  private extractAnswerOnly(text: string): string {
+    if (!text) return '';
+
+    // Check if response has ANSWER: prefix
+    const answerMatch = text.match(/^ANSWER:\s*([\s\S]*?)(?:\n\s*PAYLOAD:|$)/i);
+    if (answerMatch && answerMatch[1]) {
+      return answerMatch[1].trim();
     }
 
-    if (data.answer) {
-      return data.answer;
+    // Fallback: remove PAYLOAD section if present (no ANSWER: prefix)
+    const payloadIndex = text.toUpperCase().indexOf('\nPAYLOAD:');
+    if (payloadIndex !== -1) {
+      return text.substring(0, payloadIndex).trim();
     }
 
-    if (data.response) {
-      return data.response;
+    // Also check for PAYLOAD: at start of line without newline
+    const payloadStartIndex = text.toUpperCase().indexOf('PAYLOAD:');
+    if (payloadStartIndex !== -1) {
+      // Only strip if PAYLOAD appears to be on its own line or after content
+      const beforePayload = text.substring(0, payloadStartIndex).trim();
+      if (beforePayload.length > 0) {
+        return beforePayload;
+      }
     }
 
-    if (data.output) {
-      return data.output;
-    }
-
-    return JSON.stringify(data);
+    // No PAYLOAD found, return as-is
+    return text;
   }
 
   /**

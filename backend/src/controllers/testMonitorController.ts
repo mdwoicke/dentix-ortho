@@ -20,7 +20,7 @@ import { aiEnhancementService } from '../services/aiEnhancementService';
 import * as documentParserService from '../services/documentParserService';
 import { LangfuseTraceService } from '../services/langfuseTraceService';
 
-// Path to test-agent database
+// Path to test-agent database (main database with all test run data)
 const TEST_AGENT_DB_PATH = path.resolve(__dirname, '../../../test-agent/data/test-results.db');
 
 // Prompt context type for sandbox support
@@ -222,6 +222,21 @@ function getTestAgentDbWritable(): BetterSqlite3.Database {
     -- Indexes for config tables
     CREATE INDEX IF NOT EXISTS idx_flowise_configs_default ON flowise_configs(is_default);
     CREATE INDEX IF NOT EXISTS idx_langfuse_configs_default ON langfuse_configs(is_default);
+
+    -- Test Environment Presets: Combine Flowise + Langfuse configs for easy switching in Test tab
+    CREATE TABLE IF NOT EXISTS environment_presets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT UNIQUE NOT NULL,
+      description TEXT,
+      flowise_config_id INTEGER,
+      langfuse_config_id INTEGER,
+      is_default INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (flowise_config_id) REFERENCES flowise_configs(id) ON DELETE SET NULL,
+      FOREIGN KEY (langfuse_config_id) REFERENCES langfuse_configs(id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_environment_presets_default ON environment_presets(is_default);
   `);
 
   // Add langfuse columns if they don't exist (for existing tables)
@@ -450,7 +465,9 @@ export async function getTestRuns(req: Request, res: Response, next: NextFunctio
     const db = getTestAgentDb();
 
     const rows = db.prepare(`
-      SELECT run_id, started_at, completed_at, status, total_tests, passed, failed, skipped, summary
+      SELECT run_id, started_at, completed_at, status, total_tests, passed, failed, skipped, summary,
+             environment_preset_id, environment_preset_name, flowise_config_id, flowise_config_name,
+             langfuse_config_id, langfuse_config_name
       FROM test_runs
       ORDER BY started_at DESC
       LIMIT ? OFFSET ?
@@ -468,6 +485,12 @@ export async function getTestRuns(req: Request, res: Response, next: NextFunctio
       failed: row.failed,
       skipped: row.skipped,
       summary: row.summary ? JSON.parse(row.summary) : null,
+      environmentPresetId: row.environment_preset_id,
+      environmentPresetName: row.environment_preset_name,
+      flowiseConfigId: row.flowise_config_id,
+      flowiseConfigName: row.flowise_config_name,
+      langfuseConfigId: row.langfuse_config_id,
+      langfuseConfigName: row.langfuse_config_name,
     }));
 
     res.json({ success: true, data: runs });
@@ -488,7 +511,9 @@ export async function getTestRun(req: Request, res: Response, next: NextFunction
 
     // Get the run
     const runRow = db.prepare(`
-      SELECT run_id, started_at, completed_at, status, total_tests, passed, failed, skipped, summary
+      SELECT run_id, started_at, completed_at, status, total_tests, passed, failed, skipped, summary,
+             environment_preset_id, environment_preset_name, flowise_config_id, flowise_config_name,
+             langfuse_config_id, langfuse_config_name
       FROM test_runs
       WHERE run_id = ?
     `).get(runId) as any;
@@ -519,6 +544,12 @@ export async function getTestRun(req: Request, res: Response, next: NextFunction
       failed: runRow.failed,
       skipped: runRow.skipped,
       summary: runRow.summary ? JSON.parse(runRow.summary) : null,
+      environmentPresetId: runRow.environment_preset_id,
+      environmentPresetName: runRow.environment_preset_name,
+      flowiseConfigId: runRow.flowise_config_id,
+      flowiseConfigName: runRow.flowise_config_name,
+      langfuseConfigId: runRow.langfuse_config_id,
+      langfuseConfigName: runRow.langfuse_config_name,
       results: resultRows.map(row => ({
         id: row.id,
         runId: row.run_id,
@@ -2587,6 +2618,107 @@ export async function startExecution(req: Request, res: Response, next: NextFunc
       console.log(`[Execution] Parallel execution with ${concurrency} workers`);
     }
 
+    // Add environment configuration if specified
+    const flowiseConfigId = config?.flowiseConfigId;
+    const langfuseConfigId = config?.langfuseConfigId;
+    const environmentPresetId = config?.environmentPresetId;
+
+    // Resolve config names from database for logging/display
+    let flowiseConfigName: string | null = null;
+    let langfuseConfigName: string | null = null;
+    let environmentPresetName: string | null = null;
+
+    if (flowiseConfigId || langfuseConfigId || environmentPresetId) {
+      const db = getTestAgentDb();
+
+      // First check if this is an A/B sandbox environment preset
+      // If so, use the direct endpoint from ab_sandboxes table
+      if (environmentPresetId) {
+        const preset = db.prepare('SELECT name FROM environment_presets WHERE id = ?').get(environmentPresetId) as { name: string } | undefined;
+        environmentPresetName = preset?.name || null;
+
+        // Check if this preset maps to an A/B sandbox (Sandbox A or Sandbox B)
+        if (environmentPresetName) {
+          const sandboxMapping: Record<string, string> = {
+            'Sandbox A': 'sandbox_a',
+            'Sandbox B': 'sandbox_b',
+          };
+          const sandboxId = sandboxMapping[environmentPresetName];
+
+          if (sandboxId) {
+            // Look up the A/B sandbox settings with direct endpoints
+            const sandbox = db.prepare(`
+              SELECT name, flowise_endpoint, flowise_api_key,
+                     langfuse_host, langfuse_public_key, langfuse_secret_key
+              FROM ab_sandboxes WHERE sandbox_id = ?
+            `).get(sandboxId) as {
+              name: string;
+              flowise_endpoint: string | null;
+              flowise_api_key: string | null;
+              langfuse_host: string | null;
+              langfuse_public_key: string | null;
+              langfuse_secret_key: string | null;
+            } | undefined;
+
+            if (sandbox) {
+              console.log(`[Execution] Using A/B Sandbox: ${sandbox.name}`);
+
+              // Pass direct Flowise endpoint
+              if (sandbox.flowise_endpoint) {
+                args.push('--flowise-endpoint', sandbox.flowise_endpoint);
+                if (sandbox.flowise_api_key) {
+                  args.push('--flowise-api-key', sandbox.flowise_api_key);
+                }
+                flowiseConfigName = sandbox.name;
+                // Quote names with spaces to handle shell: true in spawn
+                args.push('--flowise-config-name', `"${sandbox.name}"`);
+                console.log(`[Execution] Flowise endpoint: ${sandbox.flowise_endpoint.substring(0, 60)}...`);
+              }
+
+              // Pass direct Langfuse settings
+              if (sandbox.langfuse_host && sandbox.langfuse_public_key && sandbox.langfuse_secret_key) {
+                args.push('--langfuse-host', sandbox.langfuse_host);
+                args.push('--langfuse-public-key', sandbox.langfuse_public_key);
+                args.push('--langfuse-secret-key', sandbox.langfuse_secret_key);
+                langfuseConfigName = sandbox.name;
+                // Quote names with spaces to handle shell: true in spawn
+                args.push('--langfuse-config-name', `"${sandbox.name}"`);
+                console.log(`[Execution] Langfuse host: ${sandbox.langfuse_host}`);
+              }
+            }
+          }
+
+          args.push('--environment-preset-id', String(environmentPresetId));
+          // Quote preset name with spaces to handle shell: true in spawn
+          args.push('--environment-preset-name', `"${environmentPresetName}"`);
+          console.log(`[Execution] Using environment preset: ${environmentPresetName}`);
+        }
+      }
+
+      // If not a sandbox or sandbox lookup failed, fall back to config IDs
+      if (flowiseConfigId && !flowiseConfigName) {
+        const flowiseConfig = db.prepare('SELECT name FROM flowise_configs WHERE id = ?').get(flowiseConfigId) as { name: string } | undefined;
+        flowiseConfigName = flowiseConfig?.name || null;
+        args.push('--flowise-config-id', String(flowiseConfigId));
+        if (flowiseConfigName) {
+          // Quote names with spaces to handle shell: true in spawn
+          args.push('--flowise-config-name', `"${flowiseConfigName}"`);
+        }
+        console.log(`[Execution] Using Flowise config: ${flowiseConfigName || flowiseConfigId}`);
+      }
+
+      if (langfuseConfigId && !langfuseConfigName) {
+        const langfuseConfig = db.prepare('SELECT name FROM langfuse_configs WHERE id = ?').get(langfuseConfigId) as { name: string } | undefined;
+        langfuseConfigName = langfuseConfig?.name || null;
+        args.push('--langfuse-config-id', String(langfuseConfigId));
+        if (langfuseConfigName) {
+          // Quote names with spaces to handle shell: true in spawn
+          args.push('--langfuse-config-name', `"${langfuseConfigName}"`);
+        }
+        console.log(`[Execution] Using Langfuse config: ${langfuseConfigName || langfuseConfigId}`);
+      }
+    }
+
     console.log(`[Execution] Starting: npm ${args.join(' ')} in ${testAgentDir}`);
 
     const child = spawn('npm', args, {
@@ -4321,7 +4453,7 @@ export async function getSandboxes(
   let db: BetterSqlite3.Database | null = null;
 
   try {
-    db = getTestAgentDbWritable();
+    db = new BetterSqlite3(TEST_AGENT_DB_PATH);
 
     // Initialize sandboxes if not exist
     const now = new Date().toISOString();
@@ -4402,7 +4534,7 @@ export async function getSandbox(
 
   try {
     const { sandboxId } = req.params;
-    db = getTestAgentDbWritable();
+    db = new BetterSqlite3(TEST_AGENT_DB_PATH);
 
     const sandbox = db.prepare(`
       SELECT id, sandbox_id, name, description, flowise_endpoint, flowise_api_key,
@@ -4473,7 +4605,7 @@ export async function updateSandbox(
   try {
     const { sandboxId } = req.params;
     const { name, description, flowiseEndpoint, flowiseApiKey, langfuseHost, langfusePublicKey, langfuseSecretKey, isActive } = req.body;
-    db = getTestAgentDbWritable();
+    db = new BetterSqlite3(TEST_AGENT_DB_PATH);
 
     const now = new Date().toISOString();
 
@@ -4718,7 +4850,7 @@ export async function getSandboxFiles(
 
   try {
     const { sandboxId } = req.params;
-    db = getTestAgentDbWritable();
+    db = new BetterSqlite3(TEST_AGENT_DB_PATH);
 
     const files = db.prepare(`
       SELECT id, sandbox_id, file_key, file_type, display_name, content, version, base_version, change_description, created_at, updated_at
@@ -4760,7 +4892,7 @@ export async function getSandboxFile(
 
   try {
     const { sandboxId, fileKey } = req.params;
-    db = getTestAgentDbWritable();
+    db = new BetterSqlite3(TEST_AGENT_DB_PATH);
 
     const file = db.prepare(`
       SELECT id, sandbox_id, file_key, file_type, display_name, content, version, base_version, change_description, created_at, updated_at
@@ -4810,7 +4942,7 @@ export async function getSandboxFileHistory(
   try {
     const { sandboxId, fileKey } = req.params;
     const limit = parseInt(req.query.limit as string) || 20;
-    db = getTestAgentDbWritable();
+    db = new BetterSqlite3(TEST_AGENT_DB_PATH);
 
     const history = db.prepare(`
       SELECT id, sandbox_id, file_key, version, content, change_description, created_at
@@ -4857,7 +4989,7 @@ export async function saveSandboxFile(
       return;
     }
 
-    db = getTestAgentDbWritable();
+    db = new BetterSqlite3(TEST_AGENT_DB_PATH);
     const now = new Date().toISOString();
 
     // Check if file exists
@@ -4929,7 +5061,7 @@ export async function copySandboxFileFromProduction(
 
   try {
     const { sandboxId, fileKey } = req.params;
-    db = getTestAgentDbWritable();
+    db = new BetterSqlite3(TEST_AGENT_DB_PATH);
 
     // Get production content
     const production = db.prepare(`
@@ -5039,7 +5171,7 @@ export async function rollbackSandboxFile(
       return;
     }
 
-    db = getTestAgentDbWritable();
+    db = new BetterSqlite3(TEST_AGENT_DB_PATH);
     const now = new Date().toISOString();
 
     // Get the version from history
@@ -5112,7 +5244,7 @@ export async function resetSandbox(
 
   try {
     const { sandboxId } = req.params;
-    db = getTestAgentDbWritable();
+    db = new BetterSqlite3(TEST_AGENT_DB_PATH);
 
     // Clear all sandbox files and history
     db.prepare('DELETE FROM ab_sandbox_file_history WHERE sandbox_id = ?').run(sandboxId);
@@ -5141,7 +5273,7 @@ export async function copySandboxAllFromProduction(
 
   try {
     const { sandboxId } = req.params;
-    db = getTestAgentDbWritable();
+    db = new BetterSqlite3(TEST_AGENT_DB_PATH);
 
     const fileKeys = ['system_prompt', 'patient_tool', 'scheduling_tool', 'nodered_flow'];
     const results: any[] = [];
@@ -5231,7 +5363,7 @@ export async function getComparisonTests(
   let db: BetterSqlite3.Database | null = null;
 
   try {
-    db = getTestAgentDbWritable();
+    db = new BetterSqlite3(TEST_AGENT_DB_PATH, { readonly: true });
 
     // Get tests from goal_test_cases table
     const dbTests = db.prepare(`
@@ -5330,7 +5462,7 @@ export async function getComparisonRun(
 
   try {
     const { comparisonId } = req.params;
-    db = getTestAgentDbWritable();
+    db = new BetterSqlite3(TEST_AGENT_DB_PATH);
 
     const run = db.prepare(`
       SELECT id, comparison_id, name, status, test_ids_json, production_results_json, sandbox_a_results_json, sandbox_b_results_json, started_at, completed_at, summary_json, created_at
@@ -5381,7 +5513,7 @@ export async function getComparisonHistory(
 
   try {
     const limit = parseInt(req.query.limit as string) || 20;
-    db = getTestAgentDbWritable();
+    db = new BetterSqlite3(TEST_AGENT_DB_PATH);
 
     const runs = db.prepare(`
       SELECT comparison_id, name, status, test_ids_json, started_at, completed_at, summary_json, created_at
@@ -5393,10 +5525,14 @@ export async function getComparisonHistory(
     res.json({
       success: true,
       data: runs.map(run => ({
+        id: run.comparison_id, // Add id for HistoryItem key
         comparisonId: run.comparison_id,
         name: run.name,
         status: run.status,
-        testCount: run.test_ids_json ? JSON.parse(run.test_ids_json).length : 0,
+        testIds: run.test_ids_json ? JSON.parse(run.test_ids_json) : [],
+        productionResults: null, // Not included in history list
+        sandboxAResults: null,
+        sandboxBResults: null,
         summary: run.summary_json ? JSON.parse(run.summary_json) : null,
         startedAt: run.started_at,
         completedAt: run.completed_at,
@@ -6741,6 +6877,60 @@ export async function getFlowiseConfigs(
 }
 
 /**
+ * GET /api/test-monitor/flowise-configs/:id
+ * Get a specific Flowise configuration by ID
+ */
+export async function getFlowiseConfigById(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  let db: BetterSqlite3.Database | null = null;
+
+  try {
+    const { id } = req.params;
+    const configId = parseInt(id, 10);
+
+    if (isNaN(configId)) {
+      res.status(400).json({ success: false, error: 'Invalid config ID' });
+      return;
+    }
+
+    db = getTestAgentDbWritable();
+    ensureFlowiseConfigsMigrated(db);
+
+    const config = db.prepare(`
+      SELECT id, name, url, api_key, is_default, created_at, updated_at
+      FROM flowise_configs
+      WHERE id = ?
+    `).get(configId) as any;
+
+    if (!config) {
+      res.status(404).json({ success: false, error: 'Config not found' });
+      return;
+    }
+
+    res.json({
+      success: true,
+      data: {
+        id: config.id,
+        name: config.name,
+        url: config.url,
+        apiKey: config.api_key || '',
+        hasApiKey: !!config.api_key,
+        isDefault: !!config.is_default,
+        createdAt: config.created_at,
+        updatedAt: config.updated_at,
+      },
+    });
+  } catch (error) {
+    next(error);
+  } finally {
+    db?.close();
+  }
+}
+
+/**
  * POST /api/test-monitor/flowise-configs
  * Create a new Flowise configuration profile
  */
@@ -7105,6 +7295,7 @@ export async function getActiveFlowiseConfig(
 /**
  * GET /api/test-monitor/langfuse-configs
  * Get all Langfuse configuration profiles
+ * Includes Sandbox A/B Langfuse settings from ab_sandboxes table
  */
 export async function getLangfuseConfigs(
   _req: Request,
@@ -7117,25 +7308,72 @@ export async function getLangfuseConfigs(
     db = getTestAgentDbWritable();
     ensureLangfuseConfigsMigrated(db);
 
+    // Get regular langfuse configs (exclude negative IDs which are reserved for sandbox configs)
     const configs = db.prepare(`
       SELECT id, name, host, public_key, secret_key, is_default, created_at, updated_at
       FROM langfuse_configs
+      WHERE id > 0
       ORDER BY is_default DESC, name ASC
     `).all() as any[];
 
+    // Get sandbox Langfuse settings from ab_sandboxes table
+    const sandboxes = db.prepare(`
+      SELECT sandbox_id, name, langfuse_host, langfuse_public_key, langfuse_secret_key, updated_at
+      FROM ab_sandboxes
+      WHERE langfuse_host IS NOT NULL AND langfuse_host != ''
+        AND langfuse_public_key IS NOT NULL AND langfuse_public_key != ''
+    `).all() as any[];
+
+    // Map regular configs
+    const regularConfigs = configs.map(c => ({
+      id: c.id,
+      name: c.name,
+      host: c.host,
+      publicKey: c.public_key,
+      secretKey: c.secret_key ? '********' : '',
+      hasSecretKey: !!c.secret_key,
+      isDefault: !!c.is_default,
+      createdAt: c.created_at,
+      updatedAt: c.updated_at,
+      isSandbox: false,
+      sandboxId: null as string | null,
+    }));
+
+    // Map sandbox configs (use negative IDs to distinguish them)
+    // sandbox_a = -1, sandbox_b = -2
+    const sandboxConfigs = sandboxes.map((s: any) => ({
+      id: s.sandbox_id === 'sandbox_a' ? -1 : -2,
+      name: s.name, // "Sandbox A" or "Sandbox B"
+      host: s.langfuse_host,
+      publicKey: s.langfuse_public_key,
+      secretKey: s.langfuse_secret_key ? '********' : '',
+      hasSecretKey: !!s.langfuse_secret_key,
+      isDefault: false,
+      createdAt: s.updated_at,
+      updatedAt: s.updated_at,
+      isSandbox: true,
+      sandboxId: s.sandbox_id,
+    }));
+
+    // Sort order: Production first (isDefault), then Sandbox A, Sandbox B, then rest alphabetically
+    const allConfigs = [...regularConfigs, ...sandboxConfigs];
+    allConfigs.sort((a, b) => {
+      // isDefault first (Production)
+      if (a.isDefault && !b.isDefault) return -1;
+      if (!a.isDefault && b.isDefault) return 1;
+      // Sandbox A second
+      if (a.sandboxId === 'sandbox_a' && b.sandboxId !== 'sandbox_a') return -1;
+      if (a.sandboxId !== 'sandbox_a' && b.sandboxId === 'sandbox_a') return 1;
+      // Sandbox B third
+      if (a.sandboxId === 'sandbox_b' && b.sandboxId !== 'sandbox_b') return -1;
+      if (a.sandboxId !== 'sandbox_b' && b.sandboxId === 'sandbox_b') return 1;
+      // Rest alphabetically
+      return a.name.localeCompare(b.name);
+    });
+
     res.json({
       success: true,
-      data: configs.map(c => ({
-        id: c.id,
-        name: c.name,
-        host: c.host,
-        publicKey: c.public_key,
-        secretKey: c.secret_key ? '********' : '',
-        hasSecretKey: !!c.secret_key,
-        isDefault: !!c.is_default,
-        createdAt: c.created_at,
-        updatedAt: c.updated_at,
-      })),
+      data: allConfigs,
     });
   } catch (error) {
     next(error);
@@ -7688,6 +7926,351 @@ export async function getLangfuseAgentExecutorId(
     });
   } catch (error) {
     console.error('[Langfuse] Error querying agent executor:', error);
+    next(error);
+  } finally {
+    db?.close();
+  }
+}
+
+// ============================================================================
+// TEST ENVIRONMENT PRESETS API
+// ============================================================================
+
+/**
+ * Helper to ensure default environment presets exist
+ */
+function ensureEnvironmentPresetsExist(db: BetterSqlite3.Database): void {
+  const existingPresets = db.prepare('SELECT COUNT(*) as count FROM environment_presets').get() as any;
+
+  if (existingPresets.count === 0) {
+    const now = new Date().toISOString();
+
+    // Get existing configs
+    const defaultFlowise = db.prepare('SELECT id FROM flowise_configs WHERE is_default = 1').get() as any;
+    const defaultLangfuse = db.prepare('SELECT id FROM langfuse_configs WHERE is_default = 1').get() as any;
+
+    // Create default presets: Prod (default), Sandbox A, Sandbox B
+    const presets = [
+      { name: 'Prod', description: 'Production environment', isDefault: 1, flowiseId: defaultFlowise?.id || null, langfuseId: defaultLangfuse?.id || null },
+      { name: 'Sandbox A', description: 'Sandbox environment A for testing', isDefault: 0, flowiseId: null, langfuseId: null },
+      { name: 'Sandbox B', description: 'Sandbox environment B for testing', isDefault: 0, flowiseId: null, langfuseId: null },
+    ];
+
+    const insertStmt = db.prepare(`
+      INSERT INTO environment_presets (name, description, flowise_config_id, langfuse_config_id, is_default, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    for (const preset of presets) {
+      insertStmt.run(preset.name, preset.description, preset.flowiseId, preset.langfuseId, preset.isDefault, now, now);
+    }
+  }
+}
+
+/**
+ * GET /api/test-monitor/environment-presets
+ * Get all environment presets with resolved config names
+ */
+export async function getEnvironmentPresets(
+  _req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  let db: BetterSqlite3.Database | null = null;
+
+  try {
+    db = getTestAgentDbWritable();
+    ensureEnvironmentPresetsExist(db);
+
+    const presets = db.prepare(`
+      SELECT
+        ep.id, ep.name, ep.description, ep.flowise_config_id, ep.langfuse_config_id,
+        ep.is_default, ep.created_at, ep.updated_at,
+        fc.name as flowise_config_name,
+        lc.name as langfuse_config_name
+      FROM environment_presets ep
+      LEFT JOIN flowise_configs fc ON ep.flowise_config_id = fc.id
+      LEFT JOIN langfuse_configs lc ON ep.langfuse_config_id = lc.id
+      ORDER BY ep.is_default DESC, ep.name ASC
+    `).all() as any[];
+
+    res.json({
+      success: true,
+      data: presets.map(p => ({
+        id: p.id,
+        name: p.name,
+        description: p.description,
+        flowiseConfigId: p.flowise_config_id,
+        langfuseConfigId: p.langfuse_config_id,
+        flowiseConfigName: p.flowise_config_name,
+        langfuseConfigName: p.langfuse_config_name,
+        isDefault: !!p.is_default,
+        createdAt: p.created_at,
+        updatedAt: p.updated_at,
+      })),
+    });
+  } catch (error) {
+    next(error);
+  } finally {
+    db?.close();
+  }
+}
+
+/**
+ * GET /api/test-monitor/environment-presets/active
+ * Get the active (default) environment preset
+ */
+export async function getActiveEnvironmentPreset(
+  _req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  let db: BetterSqlite3.Database | null = null;
+
+  try {
+    db = getTestAgentDbWritable();
+    ensureEnvironmentPresetsExist(db);
+
+    const preset = db.prepare(`
+      SELECT
+        ep.id, ep.name, ep.description, ep.flowise_config_id, ep.langfuse_config_id,
+        ep.is_default, ep.created_at, ep.updated_at,
+        fc.name as flowise_config_name,
+        lc.name as langfuse_config_name
+      FROM environment_presets ep
+      LEFT JOIN flowise_configs fc ON ep.flowise_config_id = fc.id
+      LEFT JOIN langfuse_configs lc ON ep.langfuse_config_id = lc.id
+      WHERE ep.is_default = 1
+    `).get() as any;
+
+    if (!preset) {
+      res.json({ success: true, data: null });
+      return;
+    }
+
+    res.json({
+      success: true,
+      data: {
+        id: preset.id,
+        name: preset.name,
+        description: preset.description,
+        flowiseConfigId: preset.flowise_config_id,
+        langfuseConfigId: preset.langfuse_config_id,
+        flowiseConfigName: preset.flowise_config_name,
+        langfuseConfigName: preset.langfuse_config_name,
+        isDefault: true,
+        createdAt: preset.created_at,
+        updatedAt: preset.updated_at,
+      },
+    });
+  } catch (error) {
+    next(error);
+  } finally {
+    db?.close();
+  }
+}
+
+/**
+ * POST /api/test-monitor/environment-presets
+ * Create a new environment preset
+ */
+export async function createEnvironmentPreset(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  let db: BetterSqlite3.Database | null = null;
+
+  try {
+    const { name, description, flowiseConfigId, langfuseConfigId, isDefault } = req.body;
+
+    if (!name) {
+      res.status(400).json({ success: false, error: 'Name is required' });
+      return;
+    }
+
+    db = getTestAgentDbWritable();
+    const now = new Date().toISOString();
+
+    // If setting as default, unset other defaults first
+    if (isDefault) {
+      db.prepare('UPDATE environment_presets SET is_default = 0').run();
+    }
+
+    const result = db.prepare(`
+      INSERT INTO environment_presets (name, description, flowise_config_id, langfuse_config_id, is_default, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(name, description || '', flowiseConfigId || null, langfuseConfigId || null, isDefault ? 1 : 0, now, now);
+
+    res.json({
+      success: true,
+      data: {
+        id: result.lastInsertRowid,
+        name,
+        description: description || '',
+        flowiseConfigId: flowiseConfigId || null,
+        langfuseConfigId: langfuseConfigId || null,
+        isDefault: !!isDefault,
+        createdAt: now,
+        updatedAt: now,
+      },
+    });
+  } catch (error: any) {
+    if (error?.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+      res.status(409).json({ success: false, error: 'A preset with this name already exists' });
+      return;
+    }
+    next(error);
+  } finally {
+    db?.close();
+  }
+}
+
+/**
+ * PUT /api/test-monitor/environment-presets/:id
+ * Update an environment preset
+ */
+export async function updateEnvironmentPreset(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  let db: BetterSqlite3.Database | null = null;
+
+  try {
+    const { id } = req.params;
+    const { name, description, flowiseConfigId, langfuseConfigId, isDefault } = req.body;
+
+    if (!name) {
+      res.status(400).json({ success: false, error: 'Name is required' });
+      return;
+    }
+
+    db = getTestAgentDbWritable();
+    const now = new Date().toISOString();
+
+    // Check if preset exists
+    const existing = db.prepare('SELECT id FROM environment_presets WHERE id = ?').get(id) as any;
+    if (!existing) {
+      res.status(404).json({ success: false, error: 'Preset not found' });
+      return;
+    }
+
+    // If setting as default, unset other defaults first
+    if (isDefault) {
+      db.prepare('UPDATE environment_presets SET is_default = 0').run();
+    }
+
+    db.prepare(`
+      UPDATE environment_presets
+      SET name = ?, description = ?, flowise_config_id = ?, langfuse_config_id = ?, is_default = ?, updated_at = ?
+      WHERE id = ?
+    `).run(name, description || '', flowiseConfigId || null, langfuseConfigId || null, isDefault ? 1 : 0, now, id);
+
+    res.json({
+      success: true,
+      data: {
+        id: parseInt(id),
+        name,
+        description: description || '',
+        flowiseConfigId: flowiseConfigId || null,
+        langfuseConfigId: langfuseConfigId || null,
+        isDefault: !!isDefault,
+        updatedAt: now,
+      },
+    });
+  } catch (error: any) {
+    if (error?.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+      res.status(409).json({ success: false, error: 'A preset with this name already exists' });
+      return;
+    }
+    next(error);
+  } finally {
+    db?.close();
+  }
+}
+
+/**
+ * DELETE /api/test-monitor/environment-presets/:id
+ * Delete an environment preset
+ */
+export async function deleteEnvironmentPreset(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  let db: BetterSqlite3.Database | null = null;
+
+  try {
+    const { id } = req.params;
+
+    db = getTestAgentDbWritable();
+
+    // Check if preset exists
+    const preset = db.prepare('SELECT id, is_default FROM environment_presets WHERE id = ?').get(id) as any;
+    if (!preset) {
+      res.status(404).json({ success: false, error: 'Preset not found' });
+      return;
+    }
+
+    // Check if this is the last preset
+    const count = db.prepare('SELECT COUNT(*) as count FROM environment_presets').get() as any;
+    if (count.count <= 1) {
+      res.status(400).json({ success: false, error: 'Cannot delete the last preset. At least one must exist.' });
+      return;
+    }
+
+    db.prepare('DELETE FROM environment_presets WHERE id = ?').run(id);
+
+    // If we deleted the default, set another as default
+    if (preset.is_default) {
+      db.prepare('UPDATE environment_presets SET is_default = 1 WHERE id = (SELECT MIN(id) FROM environment_presets)').run();
+    }
+
+    res.json({
+      success: true,
+      data: { message: 'Preset deleted' },
+    });
+  } catch (error) {
+    next(error);
+  } finally {
+    db?.close();
+  }
+}
+
+/**
+ * POST /api/test-monitor/environment-presets/:id/set-default
+ * Set an environment preset as the default
+ */
+export async function setEnvironmentPresetDefault(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  let db: BetterSqlite3.Database | null = null;
+
+  try {
+    const { id } = req.params;
+
+    db = getTestAgentDbWritable();
+    const now = new Date().toISOString();
+
+    // Check if preset exists
+    const existing = db.prepare('SELECT id FROM environment_presets WHERE id = ?').get(id) as any;
+    if (!existing) {
+      res.status(404).json({ success: false, error: 'Preset not found' });
+      return;
+    }
+
+    // Unset all defaults, then set this one
+    db.prepare('UPDATE environment_presets SET is_default = 0').run();
+    db.prepare('UPDATE environment_presets SET is_default = 1, updated_at = ? WHERE id = ?').run(now, id);
+
+    res.json({
+      success: true,
+      data: { message: 'Default preset updated' },
+    });
+  } catch (error) {
     next(error);
   } finally {
     db?.close();

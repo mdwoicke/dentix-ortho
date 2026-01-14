@@ -195,6 +195,9 @@ export interface ResponseStrategyContext {
 
   /** Test goals for determining special behaviors */
   testGoals?: string[];
+
+  /** Whether a booking has been successfully completed (appointmentGUID received) */
+  bookingCompleted?: boolean;
 }
 
 // Special behavior constants
@@ -278,6 +281,16 @@ export class ResponseStrategyEngine {
     const history = context.conversationHistory || [];
     const lastAgentMessage = [...history].reverse().find(t => t.role === 'assistant')?.content || '';
 
+    // GLOBAL CHECK: When booking is complete and agent asks "anything else?", always say NO
+    // This check runs BEFORE category dispatch to catch all cases regardless of classification
+    if (context.bookingCompleted) {
+      const isAnythingElseQuestion = /\b(anything else|is there anything|can i help|help.*today)\b/i.test(lastAgentMessage);
+      if (isAnythingElseQuestion) {
+        console.log(`[ResponseStrategyEngine] GLOBAL: Booking complete + "anything else?" detected (category: ${classification.category}) → responding NO`);
+        return "No, that's all. Thank you!";
+      }
+    }
+
     // Dispatch to appropriate strategy
     switch (classification.category) {
       case 'provide_data':
@@ -290,7 +303,7 @@ export class ResponseStrategyEngine {
         return this.handleSelectFromOptions(classification, dataMapper, formatter, persona);
 
       case 'acknowledge':
-        return this.handleAcknowledge(classification, formatter);
+        return this.handleAcknowledge(classification, formatter, lastAgentMessage, context);
 
       case 'clarify_request':
         return this.handleClarifyRequest(formatter);
@@ -379,6 +392,16 @@ export class ResponseStrategyEngine {
 
     // Get last agent message for scope clarification detection
     const lastAgentMessage = [...history].reverse().find(t => t.role === 'assistant')?.content || '';
+
+    // Check for "anything else?" question after booking is complete
+    // When booking is done, user should say "No, that's all" to end conversation
+    if (subject === 'general' && context.bookingCompleted) {
+      const isAnythingElseQuestion = /\b(anything else|is there anything|can i help|help.*today)\b/i.test(lastAgentMessage);
+      if (isAnythingElseQuestion) {
+        console.log('[ResponseStrategyEngine] Booking complete + "anything else?" question → responding NO to end conversation');
+        return formatter.formatConfirmation('general', 'no');
+      }
+    }
 
     // Check for scope clarification (agent asking "Are you looking for orthodontics?")
     // If caller's original request was non-ortho (cleaning, checkup, etc.), answer "no"
@@ -570,8 +593,20 @@ export class ResponseStrategyEngine {
 
   private handleAcknowledge(
     classification: CategoryClassificationResult,
-    formatter: ResponseFormatter
+    formatter: ResponseFormatter,
+    lastAgentMessage: string,
+    context: Partial<ResponseStrategyContext>
   ): string {
+    // Check for "anything else?" question after booking is complete
+    // When booking is done, user should say "No, that's all" to end conversation
+    if (context.bookingCompleted) {
+      const isAnythingElseQuestion = /\b(anything else|is there anything|can i help|help.*today)\b/i.test(lastAgentMessage);
+      if (isAnythingElseQuestion) {
+        console.log('[ResponseStrategyEngine] Booking complete + "anything else?" in acknowledge → responding NO to end conversation');
+        return "No, that's all. Thank you!";
+      }
+    }
+
     // Determine what type of info was provided
     let infoType = 'general';
 

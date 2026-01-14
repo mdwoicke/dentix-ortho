@@ -395,6 +395,7 @@ export class GoalTestRunner {
       let currentChildIndex = 0;
       let lastDetectedChildOrdinal = 0; // Track to avoid double-advancing on repeat questions
       const providedFields = new Set<DataFieldCategory>();
+      let bookingCompleted = false; // Track if booking has been successfully completed (appointmentGUID received)
 
       // Extract volunteered data from initial message
       const initialVolunteeredData = await this.extractVolunteeredDataFromMessage(initialMessage);
@@ -478,6 +479,7 @@ export class GoalTestRunner {
               conversationHistory: transcript,
               turnNumber,
               testId: testCase.id, // Pass test ID for special behavior triggers
+              bookingCompleted, // Pass booking status to determine "anything else?" response
             }
           );
 
@@ -546,6 +548,25 @@ export class GoalTestRunner {
 
         if (!agentResponse && !this.config.continueOnError) {
           throw new Error(`Failed to get response at turn ${turnNumber}`);
+        }
+
+        // Check for successful booking in tool call responses
+        if (agentResponse?.toolCalls && !bookingCompleted) {
+          for (const toolCall of agentResponse.toolCalls) {
+            if (toolCall.output) {
+              try {
+                const output = typeof toolCall.output === 'string' ? JSON.parse(toolCall.output) : toolCall.output;
+                // Check for appointmentGUID indicating successful booking
+                if (output.success === true && output.appointmentGUID) {
+                  bookingCompleted = true;
+                  console.log(`[GoalTestRunner] ✓ Booking completed - appointmentGUID: ${output.appointmentGUID.substring(0, 8)}...`);
+                  break;
+                }
+              } catch (e) {
+                // Ignore JSON parse errors
+              }
+            }
+          }
         }
 
         // Save progress snapshot if enabled

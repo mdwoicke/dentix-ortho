@@ -79,8 +79,9 @@ import {
 } from '../../store/slices/testMonitorSlice';
 import { subscribeToTestRun, subscribeToExecution, type TestRunStreamEvent, type ExecutionStreamEvent } from '../../services/api/testMonitorApi';
 import * as testMonitorApi from '../../services/api/testMonitorApi';
-import { getAppSettings } from '../../services/api/appSettingsApi';
+import { getAppSettings, getTestEnvironmentPresets } from '../../services/api/appSettingsApi';
 import type { TestResult } from '../../types/testMonitor.types';
+import type { TestEnvironmentPresetWithNames } from '../../types/appSettings.types';
 
 export function TestRunDetail() {
   const dispatch = useAppDispatch();
@@ -120,6 +121,10 @@ export function TestRunDetail() {
 
   // Langfuse configuration
   const [langfuseProjectId, setLangfuseProjectId] = useState<string | undefined>(undefined);
+
+  // Environment filter state
+  const [environmentPresets, setEnvironmentPresets] = useState<TestEnvironmentPresetWithNames[]>([]);
+  const [environmentFilter, setEnvironmentFilter] = useState<string>('');
 
   // Conversation diff comparison state
   const [showDiffModal, setShowDiffModal] = useState(false);
@@ -186,6 +191,12 @@ export function TestRunDetail() {
     // Put running tests at the top, then completed tests
     return [...syntheticResults, ...completedResults];
   }, [selectedRun?.results, selectedRun?.runId, runId, runningTests]);
+
+  // Filter test runs by environment
+  const filteredRuns = useMemo(() => {
+    if (!environmentFilter) return runs;
+    return runs.filter(run => run.environmentPresetName === environmentFilter);
+  }, [runs, environmentFilter]);
 
   // Handle SSE events
   const handleStreamEvent = useCallback((event: TestRunStreamEvent) => {
@@ -293,7 +304,7 @@ export function TestRunDetail() {
     dispatch(fetchPromptFiles());
   }, [dispatch]);
 
-  // Fetch Langfuse project ID for session URLs
+  // Fetch Langfuse project ID for session URLs and environment presets
   useEffect(() => {
     getAppSettings()
       .then(settings => {
@@ -302,6 +313,11 @@ export function TestRunDetail() {
         }
       })
       .catch(err => console.warn('Failed to fetch app settings:', err));
+
+    // Fetch environment presets for filter dropdown
+    getTestEnvironmentPresets()
+      .then(presets => setEnvironmentPresets(presets))
+      .catch(err => console.warn('Failed to fetch environment presets:', err));
   }, []);
 
   // Auto-poll test runs list when any run is "running"
@@ -614,6 +630,15 @@ export function TestRunDetail() {
         subtitle={selectedRun ? `Run ${selectedRun.runId.slice(0, 8)}... - ${selectedRun.passed}/${selectedRun.totalTests} passed` : 'Select a run to view details'}
         action={
           <div className="flex items-center gap-3">
+            {/* Environment indicator pill */}
+            {selectedRun?.environmentPresetName && (
+              <div className="flex items-center gap-1.5 px-2.5 py-1 bg-blue-500/10 border border-blue-500/30 rounded-full">
+                <svg className="w-3.5 h-3.5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2" />
+                </svg>
+                <span className="text-xs font-medium text-blue-600 dark:text-blue-400">{selectedRun.environmentPresetName}</span>
+              </div>
+            )}
             {isStreaming && (
               <div className="flex items-center gap-2 px-3 py-1.5 bg-red-500/10 border border-red-500/30 rounded-full">
                 <span className="relative flex h-2.5 w-2.5">
@@ -634,11 +659,26 @@ export function TestRunDetail() {
         {/* Left Panel - Test Runs */}
         <div className="col-span-3 flex flex-col min-h-0">
           <ExpandablePanel title="Test Runs" contentClassName="p-2" grow>
+            {/* Environment Filter */}
+            <div className="mb-2">
+              <select
+                value={environmentFilter}
+                onChange={(e) => setEnvironmentFilter(e.target.value)}
+                className="w-full px-2 py-1.5 text-xs rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              >
+                <option value="">All Environments</option>
+                {environmentPresets.map(preset => (
+                  <option key={preset.id} value={preset.name}>
+                    {preset.name}
+                  </option>
+                ))}
+              </select>
+            </div>
             <TestRunList
-              runs={runs}
+              runs={filteredRuns}
               selectedRunId={selectedRun?.runId}
               onSelectRun={handleSelectRun}
-              loading={loading && runs.length === 0}
+              loading={loading && filteredRuns.length === 0}
             />
           </ExpandablePanel>
         </div>

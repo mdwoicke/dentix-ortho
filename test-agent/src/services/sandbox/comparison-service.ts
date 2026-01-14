@@ -32,9 +32,9 @@ export interface ComparisonRequest {
 
 export interface TestComparisonResult {
   testId: string;
-  production: { passed: boolean; turnCount: number; durationMs: number } | null;
-  sandboxA: { passed: boolean; turnCount: number; durationMs: number } | null;
-  sandboxB: { passed: boolean; turnCount: number; durationMs: number } | null;
+  production: { passed: boolean; turnCount: number; durationMs: number; ranAt: string } | null;
+  sandboxA: { passed: boolean; turnCount: number; durationMs: number; ranAt: string } | null;
+  sandboxB: { passed: boolean; turnCount: number; durationMs: number; ranAt: string } | null;
 }
 
 export interface ComparisonResult {
@@ -154,6 +154,7 @@ export class SandboxComparisonService {
           const testCase = testCases[i];
           const runId = `${comparisonId}-prod`;
           const result = await prodRunner.runTest(testCase, runId);
+          (result as any).ranAt = new Date().toISOString();
           productionResults[testCase.id] = result;
         }
       }
@@ -170,6 +171,7 @@ export class SandboxComparisonService {
             const testCase = testCases[i];
             const runId = `${comparisonId}-sandboxA`;
             const result = await sandboxARunner.runTest(testCase, runId);
+            (result as any).ranAt = new Date().toISOString();
             sandboxAResults[testCase.id] = result;
           }
         }
@@ -187,12 +189,14 @@ export class SandboxComparisonService {
             const testCase = testCases[i];
             const runId = `${comparisonId}-sandboxB`;
             const result = await sandboxBRunner.runTest(testCase, runId);
+            (result as any).ranAt = new Date().toISOString();
             sandboxBResults[testCase.id] = result;
           }
         }
       }
 
       // Aggregate results
+      const aggregationTime = new Date().toISOString();
       for (const testCase of testCases) {
         const prodResult = productionResults[testCase.id];
         const sandboxAResult = sandboxAResults[testCase.id];
@@ -204,16 +208,19 @@ export class SandboxComparisonService {
             passed: prodResult.passed,
             turnCount: prodResult.turnCount,
             durationMs: prodResult.durationMs,
+            ranAt: (prodResult as any).ranAt || aggregationTime,
           } : null,
           sandboxA: sandboxAResult ? {
             passed: sandboxAResult.passed,
             turnCount: sandboxAResult.turnCount,
             durationMs: sandboxAResult.durationMs,
+            ranAt: (sandboxAResult as any).ranAt || aggregationTime,
           } : null,
           sandboxB: sandboxBResult ? {
             passed: sandboxBResult.passed,
             turnCount: sandboxBResult.turnCount,
             durationMs: sandboxBResult.durationMs,
+            ranAt: (sandboxBResult as any).ranAt || aggregationTime,
           } : null,
         });
       }
@@ -305,6 +312,7 @@ export class SandboxComparisonService {
 
           const runId = `${comparisonId}-prod`;
           const result = await prodRunner.runTest(testCase, runId);
+          (result as any).ranAt = new Date().toISOString();
           productionResults[testCase.id] = result;
 
           onProgress?.({
@@ -337,6 +345,7 @@ export class SandboxComparisonService {
 
             const runId = `${comparisonId}-sandboxA`;
             const result = await sandboxARunner.runTest(testCase, runId);
+            (result as any).ranAt = new Date().toISOString();
             sandboxAResults[testCase.id] = result;
 
             onProgress?.({
@@ -372,6 +381,7 @@ export class SandboxComparisonService {
 
             const runId = `${comparisonId}-sandboxB`;
             const result = await sandboxBRunner.runTest(testCase, runId);
+            (result as any).ranAt = new Date().toISOString();
             sandboxBResults[testCase.id] = result;
 
             onProgress?.({
@@ -388,6 +398,7 @@ export class SandboxComparisonService {
       }
 
       // Aggregate results
+      const aggregationTime = new Date().toISOString();
       for (const testCase of testCases) {
         const prodResult = productionResults[testCase.id];
         const sandboxAResult = sandboxAResults[testCase.id];
@@ -399,16 +410,19 @@ export class SandboxComparisonService {
             passed: prodResult.passed,
             turnCount: prodResult.turnCount,
             durationMs: prodResult.durationMs,
+            ranAt: (prodResult as any).ranAt || aggregationTime,
           } : null,
           sandboxA: sandboxAResult ? {
             passed: sandboxAResult.passed,
             turnCount: sandboxAResult.turnCount,
             durationMs: sandboxAResult.durationMs,
+            ranAt: (sandboxAResult as any).ranAt || aggregationTime,
           } : null,
           sandboxB: sandboxBResult ? {
             passed: sandboxBResult.passed,
             turnCount: sandboxBResult.turnCount,
             durationMs: sandboxBResult.durationMs,
+            ranAt: (sandboxBResult as any).ranAt || aggregationTime,
           } : null,
         });
       }

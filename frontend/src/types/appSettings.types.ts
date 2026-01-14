@@ -120,6 +120,10 @@ export interface LangfuseConfigProfile {
   isDefault: boolean;
   createdAt: string;
   updatedAt: string;
+  /** Whether this is a sandbox Langfuse config (from ab_sandboxes table) */
+  isSandbox?: boolean;
+  /** Sandbox ID if this is a sandbox config ('sandbox_a' or 'sandbox_b') */
+  sandboxId?: string | null;
 }
 
 /**
@@ -140,4 +144,42 @@ export interface ConfigTestResult {
   success: boolean;
   message: string;
   responseTimeMs?: number;
+}
+
+// ============================================================================
+// TEST ENVIRONMENT PRESETS
+// ============================================================================
+
+/**
+ * Test environment preset - combines Flowise and Langfuse configs
+ * for easy environment switching in the Test tab
+ */
+export interface TestEnvironmentPreset {
+  id: number;
+  name: string;
+  description?: string;
+  flowiseConfigId: number | null;
+  langfuseConfigId: number | null;
+  isDefault: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Request to create/update a test environment preset
+ */
+export interface TestEnvironmentPresetRequest {
+  name: string;
+  description?: string;
+  flowiseConfigId: number | null;
+  langfuseConfigId: number | null;
+  isDefault?: boolean;
+}
+
+/**
+ * Test environment preset with resolved config names (for display)
+ */
+export interface TestEnvironmentPresetWithNames extends TestEnvironmentPreset {
+  flowiseConfigName: string | null;
+  langfuseConfigName: string | null;
 }

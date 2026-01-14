@@ -28,6 +28,7 @@ export interface Cloud9Provider {
   schdvwDescription: string;
   schdcolGUID: string;
   schdcolDescription: string;
+  svcOrder?: string; // Service order - used by GetAppointmentsByDate Chair field
 }
 
 // Appointment Type types

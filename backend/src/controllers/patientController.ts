@@ -225,7 +225,7 @@ export const createPatient = asyncHandler(async (req: Request, res: Response) =>
     throw new AppError('Failed to extract patient GUID from response', 500);
   }
 
-  // Return the new patient data
+  // Return the new patient data with creation timestamp
   const patient = {
     patient_guid: patientGuid,
     first_name: firstName,
@@ -240,6 +240,7 @@ export const createPatient = asyncHandler(async (req: Request, res: Response) =>
     provider_guid: providerGuid,
     location_guid: locationGuid,
     environment,
+    created_at: new Date().toISOString(),
   };
 
   res.status(201).json({

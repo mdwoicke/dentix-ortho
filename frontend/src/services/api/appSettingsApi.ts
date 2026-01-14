@@ -16,6 +16,9 @@ import type {
   LangfuseConfigProfile,
   LangfuseConfigRequest,
   ConfigTestResult,
+  TestEnvironmentPreset,
+  TestEnvironmentPresetRequest,
+  TestEnvironmentPresetWithNames,
 } from '../../types/appSettings.types';
 
 // ============================================================================
@@ -243,4 +246,74 @@ export async function testLangfuseConfigConnection(id: number): Promise<ConfigTe
     {}
   );
   return response.data;
+}
+
+// ============================================================================
+// TEST ENVIRONMENT PRESETS API
+// ============================================================================
+
+/**
+ * Get all test environment presets
+ */
+export async function getTestEnvironmentPresets(): Promise<TestEnvironmentPresetWithNames[]> {
+  const response = await get<ApiResponse<TestEnvironmentPresetWithNames[]>>(
+    '/test-monitor/environment-presets'
+  );
+  return response.data;
+}
+
+/**
+ * Get active (default) test environment preset
+ */
+export async function getActiveTestEnvironmentPreset(): Promise<TestEnvironmentPresetWithNames | null> {
+  const response = await get<ApiResponse<TestEnvironmentPresetWithNames | null>>(
+    '/test-monitor/environment-presets/active'
+  );
+  return response.data;
+}
+
+/**
+ * Create a new test environment preset
+ */
+export async function createTestEnvironmentPreset(
+  preset: TestEnvironmentPresetRequest
+): Promise<TestEnvironmentPreset> {
+  const response = await post<ApiResponse<TestEnvironmentPreset>>(
+    '/test-monitor/environment-presets',
+    preset
+  );
+  return response.data;
+}
+
+/**
+ * Update a test environment preset
+ */
+export async function updateTestEnvironmentPreset(
+  id: number,
+  preset: TestEnvironmentPresetRequest
+): Promise<TestEnvironmentPreset> {
+  const response = await put<ApiResponse<TestEnvironmentPreset>>(
+    `/test-monitor/environment-presets/${id}`,
+    preset
+  );
+  return response.data;
+}
+
+/**
+ * Delete a test environment preset
+ */
+export async function deleteTestEnvironmentPreset(id: number): Promise<void> {
+  await del<ApiResponse<{ message: string }>>(
+    `/test-monitor/environment-presets/${id}`
+  );
+}
+
+/**
+ * Set a test environment preset as default
+ */
+export async function setTestEnvironmentPresetDefault(id: number): Promise<void> {
+  await post<ApiResponse<{ message: string }>>(
+    `/test-monitor/environment-presets/${id}/set-default`,
+    {}
+  );
 }

@@ -1053,7 +1053,7 @@ export default function CallTracePage() {
                   <option value="">Select config...</option>
                   {configs.map(cfg => (
                     <option key={cfg.id} value={cfg.id}>
-                      {cfg.name} {cfg.isDefault ? '(default)' : ''}
+                      {cfg.name} {cfg.isDefault ? '(Production)' : cfg.isSandbox ? '(A/B Sandbox)' : ''}
                     </option>
                   ))}
                 </select>
