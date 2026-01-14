@@ -7,7 +7,7 @@ import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { useAppDispatch, useAppSelector } from '../../hooks';
 import { PageHeader } from '../../components/layout';
-import { Button } from '../../components/ui';
+import { Button, Modal, Spinner } from '../../components/ui';
 import {
   TestRunList,
   TestResultsTable,
@@ -129,6 +129,22 @@ export function TestRunDetail() {
   // Conversation diff comparison state
   const [showDiffModal, setShowDiffModal] = useState(false);
   const [compareRunId, setCompareRunId] = useState<string | null>(null);
+
+  // Code viewer modal state (for Navigate to Code links in Findings)
+  const [codeViewerModal, setCodeViewerModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    filePath: string;
+    content: string;
+    loading: boolean;
+    searchPattern?: string;
+  }>({
+    isOpen: false,
+    title: '',
+    filePath: '',
+    content: '',
+    loading: false,
+  });
 
   // Keep track of the EventSource connections
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -468,6 +484,72 @@ export function TestRunDetail() {
     dispatch(fetchPromptHistory(fileKey));
   };
 
+  // Handle navigation to code files from Findings panel
+  const handleNavigateToCode = async (filePath: string, searchPattern?: string) => {
+    // Map file paths to prompt file keys for content fetching
+    const fileKeyMap: Record<string, string> = {
+      'docs/v1/Chord_Cloud9_SystemPrompt.md': 'system_prompt',
+      'docs/v1/schedule_appointment_dso_Tool.json': 'scheduling_tool',
+      'docs/v1/chord_dso_patient_Tool.json': 'patient_tool',
+      'docs/v1/nodered_Cloud9_flows.json': 'nodered_flow',
+    };
+
+    // Get display title from path
+    const titleMap: Record<string, string> = {
+      'docs/v1/Chord_Cloud9_SystemPrompt.md': 'System Prompt',
+      'docs/v1/schedule_appointment_dso_Tool.json': 'Scheduling Tool',
+      'docs/v1/chord_dso_patient_Tool.json': 'Patient Tool',
+      'docs/v1/nodered_Cloud9_flows.json': 'Node-RED Flow',
+      'test-agent/src/tests/scenarios/': 'Test Scenarios',
+    };
+
+    const fileKey = fileKeyMap[filePath];
+    const title = titleMap[filePath] || filePath.split('/').pop() || 'Code';
+
+    // Open modal with loading state
+    setCodeViewerModal({
+      isOpen: true,
+      title,
+      filePath,
+      content: '',
+      loading: true,
+      searchPattern,
+    });
+
+    try {
+      if (fileKey) {
+        // Fetch content from prompt API
+        const result = await testMonitorApi.getPromptContent(fileKey);
+        setCodeViewerModal(prev => ({
+          ...prev,
+          content: result.content,
+          loading: false,
+        }));
+      } else if (filePath.startsWith('test-agent/src/tests/scenarios/')) {
+        // For test scenarios, show a message that these are TypeScript files
+        setCodeViewerModal(prev => ({
+          ...prev,
+          content: `Test scenario definitions are TypeScript files located in:\n\n${filePath}\n\nAvailable scenario files:\n- goal-happy-path.ts\n- edge-cases.ts\n- error-handling.ts\n- happy-path.ts\n\nThese files define the test cases using the Goal Test framework.`,
+          loading: false,
+        }));
+      } else {
+        // Unknown file - show path for manual navigation
+        setCodeViewerModal(prev => ({
+          ...prev,
+          content: `File path: ${filePath}\n\nThis file content is not available through the API.\nPlease navigate to the file manually in your IDE.`,
+          loading: false,
+        }));
+      }
+    } catch (error) {
+      console.error('Failed to fetch file content:', error);
+      setCodeViewerModal(prev => ({
+        ...prev,
+        content: `Failed to load file content.\n\nFile path: ${filePath}\n\nError: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        loading: false,
+      }));
+    }
+  };
+
   // Handle copying prompt version content
   const handleCopyPromptVersion = async (fileKey: string, version?: number): Promise<string | null> => {
     try {
@@ -803,6 +885,7 @@ export function TestRunDetail() {
             <FindingsPanel
               findings={findings}
               loading={loading}
+              onNavigate={handleNavigateToCode}
             />
           </ExpandablePanel>
 
@@ -974,6 +1057,58 @@ export function TestRunDetail() {
           </div>
         </div>
       )}
+
+      {/* Code Viewer Modal (for Navigate to Code links in Findings) */}
+      <Modal
+        isOpen={codeViewerModal.isOpen}
+        onClose={() => setCodeViewerModal(prev => ({ ...prev, isOpen: false }))}
+        title={codeViewerModal.title}
+        size="xl"
+      >
+        {codeViewerModal.loading ? (
+          <div className="flex items-center justify-center py-12">
+            <Spinner size="lg" />
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {/* File path info */}
+            <div className="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800 px-3 py-2 rounded">
+              <span className="font-mono">{codeViewerModal.filePath}</span>
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(codeViewerModal.filePath);
+                }}
+                className="text-blue-600 hover:text-blue-700 dark:text-blue-400"
+                title="Copy path"
+              >
+                Copy Path
+              </button>
+            </div>
+
+            {/* Search pattern hint if present */}
+            {codeViewerModal.searchPattern && (
+              <div className="text-sm text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 px-3 py-2 rounded">
+                Related user input: "{codeViewerModal.searchPattern}"
+              </div>
+            )}
+
+            {/* Code content */}
+            <div className="relative">
+              <pre className="bg-gray-900 dark:bg-gray-950 text-gray-100 p-4 rounded-lg overflow-x-auto text-sm leading-relaxed whitespace-pre-wrap break-words max-h-[60vh] overflow-y-auto scrollbar-thin">
+                {codeViewerModal.content}
+              </pre>
+              <button
+                onClick={async () => {
+                  await navigator.clipboard.writeText(codeViewerModal.content);
+                }}
+                className="absolute top-2 right-2 px-3 py-1.5 text-xs font-medium rounded transition-colors bg-gray-700 hover:bg-gray-600 text-gray-200"
+              >
+                Copy Content
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

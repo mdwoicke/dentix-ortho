@@ -3,10 +3,14 @@
  * Wrapper that adds expand/collapse functionality to panels
  */
 
-import { useState } from 'react';
+import { useState, createContext, useContext } from 'react';
 import { createPortal } from 'react-dom';
 import { Card } from '../../ui';
 import { cn } from '../../../utils/cn';
+
+// Context to share expanded state with child components
+const ExpandablePanelContext = createContext<{ isExpanded: boolean }>({ isExpanded: false });
+export const useExpandablePanel = () => useContext(ExpandablePanelContext);
 
 interface ExpandablePanelProps {
   title: React.ReactNode;
@@ -111,7 +115,9 @@ export function ExpandablePanel({
         className={cn('overflow-y-auto', grow && 'flex-1', contentClassName)}
         style={!grow ? { maxHeight: maxContentHeight } : undefined}
       >
-        {children}
+        <ExpandablePanelContext.Provider value={{ isExpanded: false }}>
+          {children}
+        </ExpandablePanelContext.Provider>
       </div>
     </Card>
   );
@@ -146,7 +152,9 @@ export function ExpandablePanel({
               <ExpandIcon />
             </div>
             <div className={cn('flex-1 overflow-auto p-4', contentClassName)}>
-              {children}
+              <ExpandablePanelContext.Provider value={{ isExpanded: true }}>
+                {children}
+              </ExpandablePanelContext.Provider>
             </div>
           </div>
         </div>,

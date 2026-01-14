@@ -274,7 +274,7 @@ export function FindingsPanel({ findings, loading, onNavigate }: FindingsPanelPr
                         ))}
                       </div>
                       <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">
-                        Click to navigate or copy file path
+                        Click to view file content
                       </p>
                     </div>
                   );

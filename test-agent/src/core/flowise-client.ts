@@ -173,6 +173,17 @@ export class FlowiseClient {
         // Extract tool calls from the response
         const toolCalls = this.extractToolCalls(response.data);
 
+        // Estimate duration for each tool call based on total response time
+        // Since Flowise doesn't provide per-tool timing, we distribute the response time
+        if (toolCalls.length > 0) {
+          const estimatedDurationPerTool = Math.round(responseTime / toolCalls.length);
+          for (const tc of toolCalls) {
+            if (tc.durationMs === undefined) {
+              tc.durationMs = estimatedDurationPerTool;
+            }
+          }
+        }
+
         // Log tool calls as child spans
         if (span && toolCalls.length > 0) {
           for (const tc of toolCalls) {

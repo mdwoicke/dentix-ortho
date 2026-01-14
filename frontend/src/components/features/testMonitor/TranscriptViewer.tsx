@@ -364,11 +364,11 @@ function ApiCallModal({
                 {errorInfo.errorMessage || 'Error'}
               </span>
             )}
-            {call.durationMs !== undefined && (
-              <span className="text-sm text-gray-500 dark:text-gray-400">
-                {call.durationMs}ms
-              </span>
-            )}
+            <span className="text-sm text-gray-500 dark:text-gray-400">
+              {call.durationMs !== undefined && call.durationMs !== null
+                ? `${call.durationMs}ms`
+                : 'N/A'}
+            </span>
           </div>
           <button
             onClick={onClose}
@@ -586,11 +586,11 @@ const InlineApiCall = forwardRef<HTMLDivElement, InlineApiCallProps>(
           )}
 
           {/* Duration */}
-          {call.durationMs !== undefined && (
-            <span className="text-xs text-gray-500 dark:text-gray-400 flex-shrink-0">
-              {call.durationMs}ms
-            </span>
-          )}
+          <span className="text-xs text-gray-500 dark:text-gray-400 flex-shrink-0">
+            {call.durationMs !== undefined && call.durationMs !== null
+              ? `${call.durationMs}ms`
+              : 'N/A'}
+          </span>
 
           {/* Patient badges (compact) */}
           {patients.length > 0 && (

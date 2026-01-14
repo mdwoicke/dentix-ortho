@@ -99,8 +99,18 @@ export function TestRunList({ runs, selectedRunId, onSelectRun, loading }: TestR
               </span>
             </div>
 
-            <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">
-              {new Date(run.startedAt).toLocaleString()}
+            <div className="mt-2 flex items-center justify-between">
+              <span className="text-xs text-gray-500 dark:text-gray-400">
+                {new Date(run.startedAt).toLocaleString()}
+              </span>
+              {run.environmentPresetName && (
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 rounded border border-blue-200 dark:border-blue-800">
+                  <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2" />
+                  </svg>
+                  {run.environmentPresetName}
+                </span>
+              )}
             </div>
           </div>
         );
