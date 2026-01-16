@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import * as testMonitorController from '../controllers/testMonitorController';
+import * as prodTestRecordController from '../controllers/prodTestRecordController';
 
 /**
  * Test Monitor Routes
@@ -518,7 +519,56 @@ router.get('/production-calls/last-import/:configId', testMonitorController.getL
 // POST /api/test-monitor/production-calls/import - Import traces
 router.post('/production-calls/import', testMonitorController.importProductionTraces);
 
+// POST /api/test-monitor/production-calls/:traceId/analyze - Analyze a single production trace with LLM
+router.post('/production-calls/:traceId/analyze', testMonitorController.analyzeProductionTrace);
+
+// POST /api/test-monitor/production-calls/:traceId/diagnose - Diagnose a production trace and generate fixes
+router.post('/production-calls/:traceId/diagnose', testMonitorController.diagnoseProductionTrace);
+
+// POST /api/test-monitor/production-calls/sessions/:sessionId/diagnose - Diagnose all traces in a session
+router.post('/production-calls/sessions/:sessionId/diagnose', testMonitorController.diagnoseProductionSession);
+
+// GET /api/test-monitor/production-calls/sessions/:sessionId/goal-status - Get goal test status for a session
+router.get('/production-calls/sessions/:sessionId/goal-status', testMonitorController.getSessionGoalStatus);
+
+// GET /api/test-monitor/production-calls/sessions/:sessionId/fixes - Get existing fixes for a session
+router.get('/production-calls/sessions/:sessionId/fixes', testMonitorController.getSessionFixes);
+
 // GET /api/test-monitor/production-calls/:traceId - Get single trace with observations
 router.get('/production-calls/:traceId', testMonitorController.getProductionTrace);
+
+// ============================================================================
+// PRODUCTION TEST DATA TRACKER ROUTES
+// ============================================================================
+
+// GET /api/test-monitor/prod-test-records - List all tracked records
+router.get('/prod-test-records', prodTestRecordController.getRecords);
+
+// GET /api/test-monitor/prod-test-records/stats - Get summary statistics
+router.get('/prod-test-records/stats', prodTestRecordController.getStats);
+
+// GET /api/test-monitor/prod-test-records/export - Export as CSV
+router.get('/prod-test-records/export', prodTestRecordController.exportCsv);
+
+// POST /api/test-monitor/prod-test-records/import - Import from Langfuse traces
+router.post('/prod-test-records/import', prodTestRecordController.importFromLangfuse);
+
+// POST /api/test-monitor/prod-test-records/manual - Manually add a record
+router.post('/prod-test-records/manual', prodTestRecordController.addRecord);
+
+// POST /api/test-monitor/prod-test-records/bulk-cancel - Cancel multiple appointments
+router.post('/prod-test-records/bulk-cancel', prodTestRecordController.bulkCancelAppointments);
+
+// GET /api/test-monitor/prod-test-records/:id - Get single record
+router.get('/prod-test-records/:id', prodTestRecordController.getRecord);
+
+// PUT /api/test-monitor/prod-test-records/:id/status - Update record status
+router.put('/prod-test-records/:id/status', prodTestRecordController.updateStatus);
+
+// POST /api/test-monitor/prod-test-records/:id/cancel - Cancel appointment via Cloud9
+router.post('/prod-test-records/:id/cancel', prodTestRecordController.cancelAppointment);
+
+// DELETE /api/test-monitor/prod-test-records/:id - Hard delete record
+router.delete('/prod-test-records/:id', prodTestRecordController.deleteRecord);
 
 export default router;

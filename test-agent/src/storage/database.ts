@@ -256,6 +256,83 @@ export interface GoalProgressSnapshot {
 }
 
 // ============================================================================
+// HEARTBEAT ALERTING SYSTEM INTERFACES
+// ============================================================================
+
+export interface HeartbeatAlert {
+  id?: number;
+  name: string;
+  description?: string;
+  metricType: string;
+  conditionOperator: 'gt' | 'lt' | 'gte' | 'lte' | 'eq';
+  thresholdValue: number;
+  thresholdUnit?: string;
+  lookbackMinutes: number;
+  severity: 'critical' | 'warning' | 'info';
+  enabled: boolean;
+  slackChannel?: string;
+  cooldownMinutes: number;
+  environment?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface HeartbeatRun {
+  id?: number;
+  startedAt: string;
+  completedAt?: string;
+  alertsChecked: number;
+  alertsTriggered: number;
+  alertsSent: number;
+  alertsSuppressed: number;
+  durationMs?: number;
+  status: 'running' | 'completed' | 'error';
+  errorMessage?: string;
+}
+
+export interface HeartbeatAlertHistory {
+  id?: number;
+  heartbeatRunId?: number;
+  alertId: number;
+  triggeredAt: string;
+  metricValue?: number;
+  thresholdValue?: number;
+  severity?: string;
+  slackSent: boolean;
+  slackMessageTs?: string;
+  suppressed: boolean;
+  suppressionReason?: string;
+  sampleTraceIds?: string[];
+  resolvedAt?: string;
+  // Joined fields for display
+  alertName?: string;
+  alertDescription?: string;
+  metricType?: string;
+}
+
+export interface HeartbeatSlackConfig {
+  id?: number;
+  webhookUrl?: string;
+  defaultChannel?: string;
+  criticalChannel?: string;
+  enabled: boolean;
+  lastTestAt?: string;
+  lastTestSuccess?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface HeartbeatStatus {
+  isRunning: boolean;
+  intervalMinutes: number;
+  lastRunAt?: string;
+  nextRunAt?: string;
+  lastRunStatus?: string;
+  alertsEnabled: number;
+  alertsTotal: number;
+}
+
+// ============================================================================
 // TEST CASE MANAGEMENT INTERFACES
 // ============================================================================
 
@@ -1108,6 +1185,146 @@ export class Database {
       CREATE INDEX IF NOT EXISTS idx_prod_sessions_config ON production_sessions(langfuse_config_id);
       CREATE INDEX IF NOT EXISTS idx_prod_sessions_last_trace ON production_sessions(last_trace_at DESC);
       CREATE INDEX IF NOT EXISTS idx_prod_sessions_user ON production_sessions(user_id);
+
+      -- ============================================================================
+      -- PRODUCTION TEST DATA TRACKER
+      -- ============================================================================
+
+      -- Track patients and appointments created in Production for cleanup
+      CREATE TABLE IF NOT EXISTS prod_test_records (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        record_type TEXT NOT NULL CHECK(record_type IN ('patient', 'appointment')),
+
+        -- Cloud9 identifiers
+        patient_guid TEXT NOT NULL,
+        appointment_guid TEXT,
+
+        -- Patient info
+        patient_id TEXT,
+        patient_first_name TEXT,
+        patient_last_name TEXT,
+        patient_email TEXT,
+        patient_phone TEXT,
+        patient_birthdate TEXT,
+
+        -- Appointment info
+        appointment_datetime TEXT,
+        appointment_type TEXT,
+        appointment_type_guid TEXT,
+        appointment_minutes INTEGER,
+
+        -- Location/Provider context
+        location_guid TEXT,
+        location_name TEXT,
+        provider_guid TEXT,
+        provider_name TEXT,
+        schedule_view_guid TEXT,
+        schedule_column_guid TEXT,
+
+        -- Langfuse tracing
+        trace_id TEXT,
+        observation_id TEXT,
+        session_id TEXT,
+        langfuse_config_id INTEGER,
+
+        -- Status tracking
+        status TEXT DEFAULT 'active' CHECK(status IN ('active', 'cancelled', 'deleted', 'cleanup_failed')),
+        cancelled_at TEXT,
+        deleted_at TEXT,
+        cleanup_notes TEXT,
+        cleanup_error TEXT,
+
+        -- Timestamps
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now')),
+        cloud9_created_at TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_prod_test_records_type ON prod_test_records(record_type);
+      CREATE INDEX IF NOT EXISTS idx_prod_test_records_status ON prod_test_records(status);
+      CREATE INDEX IF NOT EXISTS idx_prod_test_records_patient_guid ON prod_test_records(patient_guid);
+      CREATE INDEX IF NOT EXISTS idx_prod_test_records_appointment_guid ON prod_test_records(appointment_guid);
+      CREATE INDEX IF NOT EXISTS idx_prod_test_records_trace_id ON prod_test_records(trace_id);
+      CREATE INDEX IF NOT EXISTS idx_prod_test_records_created_at ON prod_test_records(created_at);
+
+      -- ============================================================================
+      -- HEARTBEAT ALERTING SYSTEM
+      -- ============================================================================
+
+      -- Alert Definitions: Configurable alert rules
+      CREATE TABLE IF NOT EXISTS heartbeat_alerts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        description TEXT,
+        metric_type TEXT NOT NULL,
+        condition_operator TEXT NOT NULL CHECK(condition_operator IN ('gt', 'lt', 'gte', 'lte', 'eq')),
+        threshold_value REAL NOT NULL,
+        threshold_unit TEXT,
+        lookback_minutes INTEGER DEFAULT 15,
+        severity TEXT DEFAULT 'warning' CHECK(severity IN ('critical', 'warning', 'info')),
+        enabled INTEGER DEFAULT 1,
+        slack_channel TEXT,
+        cooldown_minutes INTEGER DEFAULT 30,
+        environment TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_heartbeat_alerts_enabled ON heartbeat_alerts(enabled);
+      CREATE INDEX IF NOT EXISTS idx_heartbeat_alerts_metric ON heartbeat_alerts(metric_type);
+
+      -- Heartbeat Runs: Track each heartbeat execution
+      CREATE TABLE IF NOT EXISTS heartbeat_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        started_at TEXT NOT NULL,
+        completed_at TEXT,
+        alerts_checked INTEGER DEFAULT 0,
+        alerts_triggered INTEGER DEFAULT 0,
+        alerts_sent INTEGER DEFAULT 0,
+        alerts_suppressed INTEGER DEFAULT 0,
+        duration_ms INTEGER,
+        status TEXT DEFAULT 'running' CHECK(status IN ('running', 'completed', 'error')),
+        error_message TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_heartbeat_runs_status ON heartbeat_runs(status);
+      CREATE INDEX IF NOT EXISTS idx_heartbeat_runs_started ON heartbeat_runs(started_at DESC);
+
+      -- Alert History: Track triggered alerts
+      CREATE TABLE IF NOT EXISTS heartbeat_alert_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        heartbeat_run_id INTEGER,
+        alert_id INTEGER NOT NULL,
+        triggered_at TEXT NOT NULL,
+        metric_value REAL,
+        threshold_value REAL,
+        severity TEXT,
+        slack_sent INTEGER DEFAULT 0,
+        slack_message_ts TEXT,
+        suppressed INTEGER DEFAULT 0,
+        suppression_reason TEXT,
+        sample_trace_ids TEXT,
+        resolved_at TEXT,
+        FOREIGN KEY (alert_id) REFERENCES heartbeat_alerts(id),
+        FOREIGN KEY (heartbeat_run_id) REFERENCES heartbeat_runs(id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_heartbeat_history_alert ON heartbeat_alert_history(alert_id);
+      CREATE INDEX IF NOT EXISTS idx_heartbeat_history_triggered ON heartbeat_alert_history(triggered_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_heartbeat_history_run ON heartbeat_alert_history(heartbeat_run_id);
+
+      -- Slack Configuration: Store webhook settings
+      CREATE TABLE IF NOT EXISTS heartbeat_slack_config (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        webhook_url TEXT,
+        default_channel TEXT,
+        critical_channel TEXT,
+        enabled INTEGER DEFAULT 1,
+        last_test_at TEXT,
+        last_test_success INTEGER,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+      );
     `);
 
     // Migration: Add agent_question column if it doesn't exist
@@ -1175,6 +1392,9 @@ export class Database {
 
     // Initialize built-in enhancement templates
     this.initializeBuiltInTemplates();
+
+    // Initialize default heartbeat alerts
+    this.initializeDefaultAlerts();
   }
 
   /**
@@ -1335,6 +1555,124 @@ export class Database {
         template.command_template,
         template.category,
         template.use_web_search
+      );
+    }
+  }
+
+  /**
+   * Initialize default heartbeat alert configurations
+   */
+  private initializeDefaultAlerts(): void {
+    const db = this.getDb();
+
+    const defaultAlerts = [
+      {
+        name: 'high_api_error_rate',
+        description: 'Alert when API errors (502/500) exceed threshold',
+        metric_type: 'api_errors',
+        condition_operator: 'gt',
+        threshold_value: 5,
+        threshold_unit: 'count',
+        lookback_minutes: 15,
+        severity: 'critical',
+        cooldown_minutes: 30,
+      },
+      {
+        name: 'elevated_latency',
+        description: 'Alert when average tool latency is too high',
+        metric_type: 'avg_latency',
+        condition_operator: 'gt',
+        threshold_value: 5000,
+        threshold_unit: 'ms',
+        lookback_minutes: 15,
+        severity: 'warning',
+        cooldown_minutes: 30,
+      },
+      {
+        name: 'slot_fetch_failures',
+        description: 'Alert when slot fetch failure rate is high',
+        metric_type: 'slot_failures',
+        condition_operator: 'gt',
+        threshold_value: 20,
+        threshold_unit: 'percent',
+        lookback_minutes: 15,
+        severity: 'warning',
+        cooldown_minutes: 30,
+      },
+      {
+        name: 'high_abandonment',
+        description: 'Alert when session abandonment rate is high',
+        metric_type: 'abandonment_rate',
+        condition_operator: 'gt',
+        threshold_value: 40,
+        threshold_unit: 'percent',
+        lookback_minutes: 60,
+        severity: 'warning',
+        cooldown_minutes: 60,
+      },
+      {
+        name: 'empty_guid_errors',
+        description: 'Alert on any empty patient GUID booking attempts',
+        metric_type: 'empty_guid_errors',
+        condition_operator: 'gt',
+        threshold_value: 0,
+        threshold_unit: 'count',
+        lookback_minutes: 15,
+        severity: 'critical',
+        cooldown_minutes: 15,
+      },
+      {
+        name: 'escalation_spike',
+        description: 'Alert when escalations exceed normal levels',
+        metric_type: 'escalation_count',
+        condition_operator: 'gt',
+        threshold_value: 10,
+        threshold_unit: 'count',
+        lookback_minutes: 15,
+        severity: 'warning',
+        cooldown_minutes: 30,
+      },
+      {
+        name: 'cost_anomaly',
+        description: 'Alert when average session cost is unusually high',
+        metric_type: 'cost_per_session',
+        condition_operator: 'gt',
+        threshold_value: 0.50,
+        threshold_unit: 'dollars',
+        lookback_minutes: 60,
+        severity: 'info',
+        cooldown_minutes: 60,
+      },
+      {
+        name: 'low_conversion',
+        description: 'Alert when patient to booking conversion rate drops',
+        metric_type: 'booking_conversion',
+        condition_operator: 'lt',
+        threshold_value: 30,
+        threshold_unit: 'percent',
+        lookback_minutes: 60,
+        severity: 'warning',
+        cooldown_minutes: 60,
+      },
+    ];
+
+    const stmt = db.prepare(`
+      INSERT OR IGNORE INTO heartbeat_alerts
+      (name, description, metric_type, condition_operator, threshold_value, threshold_unit, lookback_minutes, severity, cooldown_minutes)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    for (const alert of defaultAlerts) {
+      stmt.run(
+        alert.name,
+        alert.description,
+        alert.metric_type,
+        alert.condition_operator,
+        alert.threshold_value,
+        alert.threshold_unit,
+        alert.lookback_minutes,
+        alert.severity,
+        alert.cooldown_minutes
       );
     }
   }
@@ -4176,6 +4514,373 @@ export class Database {
     }>;
 
     return documents;
+  }
+
+  // ============================================================================
+  // HEARTBEAT ALERTING SYSTEM METHODS
+  // ============================================================================
+
+  /**
+   * Get all heartbeat alerts
+   */
+  getHeartbeatAlerts(options?: { enabledOnly?: boolean }): HeartbeatAlert[] {
+    const db = this.getDb();
+    let query = `SELECT * FROM heartbeat_alerts`;
+    if (options?.enabledOnly) {
+      query += ` WHERE enabled = 1`;
+    }
+    query += ` ORDER BY severity DESC, name ASC`;
+
+    const rows = db.prepare(query).all() as any[];
+    return rows.map(row => ({
+      id: row.id,
+      name: row.name,
+      description: row.description,
+      metricType: row.metric_type,
+      conditionOperator: row.condition_operator,
+      thresholdValue: row.threshold_value,
+      thresholdUnit: row.threshold_unit,
+      lookbackMinutes: row.lookback_minutes,
+      severity: row.severity,
+      enabled: row.enabled === 1,
+      slackChannel: row.slack_channel,
+      cooldownMinutes: row.cooldown_minutes,
+      environment: row.environment,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
+  }
+
+  /**
+   * Get a single heartbeat alert by ID
+   */
+  getHeartbeatAlert(id: number): HeartbeatAlert | null {
+    const db = this.getDb();
+    const row = db.prepare(`SELECT * FROM heartbeat_alerts WHERE id = ?`).get(id) as any;
+    if (!row) return null;
+
+    return {
+      id: row.id,
+      name: row.name,
+      description: row.description,
+      metricType: row.metric_type,
+      conditionOperator: row.condition_operator,
+      thresholdValue: row.threshold_value,
+      thresholdUnit: row.threshold_unit,
+      lookbackMinutes: row.lookback_minutes,
+      severity: row.severity,
+      enabled: row.enabled === 1,
+      slackChannel: row.slack_channel,
+      cooldownMinutes: row.cooldown_minutes,
+      environment: row.environment,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  /**
+   * Create a new heartbeat alert
+   */
+  createHeartbeatAlert(alert: Omit<HeartbeatAlert, 'id' | 'createdAt' | 'updatedAt'>): number {
+    const db = this.getDb();
+    const result = db.prepare(`
+      INSERT INTO heartbeat_alerts
+      (name, description, metric_type, condition_operator, threshold_value, threshold_unit,
+       lookback_minutes, severity, enabled, slack_channel, cooldown_minutes, environment)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      alert.name,
+      alert.description,
+      alert.metricType,
+      alert.conditionOperator,
+      alert.thresholdValue,
+      alert.thresholdUnit,
+      alert.lookbackMinutes,
+      alert.severity,
+      alert.enabled ? 1 : 0,
+      alert.slackChannel,
+      alert.cooldownMinutes,
+      alert.environment
+    );
+    return result.lastInsertRowid as number;
+  }
+
+  /**
+   * Update a heartbeat alert
+   */
+  updateHeartbeatAlert(id: number, updates: Partial<HeartbeatAlert>): boolean {
+    const db = this.getDb();
+    const fields: string[] = [];
+    const values: any[] = [];
+
+    if (updates.name !== undefined) { fields.push('name = ?'); values.push(updates.name); }
+    if (updates.description !== undefined) { fields.push('description = ?'); values.push(updates.description); }
+    if (updates.metricType !== undefined) { fields.push('metric_type = ?'); values.push(updates.metricType); }
+    if (updates.conditionOperator !== undefined) { fields.push('condition_operator = ?'); values.push(updates.conditionOperator); }
+    if (updates.thresholdValue !== undefined) { fields.push('threshold_value = ?'); values.push(updates.thresholdValue); }
+    if (updates.thresholdUnit !== undefined) { fields.push('threshold_unit = ?'); values.push(updates.thresholdUnit); }
+    if (updates.lookbackMinutes !== undefined) { fields.push('lookback_minutes = ?'); values.push(updates.lookbackMinutes); }
+    if (updates.severity !== undefined) { fields.push('severity = ?'); values.push(updates.severity); }
+    if (updates.enabled !== undefined) { fields.push('enabled = ?'); values.push(updates.enabled ? 1 : 0); }
+    if (updates.slackChannel !== undefined) { fields.push('slack_channel = ?'); values.push(updates.slackChannel); }
+    if (updates.cooldownMinutes !== undefined) { fields.push('cooldown_minutes = ?'); values.push(updates.cooldownMinutes); }
+    if (updates.environment !== undefined) { fields.push('environment = ?'); values.push(updates.environment); }
+
+    if (fields.length === 0) return false;
+
+    fields.push('updated_at = CURRENT_TIMESTAMP');
+    values.push(id);
+
+    const result = db.prepare(`UPDATE heartbeat_alerts SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+    return result.changes > 0;
+  }
+
+  /**
+   * Delete a heartbeat alert
+   */
+  deleteHeartbeatAlert(id: number): boolean {
+    const db = this.getDb();
+    const result = db.prepare(`DELETE FROM heartbeat_alerts WHERE id = ?`).run(id);
+    return result.changes > 0;
+  }
+
+  /**
+   * Toggle heartbeat alert enabled status
+   */
+  toggleHeartbeatAlert(id: number, enabled: boolean): boolean {
+    const db = this.getDb();
+    const result = db.prepare(`UPDATE heartbeat_alerts SET enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+      .run(enabled ? 1 : 0, id);
+    return result.changes > 0;
+  }
+
+  /**
+   * Create a new heartbeat run
+   */
+  createHeartbeatRun(): number {
+    const db = this.getDb();
+    const result = db.prepare(`
+      INSERT INTO heartbeat_runs (started_at, status)
+      VALUES (CURRENT_TIMESTAMP, 'running')
+    `).run();
+    return result.lastInsertRowid as number;
+  }
+
+  /**
+   * Update a heartbeat run
+   */
+  updateHeartbeatRun(id: number, updates: Partial<HeartbeatRun>): boolean {
+    const db = this.getDb();
+    const fields: string[] = [];
+    const values: any[] = [];
+
+    if (updates.completedAt !== undefined) { fields.push('completed_at = ?'); values.push(updates.completedAt); }
+    if (updates.alertsChecked !== undefined) { fields.push('alerts_checked = ?'); values.push(updates.alertsChecked); }
+    if (updates.alertsTriggered !== undefined) { fields.push('alerts_triggered = ?'); values.push(updates.alertsTriggered); }
+    if (updates.alertsSent !== undefined) { fields.push('alerts_sent = ?'); values.push(updates.alertsSent); }
+    if (updates.alertsSuppressed !== undefined) { fields.push('alerts_suppressed = ?'); values.push(updates.alertsSuppressed); }
+    if (updates.durationMs !== undefined) { fields.push('duration_ms = ?'); values.push(updates.durationMs); }
+    if (updates.status !== undefined) { fields.push('status = ?'); values.push(updates.status); }
+    if (updates.errorMessage !== undefined) { fields.push('error_message = ?'); values.push(updates.errorMessage); }
+
+    if (fields.length === 0) return false;
+    values.push(id);
+
+    const result = db.prepare(`UPDATE heartbeat_runs SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+    return result.changes > 0;
+  }
+
+  /**
+   * Get heartbeat run history
+   */
+  getHeartbeatRuns(limit: number = 50, offset: number = 0): HeartbeatRun[] {
+    const db = this.getDb();
+    const rows = db.prepare(`
+      SELECT * FROM heartbeat_runs
+      ORDER BY started_at DESC
+      LIMIT ? OFFSET ?
+    `).all(limit, offset) as any[];
+
+    return rows.map(row => ({
+      id: row.id,
+      startedAt: row.started_at,
+      completedAt: row.completed_at,
+      alertsChecked: row.alerts_checked,
+      alertsTriggered: row.alerts_triggered,
+      alertsSent: row.alerts_sent,
+      alertsSuppressed: row.alerts_suppressed,
+      durationMs: row.duration_ms,
+      status: row.status,
+      errorMessage: row.error_message,
+    }));
+  }
+
+  /**
+   * Get the most recent heartbeat run
+   */
+  getLastHeartbeatRun(): HeartbeatRun | null {
+    const db = this.getDb();
+    const row = db.prepare(`SELECT * FROM heartbeat_runs ORDER BY started_at DESC LIMIT 1`).get() as any;
+    if (!row) return null;
+
+    return {
+      id: row.id,
+      startedAt: row.started_at,
+      completedAt: row.completed_at,
+      alertsChecked: row.alerts_checked,
+      alertsTriggered: row.alerts_triggered,
+      alertsSent: row.alerts_sent,
+      alertsSuppressed: row.alerts_suppressed,
+      durationMs: row.duration_ms,
+      status: row.status,
+      errorMessage: row.error_message,
+    };
+  }
+
+  /**
+   * Create alert history record
+   */
+  createAlertHistory(history: Omit<HeartbeatAlertHistory, 'id'>): number {
+    const db = this.getDb();
+    const result = db.prepare(`
+      INSERT INTO heartbeat_alert_history
+      (heartbeat_run_id, alert_id, triggered_at, metric_value, threshold_value, severity,
+       slack_sent, slack_message_ts, suppressed, suppression_reason, sample_trace_ids)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      history.heartbeatRunId,
+      history.alertId,
+      history.triggeredAt,
+      history.metricValue,
+      history.thresholdValue,
+      history.severity,
+      history.slackSent ? 1 : 0,
+      history.slackMessageTs,
+      history.suppressed ? 1 : 0,
+      history.suppressionReason,
+      history.sampleTraceIds ? JSON.stringify(history.sampleTraceIds) : null
+    );
+    return result.lastInsertRowid as number;
+  }
+
+  /**
+   * Get alert history with optional filtering
+   */
+  getAlertHistory(options?: { alertId?: number; limit?: number; offset?: number }): HeartbeatAlertHistory[] {
+    const db = this.getDb();
+    let query = `
+      SELECT h.*, a.name as alert_name, a.description as alert_description, a.metric_type
+      FROM heartbeat_alert_history h
+      JOIN heartbeat_alerts a ON h.alert_id = a.id
+    `;
+    const params: any[] = [];
+
+    if (options?.alertId) {
+      query += ` WHERE h.alert_id = ?`;
+      params.push(options.alertId);
+    }
+
+    query += ` ORDER BY h.triggered_at DESC`;
+    query += ` LIMIT ? OFFSET ?`;
+    params.push(options?.limit ?? 100, options?.offset ?? 0);
+
+    const rows = db.prepare(query).all(...params) as any[];
+    return rows.map(row => ({
+      id: row.id,
+      heartbeatRunId: row.heartbeat_run_id,
+      alertId: row.alert_id,
+      triggeredAt: row.triggered_at,
+      metricValue: row.metric_value,
+      thresholdValue: row.threshold_value,
+      severity: row.severity,
+      slackSent: row.slack_sent === 1,
+      slackMessageTs: row.slack_message_ts,
+      suppressed: row.suppressed === 1,
+      suppressionReason: row.suppression_reason,
+      sampleTraceIds: row.sample_trace_ids ? JSON.parse(row.sample_trace_ids) : undefined,
+      resolvedAt: row.resolved_at,
+      alertName: row.alert_name,
+      alertDescription: row.alert_description,
+      metricType: row.metric_type,
+    }));
+  }
+
+  /**
+   * Get the last triggered time for an alert (for cooldown check)
+   */
+  getLastAlertTrigger(alertId: number): string | null {
+    const db = this.getDb();
+    const row = db.prepare(`
+      SELECT triggered_at FROM heartbeat_alert_history
+      WHERE alert_id = ? AND suppressed = 0
+      ORDER BY triggered_at DESC LIMIT 1
+    `).get(alertId) as any;
+    return row?.triggered_at ?? null;
+  }
+
+  /**
+   * Mark alert as resolved
+   */
+  resolveAlert(historyId: number): boolean {
+    const db = this.getDb();
+    const result = db.prepare(`
+      UPDATE heartbeat_alert_history
+      SET resolved_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND resolved_at IS NULL
+    `).run(historyId);
+    return result.changes > 0;
+  }
+
+  /**
+   * Get or create Slack config
+   */
+  getSlackConfig(): HeartbeatSlackConfig {
+    const db = this.getDb();
+    let row = db.prepare(`SELECT * FROM heartbeat_slack_config LIMIT 1`).get() as any;
+
+    if (!row) {
+      // Create default config
+      db.prepare(`INSERT INTO heartbeat_slack_config (enabled) VALUES (0)`).run();
+      row = db.prepare(`SELECT * FROM heartbeat_slack_config LIMIT 1`).get() as any;
+    }
+
+    return {
+      id: row.id,
+      webhookUrl: row.webhook_url,
+      defaultChannel: row.default_channel,
+      criticalChannel: row.critical_channel,
+      enabled: row.enabled === 1,
+      lastTestAt: row.last_test_at,
+      lastTestSuccess: row.last_test_success === 1,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  /**
+   * Update Slack config
+   */
+  updateSlackConfig(updates: Partial<HeartbeatSlackConfig>): boolean {
+    const db = this.getDb();
+    const fields: string[] = [];
+    const values: any[] = [];
+
+    if (updates.webhookUrl !== undefined) { fields.push('webhook_url = ?'); values.push(updates.webhookUrl); }
+    if (updates.defaultChannel !== undefined) { fields.push('default_channel = ?'); values.push(updates.defaultChannel); }
+    if (updates.criticalChannel !== undefined) { fields.push('critical_channel = ?'); values.push(updates.criticalChannel); }
+    if (updates.enabled !== undefined) { fields.push('enabled = ?'); values.push(updates.enabled ? 1 : 0); }
+    if (updates.lastTestAt !== undefined) { fields.push('last_test_at = ?'); values.push(updates.lastTestAt); }
+    if (updates.lastTestSuccess !== undefined) { fields.push('last_test_success = ?'); values.push(updates.lastTestSuccess ? 1 : 0); }
+
+    if (fields.length === 0) return false;
+
+    fields.push('updated_at = CURRENT_TIMESTAMP');
+
+    // Ensure config exists
+    this.getSlackConfig();
+
+    const result = db.prepare(`UPDATE heartbeat_slack_config SET ${fields.join(', ')}`).run(...values);
+    return result.changes > 0;
   }
 
   /**

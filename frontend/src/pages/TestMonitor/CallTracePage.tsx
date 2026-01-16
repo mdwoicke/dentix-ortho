@@ -108,6 +108,11 @@ const Icons = {
       <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
     </svg>
   ),
+  Analyze: () => (
+    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+    </svg>
+  ),
   Copy: () => (
     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
@@ -1535,16 +1540,26 @@ export default function CallTracePage() {
                         {formatDate(session.lastTraceAt)}
                       </td>
                       <td className="px-4 py-3 text-center">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelectedSessionId(session.sessionId);
-                          }}
-                          className="p-1.5 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-gray-100 dark:hover:bg-gray-600 rounded"
-                          title="View full conversation"
-                        >
-                          <Icons.Eye />
-                        </button>
+                        <div className="flex items-center justify-center gap-1">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedSessionId(session.sessionId);
+                            }}
+                            className="p-1.5 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-gray-100 dark:hover:bg-gray-600 rounded"
+                            title="View full conversation"
+                          >
+                            <Icons.Eye />
+                          </button>
+                          <a
+                            href={`/test-monitor/analysis?sessionId=${session.sessionId}${selectedConfigId ? `&configId=${selectedConfigId}` : ''}`}
+                            onClick={(e) => e.stopPropagation()}
+                            className="p-1.5 text-gray-400 hover:text-purple-600 dark:hover:text-purple-400 hover:bg-gray-100 dark:hover:bg-gray-600 rounded"
+                            title="Analyze in Analysis page"
+                          >
+                            <Icons.Analyze />
+                          </a>
+                        </div>
                       </td>
                     </tr>
                   ))
@@ -1650,16 +1665,26 @@ export default function CallTracePage() {
                       )}
                     </td>
                     <td className="px-4 py-3 text-center">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedTraceId(trace.traceId);
-                        }}
-                        className="p-1.5 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-gray-100 dark:hover:bg-gray-600 rounded"
-                        title="View transcript"
-                      >
-                        <Icons.Eye />
-                      </button>
+                      <div className="flex items-center justify-center gap-1">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedTraceId(trace.traceId);
+                          }}
+                          className="p-1.5 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-gray-100 dark:hover:bg-gray-600 rounded"
+                          title="View transcript"
+                        >
+                          <Icons.Eye />
+                        </button>
+                        <a
+                          href={`/test-monitor/analysis?traceId=${trace.traceId}${selectedConfigId ? `&configId=${selectedConfigId}` : ''}`}
+                          onClick={(e) => e.stopPropagation()}
+                          className="p-1.5 text-gray-400 hover:text-purple-600 dark:hover:text-purple-400 hover:bg-gray-100 dark:hover:bg-gray-600 rounded"
+                          title="Analyze in Analysis page"
+                        >
+                          <Icons.Analyze />
+                        </a>
+                      </div>
                     </td>
                   </tr>
                 ))

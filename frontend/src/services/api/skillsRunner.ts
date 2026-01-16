@@ -68,6 +68,18 @@ export interface SkillFileInfo {
   description?: string;
 }
 
+export interface SkillFileContent {
+  path: string;
+  content: string;
+  lastModified: string;
+  size: number;
+}
+
+export interface SkillFileSaveResult {
+  path: string;
+  savedAt: string;
+}
+
 export interface PluginCommand {
   command: string;
   fullCommand: string;
@@ -203,6 +215,40 @@ export async function fetchSkillFiles(): Promise<SkillFileInfo[]> {
   return response.data.data || [];
 }
 
+/**
+ * Get full content of a skill file
+ */
+export async function fetchSkillFileContent(filePath: string): Promise<SkillFileContent> {
+  const response = await api.get<ApiResponse<SkillFileContent>>(`/skill-files/${filePath}`);
+  if (!response.data.success) {
+    throw new Error(response.data.error || 'Failed to fetch skill file content');
+  }
+  if (!response.data.data) {
+    throw new Error('No content returned');
+  }
+  return response.data.data;
+}
+
+/**
+ * Save skill file content
+ */
+export async function saveSkillFileContent(
+  filePath: string,
+  content: string
+): Promise<SkillFileSaveResult> {
+  const response = await api.put<ApiResponse<SkillFileSaveResult>>(
+    `/skill-files/${filePath}`,
+    { content }
+  );
+  if (!response.data.success) {
+    throw new Error(response.data.error || 'Failed to save skill file');
+  }
+  if (!response.data.data) {
+    throw new Error('No save result returned');
+  }
+  return response.data.data;
+}
+
 // Plugin Commands API
 export async function fetchPluginCommands(): Promise<PluginCommand[]> {
   const response = await api.get<ApiResponse<PluginCommand[]>>('/plugin-commands');
@@ -235,6 +281,8 @@ export const skillsRunnerApi = {
   setDefaultSSHTarget,
   testSSHConnection,
   fetchSkillFiles,
+  fetchSkillFileContent,
+  saveSkillFileContent,
   fetchPluginCommands,
   fetchPluginCommandsByPlugin
 };

@@ -9,6 +9,7 @@ import { Button } from '../../components/ui/Button';
 import { SkillSelector } from '../../components/features/skillsRunner/SkillSelector';
 import { TerminalEmulator } from '../../components/features/skillsRunner/TerminalEmulator';
 import { SSHConfigModal } from '../../components/features/skillsRunner/SSHConfigModal';
+import { SkillBrowser } from '../../components/features/skillsRunner/SkillBrowser';
 import type { Skill } from '../../components/features/skillsRunner/SkillSelector';
 import {
   fetchSkills,
@@ -29,8 +30,12 @@ const CLI_SKILL_IDS = ['claude-plugin', 'claude-skill-runner-pty'];
 const API_SKILL_IDS = ['claude-cli-llm', 'claude-cli', 'claude-analyze-file', 'claude-skill-runner', 'claude-plugin-print'];
 
 type AuthMode = 'cli' | 'api';
+type ViewMode = 'runner' | 'browser';
 
 export function SkillsRunnerPage() {
+  // View mode toggle - Runner (execute skills) vs Browser (view/edit skill files)
+  const [viewMode, setViewMode] = useState<ViewMode>('runner');
+
   // Auth mode toggle - CLI (subscription) vs API Credits
   const [authMode, setAuthMode] = useState<AuthMode>('cli');
 
@@ -200,67 +205,111 @@ export function SkillsRunnerPage() {
             Skills Runner
           </h1>
           <p className="text-sm text-gray-500 dark:text-gray-400">
-            Execute skills and tools via SSH
-            <span className="ml-2 text-xs">
-              {authMode === 'cli' ? (
-                <span className="text-green-600 dark:text-green-400">(Using Claude Subscription)</span>
-              ) : (
-                <span className="text-amber-600 dark:text-amber-400">(Using API Credits)</span>
-              )}
-            </span>
+            {viewMode === 'runner' ? (
+              <>
+                Execute skills and tools via SSH
+                <span className="ml-2 text-xs">
+                  {authMode === 'cli' ? (
+                    <span className="text-green-600 dark:text-green-400">(Using Claude Subscription)</span>
+                  ) : (
+                    <span className="text-amber-600 dark:text-amber-400">(Using API Credits)</span>
+                  )}
+                </span>
+              </>
+            ) : (
+              'Browse and edit skill files'
+            )}
           </p>
         </div>
         <div className="flex items-center gap-4">
-          {/* Auth Mode Toggle */}
-          <div className="flex items-center gap-2 bg-gray-100 dark:bg-gray-700 rounded-lg p-1">
+          {/* Primary View Mode Toggle */}
+          <div className="flex items-center gap-1 bg-gray-100 dark:bg-gray-700 rounded-lg p-1">
             <button
-              onClick={() => setAuthMode('cli')}
+              onClick={() => setViewMode('runner')}
               disabled={isRunning}
-              className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
-                authMode === 'cli'
+              className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                viewMode === 'runner'
                   ? 'bg-white dark:bg-gray-600 text-primary-600 dark:text-primary-400 shadow-sm'
                   : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
               }`}
-              title="Uses Claude subscription (PTY mode)"
+              title="Execute skills"
             >
-              CLI
+              Runner
             </button>
             <button
-              onClick={() => setAuthMode('api')}
+              onClick={() => setViewMode('browser')}
               disabled={isRunning}
-              className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
-                authMode === 'api'
+              className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                viewMode === 'browser'
                   ? 'bg-white dark:bg-gray-600 text-primary-600 dark:text-primary-400 shadow-sm'
                   : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
               }`}
-              title="Uses API credits (--print mode)"
+              title="Browse and edit skill files"
             >
-              API Credits
+              Skill Browser
             </button>
-          </div>
-          {/* Target Selector */}
-          <div className="flex items-center gap-2">
-            <label className="text-sm text-gray-600 dark:text-gray-400">Target:</label>
-            <select
-              value={selectedTarget}
-              onChange={(e) => setSelectedTarget(e.target.value)}
-              disabled={isRunning}
-              className="px-3 py-1.5 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-            >
-              {sshConfig.targets.length === 0 ? (
-                <option value="">No targets configured</option>
-              ) : (
-                sshConfig.targets.map(target => (
-                  <option key={target.id} value={target.id}>
-                    {target.name}
-                  </option>
-                ))
-              )}
-            </select>
           </div>
 
-          {/* Connection Status */}
-          {currentTarget && (
+          {/* Divider - only show in runner mode */}
+          {viewMode === 'runner' && (
+            <div className="h-6 w-px bg-gray-300 dark:bg-gray-600" />
+          )}
+
+          {/* Auth Mode Toggle - only show in runner mode */}
+          {viewMode === 'runner' && (
+            <div className="flex items-center gap-2 bg-gray-100 dark:bg-gray-700 rounded-lg p-1">
+              <button
+                onClick={() => setAuthMode('cli')}
+                disabled={isRunning}
+                className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                  authMode === 'cli'
+                    ? 'bg-white dark:bg-gray-600 text-primary-600 dark:text-primary-400 shadow-sm'
+                    : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+                }`}
+                title="Uses Claude subscription (PTY mode)"
+              >
+                CLI
+              </button>
+              <button
+                onClick={() => setAuthMode('api')}
+                disabled={isRunning}
+                className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                  authMode === 'api'
+                    ? 'bg-white dark:bg-gray-600 text-primary-600 dark:text-primary-400 shadow-sm'
+                    : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+                }`}
+                title="Uses API credits (--print mode)"
+              >
+                API Credits
+              </button>
+            </div>
+          )}
+
+          {/* Target Selector - only show in runner mode */}
+          {viewMode === 'runner' && (
+            <div className="flex items-center gap-2">
+              <label className="text-sm text-gray-600 dark:text-gray-400">Target:</label>
+              <select
+                value={selectedTarget}
+                onChange={(e) => setSelectedTarget(e.target.value)}
+                disabled={isRunning}
+                className="px-3 py-1.5 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+              >
+                {sshConfig.targets.length === 0 ? (
+                  <option value="">No targets configured</option>
+                ) : (
+                  sshConfig.targets.map(target => (
+                    <option key={target.id} value={target.id}>
+                      {target.name}
+                    </option>
+                  ))
+                )}
+              </select>
+            </div>
+          )}
+
+          {/* Connection Status - only show in runner mode */}
+          {viewMode === 'runner' && currentTarget && (
             <div className="flex items-center gap-2 text-sm">
               <div className={`w-2 h-2 rounded-full ${isRunning ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`} />
               <span className="text-gray-600 dark:text-gray-400">
@@ -269,65 +318,75 @@ export function SkillsRunnerPage() {
             </div>
           )}
 
-          {/* SSH Config Button */}
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => setIsSSHModalOpen(true)}
-          >
-            SSH Config
-          </Button>
+          {/* SSH Config Button - only show in runner mode */}
+          {viewMode === 'runner' && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setIsSSHModalOpen(true)}
+            >
+              SSH Config
+            </Button>
+          )}
         </div>
       </div>
 
-      {/* Main Content - Split View */}
-      <div className="flex-1 grid grid-cols-12 gap-4 min-h-0">
-        {/* Left Panel - Skill Selector */}
-        <div className="col-span-4 min-h-0">
-          <SkillSelector
-            skills={filteredSkills}
-            selectedSkill={selectedSkill}
-            onSkillSelect={handleSkillSelect}
-            inputs={inputs}
-            onInputChange={handleInputChange}
-            onRun={handleRun}
-            onStop={handleStop}
-            isRunning={isRunning}
-            isLoading={isLoadingSkills}
-          />
+      {/* Main Content */}
+      {viewMode === 'browser' ? (
+        /* Skill Browser View */
+        <div className="flex-1 min-h-0">
+          <SkillBrowser />
         </div>
+      ) : (
+        /* Runner View - Split Layout */
+        <div className="flex-1 grid grid-cols-12 gap-4 min-h-0">
+          {/* Left Panel - Skill Selector */}
+          <div className="col-span-4 min-h-0">
+            <SkillSelector
+              skills={filteredSkills}
+              selectedSkill={selectedSkill}
+              onSkillSelect={handleSkillSelect}
+              inputs={inputs}
+              onInputChange={handleInputChange}
+              onRun={handleRun}
+              onStop={handleStop}
+              isRunning={isRunning}
+              isLoading={isLoadingSkills}
+            />
+          </div>
 
-        {/* Right Panel - Terminal */}
-        <div className="col-span-8 min-h-0">
-          <Card className="h-full flex flex-col">
-            <Card.Header className="flex items-center justify-between">
-              <h3 className="text-lg font-medium text-gray-900 dark:text-white">
-                Terminal Output
-              </h3>
-              <div className="flex items-center gap-2">
-                {lastExitCode !== null && (
-                  <span className={`text-sm ${lastExitCode === 0 ? 'text-green-600' : 'text-red-600'}`}>
-                    Exit code: {lastExitCode}
-                  </span>
-                )}
-                {isRunning && (
-                  <span className="text-sm text-yellow-600 dark:text-yellow-400 flex items-center gap-1">
-                    <span className="w-2 h-2 bg-yellow-500 rounded-full animate-pulse" />
-                    Running...
-                  </span>
-                )}
-              </div>
-            </Card.Header>
-            <Card.Body className="flex-1 p-0 min-h-0">
-              <TerminalEmulator
-                sessionId={sessionId}
-                onSessionEnd={handleSessionEnd}
-                className="h-full"
-              />
-            </Card.Body>
-          </Card>
+          {/* Right Panel - Terminal */}
+          <div className="col-span-8 min-h-0">
+            <Card className="h-full flex flex-col">
+              <Card.Header className="flex items-center justify-between">
+                <h3 className="text-lg font-medium text-gray-900 dark:text-white">
+                  Terminal Output
+                </h3>
+                <div className="flex items-center gap-2">
+                  {lastExitCode !== null && (
+                    <span className={`text-sm ${lastExitCode === 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      Exit code: {lastExitCode}
+                    </span>
+                  )}
+                  {isRunning && (
+                    <span className="text-sm text-yellow-600 dark:text-yellow-400 flex items-center gap-1">
+                      <span className="w-2 h-2 bg-yellow-500 rounded-full animate-pulse" />
+                      Running...
+                    </span>
+                  )}
+                </div>
+              </Card.Header>
+              <Card.Body className="flex-1 p-0 min-h-0">
+                <TerminalEmulator
+                  sessionId={sessionId}
+                  onSessionEnd={handleSessionEnd}
+                  className="h-full"
+                />
+              </Card.Body>
+            </Card>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* SSH Config Modal */}
       <SSHConfigModal

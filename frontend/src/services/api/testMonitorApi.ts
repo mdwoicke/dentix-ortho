@@ -3,7 +3,7 @@
  * API calls for Flowise test monitoring dashboard
  */
 
-import { get, put, post } from './client';
+import { get, put, post, del } from './client';
 import { API_CONFIG } from '../../utils/constants';
 import type {
   TestRun,
@@ -41,7 +41,7 @@ import type {
 } from '../../types/testMonitor.types';
 
 // Base API URL
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3002/api';
 
 // ============================================================================
 // EXECUTION STATUS SSE
@@ -625,6 +625,14 @@ export interface DiagnosisResult {
     rootCauseBreakdown: Record<string, number>;
   };
   error?: string;
+  runId?: string; // Added for trace diagnosis - contains the diagnosis run ID
+  analysis?: {
+    summary?: string;
+    issues?: string[];
+    rootCause?: string;
+  };
+  provider?: string;
+  durationMs?: number;
 }
 
 /**
@@ -1333,11 +1341,148 @@ export async function getProductionTraces(options?: {
 /**
  * Get single production trace with transcript
  */
-export async function getProductionTrace(traceId: string): Promise<ProductionTraceDetail> {
-  const response = await get<TestMonitorApiResponse<ProductionTraceDetail>>(
-    `/test-monitor/production-calls/${traceId}`
+export async function getProductionTrace(traceId: string, options?: { configId?: number }): Promise<ProductionTraceDetail> {
+  const params = new URLSearchParams();
+  if (options?.configId) {
+    params.append('configId', options.configId.toString());
+  }
+  const queryString = params.toString();
+  const url = `/test-monitor/production-calls/${traceId}${queryString ? `?${queryString}` : ''}`;
+  const response = await get<TestMonitorApiResponse<ProductionTraceDetail>>(url);
+  return response.data;
+}
+
+/**
+ * Analysis result from LLM analysis of a production trace
+ */
+export interface TraceAnalysisResult {
+  traceId: string;
+  analysis: {
+    summary: string;
+    outcome: 'success' | 'partial_success' | 'failure' | 'unknown';
+    outcomeDescription?: string;
+    issues: Array<{
+      type: string;
+      description: string;
+      severity: 'low' | 'medium' | 'high' | 'critical';
+    }>;
+    rootCause?: string;
+    recommendations: Array<{
+      description: string;
+      target: 'prompt' | 'tool' | 'flow' | 'api';
+      priority: 'low' | 'medium' | 'high';
+    }>;
+    bookingCompleted?: boolean;
+    userSatisfied?: boolean | 'unknown';
+    parseError?: boolean;
+  };
+  transcript: ConversationTurn[];
+  apiCallErrors: number;
+  provider: 'api' | 'cli' | 'none';
+  durationMs?: number;
+}
+
+/**
+ * Analyze a single production trace with LLM
+ */
+export async function analyzeProductionTrace(traceId: string): Promise<TraceAnalysisResult> {
+  const response = await post<TestMonitorApiResponse<TraceAnalysisResult>>(
+    `/test-monitor/production-calls/${traceId}/analyze`,
+    {}
   );
   return response.data;
+}
+
+/**
+ * Diagnose a production trace and generate fixes (like runDiagnosis for test runs)
+ */
+export async function diagnoseProductionTrace(
+  traceId: string,
+  options?: { useLLM?: boolean; configId?: number }
+): Promise<DiagnosisResult> {
+  const response = await post<DiagnosisResult>(
+    `/test-monitor/production-calls/${traceId}/diagnose`,
+    { useLLM: options?.useLLM ?? true, configId: options?.configId },
+    { timeout: API_CONFIG.AI_TIMEOUT }
+  );
+  return response;
+}
+
+/**
+ * Diagnose all traces in a production session and generate fixes
+ */
+export async function diagnoseProductionSession(
+  sessionId: string,
+  options?: { useLLM?: boolean }
+): Promise<DiagnosisResult> {
+  const response = await post<DiagnosisResult>(
+    `/test-monitor/production-calls/sessions/${sessionId}/diagnose`,
+    { useLLM: options?.useLLM ?? true },
+    { timeout: API_CONFIG.AI_TIMEOUT }
+  );
+  return response;
+}
+
+/**
+ * Goal test status for a session
+ */
+export interface SessionGoalStatus {
+  hasGoalTest: boolean;
+  status?: 'passed' | 'failed' | 'skipped' | 'error' | 'running';
+  passed?: boolean;
+  testName?: string;
+  summary?: string;
+  errorMessage?: string;
+  runId?: string;
+  testId?: string;
+}
+
+/**
+ * Get goal test status for a production session
+ */
+export async function getSessionGoalStatus(sessionId: string): Promise<SessionGoalStatus> {
+  const response = await get<TestMonitorApiResponse<SessionGoalStatus>>(
+    `/test-monitor/production-calls/sessions/${sessionId}/goal-status`
+  );
+  return response.data;
+}
+
+/**
+ * Existing session fixes result
+ */
+export interface SessionExistingFixes {
+  hasExistingFixes: boolean;
+  runId?: string;
+  fixesCount: number;
+  summary?: {
+    promptFixes: number;
+    toolFixes: number;
+    highConfidenceFixes: number;
+  };
+  fixes: Array<{
+    fixId: string;
+    runId: string;
+    type: string;
+    targetFile: string;
+    changeDescription: string;
+    changeCode: string;
+    priority: string;
+    confidence: number;
+    status: string;
+    createdAt: string;
+    rootCause?: { type: string; evidence: string };
+    classification?: { issueLocation: string; source: string };
+  }>;
+}
+
+/**
+ * Get existing fixes for a production session
+ */
+export async function getSessionExistingFixes(sessionId: string): Promise<SessionExistingFixes> {
+  // Backend returns data directly, not wrapped in a data property
+  return get<SessionExistingFixes>(
+    `/test-monitor/production-calls/sessions/${sessionId}/fixes`
+  );
 }
 
 /**
@@ -1460,4 +1605,173 @@ export async function getTraceInsights(options: {
   const url = `/test-monitor/production-calls/insights?${queryString}`;
   const response = await get<TestMonitorApiResponse<TraceInsightsResponse>>(url);
   return response.data;
+}
+
+// ============================================================================
+// PRODUCTION TEST DATA TRACKER API
+// ============================================================================
+
+export interface ProdTestRecord {
+  id: number;
+  record_type: 'patient' | 'appointment';
+  patient_guid: string;
+  appointment_guid: string | null;
+  patient_id: string | null;
+  patient_first_name: string | null;
+  patient_last_name: string | null;
+  patient_email: string | null;
+  patient_phone: string | null;
+  patient_birthdate: string | null;
+  appointment_datetime: string | null;
+  appointment_type: string | null;
+  appointment_type_guid: string | null;
+  appointment_minutes: number | null;
+  location_guid: string | null;
+  location_name: string | null;
+  provider_guid: string | null;
+  provider_name: string | null;
+  schedule_view_guid: string | null;
+  schedule_column_guid: string | null;
+  trace_id: string | null;
+  observation_id: string | null;
+  session_id: string | null;
+  langfuse_config_id: number | null;
+  status: 'active' | 'cancelled' | 'deleted' | 'cleanup_failed';
+  cancelled_at: string | null;
+  deleted_at: string | null;
+  cleanup_notes: string | null;
+  cleanup_error: string | null;
+  created_at: string;
+  updated_at: string;
+  cloud9_created_at: string | null;
+}
+
+export interface ProdTestRecordStats {
+  totalPatients: number;
+  totalAppointments: number;
+  activePatients: number;
+  activeAppointments: number;
+  cancelledAppointments: number;
+  deletedRecords: number;
+}
+
+export interface ProdTestRecordImportResult {
+  patientsFound: number;
+  appointmentsFound: number;
+  duplicatesSkipped: number;
+  tracesAlreadyImported: number;
+  tracesScanned: number;
+  errors: string[];
+}
+
+export interface CancelResult {
+  success: boolean;
+  appointmentGuid: string;
+  message: string;
+  error?: string;
+}
+
+/**
+ * Get all production test records
+ */
+export async function getProdTestRecords(options?: {
+  recordType?: 'patient' | 'appointment';
+  status?: string;
+  limit?: number;
+  offset?: number;
+  fromDate?: string;
+  toDate?: string;
+}): Promise<{ records: ProdTestRecord[]; total: number }> {
+  const params = new URLSearchParams();
+  if (options?.recordType) params.append('recordType', options.recordType);
+  if (options?.status) params.append('status', options.status);
+  if (options?.limit) params.append('limit', options.limit.toString());
+  if (options?.offset) params.append('offset', options.offset.toString());
+  if (options?.fromDate) params.append('fromDate', options.fromDate);
+  if (options?.toDate) params.append('toDate', options.toDate);
+
+  const queryString = params.toString();
+  const url = `/test-monitor/prod-test-records${queryString ? `?${queryString}` : ''}`;
+  const response = await get<{ success: boolean; data: ProdTestRecord[]; total: number }>(url);
+  return { records: response.data, total: response.total };
+}
+
+/**
+ * Get production test record statistics
+ */
+export async function getProdTestRecordStats(): Promise<ProdTestRecordStats> {
+  const response = await get<TestMonitorApiResponse<ProdTestRecordStats>>('/test-monitor/prod-test-records/stats');
+  return response.data;
+}
+
+/**
+ * Import records from Langfuse traces
+ */
+export async function importProdTestRecords(options: {
+  configId: number;
+  fromDate: string;
+  toDate?: string;
+}): Promise<ProdTestRecordImportResult> {
+  const response = await post<TestMonitorApiResponse<ProdTestRecordImportResult>>(
+    '/test-monitor/prod-test-records/import',
+    options
+  );
+  return response.data;
+}
+
+/**
+ * Manually add a production test record
+ */
+export async function addProdTestRecord(record: Partial<ProdTestRecord>): Promise<{ id: number }> {
+  const response = await post<TestMonitorApiResponse<{ id: number }>>(
+    '/test-monitor/prod-test-records/manual',
+    record
+  );
+  return response.data;
+}
+
+/**
+ * Update record status
+ */
+export async function updateProdTestRecordStatus(
+  id: number,
+  status: string,
+  notes?: string
+): Promise<void> {
+  await put<TestMonitorApiResponse<void>>(
+    `/test-monitor/prod-test-records/${id}/status`,
+    { status, notes }
+  );
+}
+
+/**
+ * Cancel appointment via Cloud9 API
+ */
+export async function cancelProdTestAppointment(id: number): Promise<CancelResult> {
+  const response = await post<TestMonitorApiResponse<CancelResult>>(
+    `/test-monitor/prod-test-records/${id}/cancel`,
+    {}
+  );
+  return response.data;
+}
+
+/**
+ * Bulk cancel multiple appointments
+ */
+export async function bulkCancelProdTestAppointments(ids: number[]): Promise<{
+  results: CancelResult[];
+  summary: { total: number; succeeded: number; failed: number };
+}> {
+  const response = await post<TestMonitorApiResponse<{
+    results: CancelResult[];
+    summary: { total: number; succeeded: number; failed: number };
+  }>>('/test-monitor/prod-test-records/bulk-cancel', { ids });
+  return response.data;
+}
+
+/**
+ * Delete a production test record
+ */
+export async function deleteProdTestRecord(id: number): Promise<void> {
+  await del<TestMonitorApiResponse<void>>(`/test-monitor/prod-test-records/${id}`);
 }

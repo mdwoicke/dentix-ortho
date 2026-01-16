@@ -653,8 +653,22 @@ export class LangfuseTraceService {
    * Get a single trace with its observations
    */
   getTrace(traceId: string): { trace: any; observations: any[] } | null {
+    // Include error_count calculated dynamically (same logic as getSession/getSessions)
     const trace = this.db.prepare(`
-      SELECT pt.*, lc.name as config_name, lc.host as langfuse_host
+      SELECT pt.*, lc.name as config_name, lc.host as langfuse_host,
+        (SELECT COUNT(*) FROM production_trace_observations pto
+         WHERE pto.trace_id = pt.trace_id
+           AND (
+             -- Error detection criteria
+             pto.level = 'ERROR'
+             OR pto.output LIKE '%"success":false%' OR pto.output LIKE '%"success": false%'
+             OR pto.output LIKE '%_debug_error%'
+           )
+           AND (
+             -- Filter: Only count errors from actual tool calls
+             pto.name IN ('chord_ortho_patient', 'schedule_appointment_ortho', 'current_date_time', 'chord_handleEscalation')
+           )
+        ) as error_count
       FROM production_traces pt
       JOIN langfuse_configs lc ON pt.langfuse_config_id = lc.id
       WHERE pt.trace_id = ?
@@ -669,6 +683,139 @@ export class LangfuseTraceService {
     `).all(traceId);
 
     return { trace, observations };
+  }
+
+  /**
+   * Import a single trace from Langfuse by ID
+   * Used for on-demand import when a trace is requested but not in local DB
+   */
+  async importSingleTrace(
+    traceId: string,
+    configId: number
+  ): Promise<{ trace: any; observations: any[] } | null> {
+    // For sandbox configs (negative IDs), ensure they're synced to langfuse_configs table
+    this.ensureSandboxConfigSynced(configId);
+
+    const config = this.getConfig(configId);
+    if (!config) {
+      throw new Error(`Langfuse config ${configId} not found`);
+    }
+
+    if (!config.secretKey) {
+      throw new Error(`Langfuse config ${configId} is missing secret key`);
+    }
+
+    const authHeader = this.createAuthHeader(config);
+    const normalizedHost = this.normalizeHost(config.host);
+    const traceUrl = `${normalizedHost}/api/public/traces/${traceId}`;
+
+    console.log(`[LangfuseTraceService] Importing single trace: ${traceId} from ${normalizedHost}`);
+
+    try {
+      const response = await fetch(traceUrl, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Basic ${authHeader}`,
+          'Accept': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        if (response.status === 404) {
+          console.warn(`[LangfuseTraceService] Trace ${traceId} not found in Langfuse`);
+          return null;
+        }
+        const errorText = await response.text();
+        throw new Error(`Langfuse API error: ${response.status} - ${errorText}`);
+      }
+
+      const traceData = await response.json() as LangfuseTrace & { observations?: LangfuseObservation[] };
+
+      // Use session_id if available, otherwise use trace_id as synthetic session
+      const effectiveSessionId = traceData.sessionId || traceData.id;
+
+      // Insert trace into database
+      this.db.prepare(`
+        INSERT OR REPLACE INTO production_traces (
+          trace_id, langfuse_config_id, session_id, user_id, name,
+          input, output, metadata_json, tags_json, release, version,
+          total_cost, latency_ms, started_at, ended_at, environment
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        traceData.id,
+        configId,
+        effectiveSessionId,
+        traceData.userId || null,
+        traceData.name || null,
+        traceData.input ? JSON.stringify(traceData.input) : null,
+        traceData.output ? JSON.stringify(traceData.output) : null,
+        traceData.metadata ? JSON.stringify(traceData.metadata) : null,
+        traceData.tags ? JSON.stringify(traceData.tags) : null,
+        traceData.release || null,
+        traceData.version || null,
+        traceData.totalCost || null,
+        traceData.latency || null,
+        traceData.timestamp,
+        null,
+        (traceData.metadata as any)?.environment || null
+      );
+
+      // Upsert session record
+      const inputPreview = this.extractInputPreview(traceData.input);
+      this.upsertSession({
+        sessionId: effectiveSessionId,
+        configId,
+        userId: traceData.userId || null,
+        environment: (traceData.metadata as any)?.environment || null,
+        traceTimestamp: traceData.timestamp,
+        cost: traceData.totalCost || 0,
+        latencyMs: traceData.latency || 0,
+        inputPreview,
+        tags: traceData.tags || null,
+        metadata: traceData.metadata || null,
+      });
+
+      // Store observations if included in response
+      const observations = traceData.observations || [];
+      for (const obs of observations) {
+        this.db.prepare(`
+          INSERT OR IGNORE INTO production_trace_observations (
+            observation_id, trace_id, parent_observation_id, type, name, model,
+            input, output, metadata_json, started_at, ended_at,
+            completion_start_time, latency_ms, usage_input_tokens,
+            usage_output_tokens, usage_total_tokens, cost, level, status_message
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          obs.id,
+          traceId,
+          obs.parentObservationId || null,
+          obs.type,
+          obs.name || null,
+          obs.model || null,
+          obs.input ? JSON.stringify(obs.input) : null,
+          obs.output ? JSON.stringify(obs.output) : null,
+          obs.metadata ? JSON.stringify(obs.metadata) : null,
+          obs.startTime || null,
+          obs.endTime || null,
+          obs.completionStartTime || null,
+          obs.latency || null,
+          obs.usage?.input || null,
+          obs.usage?.output || null,
+          obs.usage?.total || null,
+          obs.calculatedTotalCost || null,
+          obs.level || 'DEFAULT',
+          obs.statusMessage || null
+        );
+      }
+
+      console.log(`[LangfuseTraceService] Imported trace ${traceId} with ${observations.length} observations`);
+
+      // Return the trace in the same format as getTrace
+      return this.getTrace(traceId);
+    } catch (error: any) {
+      console.error(`[LangfuseTraceService] Failed to import trace ${traceId}:`, error);
+      throw error;
+    }
   }
 
   // ============================================================================
@@ -768,9 +915,30 @@ export class LangfuseTraceService {
     traces: any[];
     observations: any[];
   } | null {
-    // Build query for session
+    // Build query for session with error_count calculated dynamically
+    // (same logic as getSessions() to ensure consistency)
     let sessionQuery = `
-      SELECT ps.*, lc.name as config_name, lc.host as langfuse_host
+      SELECT ps.*, lc.name as config_name, lc.host as langfuse_host,
+        (SELECT COUNT(*) FROM production_trace_observations pto
+         JOIN production_traces pt ON pto.trace_id = pt.trace_id
+         WHERE pt.session_id = ps.session_id
+           AND pt.langfuse_config_id = ps.langfuse_config_id
+           AND (
+             -- Error detection criteria
+             pto.level = 'ERROR'
+             OR pto.output LIKE '%"success":false%' OR pto.output LIKE '%"success": false%'
+             OR pto.output LIKE '%_debug_error%'
+           )
+           AND (
+             -- Filter: Only count errors from actual tool calls
+             pto.name IN ('chord_ortho_patient', 'schedule_appointment_ortho', 'current_date_time', 'chord_handleEscalation')
+           )
+        ) as error_count,
+        (SELECT COUNT(*) > 0 FROM production_trace_observations pto
+         JOIN production_traces pt ON pto.trace_id = pt.trace_id
+         WHERE pt.session_id = ps.session_id
+           AND pt.langfuse_config_id = ps.langfuse_config_id
+           AND pto.output LIKE '%Appointment GUID Added%') as has_successful_booking
       FROM production_sessions ps
       JOIN langfuse_configs lc ON ps.langfuse_config_id = lc.id
       WHERE ps.session_id = ?
@@ -787,8 +955,22 @@ export class LangfuseTraceService {
     if (!session) return null;
 
     // Get all traces in this session, ordered chronologically
+    // Include error_count per trace (same logic as session-level error count)
     const traces = this.db.prepare(`
-      SELECT pt.*, lc.name as config_name, lc.host as langfuse_host
+      SELECT pt.*, lc.name as config_name, lc.host as langfuse_host,
+        (SELECT COUNT(*) FROM production_trace_observations pto
+         WHERE pto.trace_id = pt.trace_id
+           AND (
+             -- Error detection criteria
+             pto.level = 'ERROR'
+             OR pto.output LIKE '%"success":false%' OR pto.output LIKE '%"success": false%'
+             OR pto.output LIKE '%_debug_error%'
+           )
+           AND (
+             -- Filter: Only count errors from actual tool calls
+             pto.name IN ('chord_ortho_patient', 'schedule_appointment_ortho', 'current_date_time', 'chord_handleEscalation')
+           )
+        ) as error_count
       FROM production_traces pt
       JOIN langfuse_configs lc ON pt.langfuse_config_id = lc.id
       WHERE pt.session_id = ?

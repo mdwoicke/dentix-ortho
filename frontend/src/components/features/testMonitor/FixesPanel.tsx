@@ -5,6 +5,7 @@
  */
 
 import { useState, useRef, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { Spinner } from '../../ui';
 import type { GeneratedFix, PromptFile } from '../../../types/testMonitor.types';
 import { cn } from '../../../utils/cn';
@@ -640,17 +641,23 @@ function FixDetailModal({ fix, onClose, conflicts, fixIndex }: FixDetailModalPro
                 <div className="text-sm text-gray-900 dark:text-white mb-2">
                   <span className="font-medium">Type:</span> {fix.rootCause.type}
                 </div>
-                {fix.rootCause.evidence && fix.rootCause.evidence.length > 0 && (
+                {fix.rootCause.evidence && Array.isArray(fix.rootCause.evidence) && fix.rootCause.evidence.length > 0 && (
                   <div>
                     <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Evidence:</span>
                     <ul className="mt-1 space-y-1 text-sm text-gray-600 dark:text-gray-400">
                       {fix.rootCause.evidence.map((e, i) => (
                         <li key={i} className="flex items-start gap-2">
                           <span className="text-gray-400 mt-1">•</span>
-                          <span>{e}</span>
+                          <span>{typeof e === 'string' ? e : JSON.stringify(e)}</span>
                         </li>
                       ))}
                     </ul>
+                  </div>
+                )}
+                {fix.rootCause.evidence && typeof fix.rootCause.evidence === 'string' && (
+                  <div>
+                    <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Evidence:</span>
+                    <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">{fix.rootCause.evidence}</p>
                   </div>
                 )}
               </div>
@@ -1845,14 +1852,15 @@ export function FixesPanel({
         />
       )}
 
-      {/* Popout Fix Detail Modal */}
-      {popoutFix && (
+      {/* Popout Fix Detail Modal - rendered via portal to avoid CSS containment issues */}
+      {popoutFix && createPortal(
         <FixDetailModal
           fix={popoutFix}
           onClose={() => setPopoutFix(null)}
           conflicts={conflicts}
           fixIndex={fixes.findIndex(f => f.fixId === popoutFix.fixId)}
-        />
+        />,
+        document.body
       )}
 
       {/* Fix Preview Modal */}

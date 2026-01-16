@@ -202,3 +202,63 @@ CREATE TABLE IF NOT EXISTS user_permissions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_user_permissions_user_id ON user_permissions(user_id);
+
+-- Production Test Data Tracker
+-- Track patients and appointments created in Production for cleanup
+
+CREATE TABLE IF NOT EXISTS prod_test_records (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  record_type TEXT NOT NULL CHECK(record_type IN ('patient', 'appointment')),
+
+  -- Cloud9 identifiers
+  patient_guid TEXT NOT NULL,
+  appointment_guid TEXT,  -- NULL for patient records
+
+  -- Patient info (for both patient and appointment records)
+  patient_id TEXT,
+  patient_first_name TEXT,
+  patient_last_name TEXT,
+  patient_email TEXT,
+  patient_phone TEXT,
+  patient_birthdate TEXT,
+
+  -- Appointment info (only for appointment records)
+  appointment_datetime TEXT,
+  appointment_type TEXT,
+  appointment_type_guid TEXT,
+  appointment_minutes INTEGER,
+
+  -- Location/Provider context
+  location_guid TEXT,
+  location_name TEXT,
+  provider_guid TEXT,
+  provider_name TEXT,
+  schedule_view_guid TEXT,
+  schedule_column_guid TEXT,
+
+  -- Langfuse tracing (for import feature)
+  trace_id TEXT,              -- Langfuse trace ID
+  observation_id TEXT,        -- Observation that created this record
+  session_id TEXT,            -- Langfuse session ID
+  langfuse_config_id INTEGER, -- Which Langfuse config was used
+
+  -- Status tracking
+  status TEXT DEFAULT 'active' CHECK(status IN ('active', 'cancelled', 'deleted', 'cleanup_failed')),
+  cancelled_at TEXT,
+  deleted_at TEXT,
+  cleanup_notes TEXT,
+  cleanup_error TEXT,
+
+  -- Timestamps
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  cloud9_created_at TEXT      -- When Cloud9 actually created the record
+);
+
+-- Indexes for common queries
+CREATE INDEX IF NOT EXISTS idx_prod_test_records_type ON prod_test_records(record_type);
+CREATE INDEX IF NOT EXISTS idx_prod_test_records_status ON prod_test_records(status);
+CREATE INDEX IF NOT EXISTS idx_prod_test_records_patient_guid ON prod_test_records(patient_guid);
+CREATE INDEX IF NOT EXISTS idx_prod_test_records_appointment_guid ON prod_test_records(appointment_guid);
+CREATE INDEX IF NOT EXISTS idx_prod_test_records_trace_id ON prod_test_records(trace_id);
+CREATE INDEX IF NOT EXISTS idx_prod_test_records_created_at ON prod_test_records(created_at);

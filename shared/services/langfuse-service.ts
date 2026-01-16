@@ -168,7 +168,7 @@ export class LangfuseService {
       const timeoutId = setTimeout(() => controller.abort(), 5000);
 
       const response = await fetch(
-        'http://localhost:3001/api/test-monitor/app-settings/langfuse-config',
+        'http://localhost:3002/api/test-monitor/app-settings/langfuse-config',
         { signal: controller.signal }
       );
       clearTimeout(timeoutId);

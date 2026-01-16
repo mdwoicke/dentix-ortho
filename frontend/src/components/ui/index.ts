@@ -38,3 +38,6 @@ export type { ToastProps, ToastContainerProps } from './Toast';
 
 export { GuidCopyButton } from './GuidCopyButton';
 export type { GuidCopyButtonProps } from './GuidCopyButton';
+
+export { Badge } from './Badge';
+export type { BadgeProps } from './Badge';

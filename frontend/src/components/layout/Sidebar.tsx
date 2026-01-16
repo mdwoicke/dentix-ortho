@@ -82,7 +82,7 @@ const navItems: NavItem[] = [
   },
   {
     label: 'Test Monitor',
-    path: ROUTES.TEST_MONITOR,
+    path: ROUTES.TEST_MONITOR_TESTS,
     tabKey: 'test_monitor',
     icon: (
       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

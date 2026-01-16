@@ -36,7 +36,8 @@ export type GenerationPurpose =
   | 'semantic-evaluation'
   | 'failure-analysis'
   | 'chatbot-interaction'
-  | 'generic-llm-call';
+  | 'generic-llm-call'
+  | 'trace_analysis';
 
 // ============================================================================
 // Generation Result

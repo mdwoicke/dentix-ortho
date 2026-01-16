@@ -235,7 +235,7 @@ export function AgentTuning() {
   // Handle select prompt file
   const handleSelectFile = (fileKey: string) => {
     setSelectedFile(fileKey);
-    dispatch(fetchPromptHistory(fileKey));
+    dispatch(fetchPromptHistory({ fileKey }));
   };
 
   // Batch selection handlers
@@ -319,7 +319,7 @@ export function AgentTuning() {
       const result = await testMonitorApi.rollbackPromptVersion(selectedFile, rollbackTarget.version);
       // Refresh data after rollback
       dispatch(fetchPromptFiles());
-      dispatch(fetchPromptHistory(selectedFile));
+      dispatch(fetchPromptHistory({ fileKey: selectedFile }));
       setRollbackTarget(null);
       console.log(`Rolled back to version ${rollbackTarget.version}, created new version ${result.newVersion}`);
     } catch (error) {

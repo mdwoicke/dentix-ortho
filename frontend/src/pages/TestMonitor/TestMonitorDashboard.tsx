@@ -5,6 +5,7 @@
 
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from 'react-resizable-panels';
 import { useAppDispatch, useAppSelector } from '../../hooks';
 import { PageHeader } from '../../components/layout';
 import { Button, Card } from '../../components/ui';
@@ -68,6 +69,17 @@ export function TestMonitorDashboard() {
 
   // Track execution start time for metrics
   const [executionStartedAt, setExecutionStartedAt] = useState<string | null>(null);
+
+  // One-time cleanup of corrupted layout data (versioned to only run once)
+  useEffect(() => {
+    const cleanupVersion = 'v2'; // Increment this to force another cleanup
+    const cleanupKey = 'test-monitor-layout-cleanup';
+    if (localStorage.getItem(cleanupKey) !== cleanupVersion) {
+      localStorage.removeItem('test-monitor-dashboard-layout');
+      localStorage.removeItem('react-resizable-panels:test-monitor-dashboard');
+      localStorage.setItem(cleanupKey, cleanupVersion);
+    }
+  }, []);
 
   // Handle SSE events
   const handleExecutionEvent = useCallback((event: ExecutionStreamEvent) => {
@@ -178,9 +190,19 @@ export function TestMonitorDashboard() {
         subtitle="Configure and execute end-to-end tests for the Flowise agent"
       />
 
-      <div className="flex-1 grid grid-cols-12 gap-6 min-h-0 mt-6">
+      <PanelGroup
+        orientation="horizontal"
+        id="test-monitor-dashboard"
+        className="flex-1 min-h-0 mt-6"
+      >
         {/* Left Column - Configuration */}
-        <div className="col-span-5 flex flex-col gap-6">
+        <Panel
+          id="config-panel"
+          defaultSize={42}
+          minSize={25}
+          maxSize={60}
+          className="flex flex-col gap-6 pr-3"
+        >
           {/* Category Selection */}
           <Card>
             <div className="p-4">
@@ -330,10 +352,20 @@ export function TestMonitorDashboard() {
               </div>
             </div>
           </Card>
-        </div>
+        </Panel>
+
+        {/* Resize Handle */}
+        <PanelResizeHandle className="w-2 flex items-center justify-center group">
+          <div className="w-1 h-8 rounded-full bg-gray-300 dark:bg-gray-600 opacity-0 group-hover:opacity-100 transition-opacity" />
+        </PanelResizeHandle>
 
         {/* Right Column - Status & Recent Runs */}
-        <div className="col-span-7 flex flex-col gap-6">
+        <Panel
+          id="status-panel"
+          defaultSize={58}
+          minSize={40}
+          className="flex flex-col gap-6 pl-3"
+        >
           {/* Execution Status */}
           <Card>
             <div className="p-4">
@@ -525,8 +557,8 @@ export function TestMonitorDashboard() {
               </div>
             </div>
           </Card>
-        </div>
-      </div>
+        </Panel>
+      </PanelGroup>
     </div>
   );
 }

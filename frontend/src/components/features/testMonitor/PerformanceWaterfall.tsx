@@ -289,6 +289,27 @@ export function PerformanceWaterfall({
     setExpandedEntries(prev => ({ ...prev, [id]: !prev[id] }));
   };
 
+  // Check if all entries are expanded
+  const allExpanded = useMemo(() => {
+    if (entries.length === 0) return false;
+    return entries.every(entry => expandedEntries[entry.id]);
+  }, [entries, expandedEntries]);
+
+  // Toggle all entries expanded/collapsed
+  const toggleAllEntries = () => {
+    if (allExpanded) {
+      // Collapse all
+      setExpandedEntries({});
+    } else {
+      // Expand all
+      const allExpanded: Record<string, boolean> = {};
+      entries.forEach(entry => {
+        allExpanded[entry.id] = true;
+      });
+      setExpandedEntries(allExpanded);
+    }
+  };
+
   // Calculate statistics
   const stats = useMemo(() => {
     const apiEntries = entries.filter(e => e.type === 'api_call');
@@ -369,7 +390,26 @@ export function PerformanceWaterfall({
       <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
         {/* Time Scale Header */}
         <div className="flex items-center h-6 bg-gray-100 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 text-xs text-gray-500">
-          <div className={cn(nameColumnWidth, 'flex-shrink-0 px-2')}>Name</div>
+          <div className={cn(nameColumnWidth, 'flex-shrink-0 px-2 flex items-center gap-1')}>
+            <button
+              onClick={toggleAllEntries}
+              className="p-0.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+              title={allExpanded ? 'Collapse all' : 'Expand all'}
+            >
+              <svg
+                className={cn(
+                  'w-3 h-3 transition-transform',
+                  allExpanded && 'rotate-90'
+                )}
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+            </button>
+            <span>Name</span>
+          </div>
           <div className="flex-1 flex justify-between px-2">
             <span>0</span>
             <span>{formatDuration(totalDurationMs / 4)}</span>

@@ -8,7 +8,7 @@ import { initializeTestRunCleanup, stopPeriodicCleanup } from './services/testRu
 // Load environment variables
 dotenv.config();
 
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 3002;
 const HOST = process.env.HOST || '0.0.0.0';
 
 // Initialize database connection

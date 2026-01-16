@@ -449,3 +449,112 @@ body {
 .dark .fc .fc-daygrid-day-number {
   color: #e5e7eb;
 }
+
+/* ===================================
+   Resizable Panel Styles (react-resizable-panels)
+   =================================== */
+
+/* Panel group styles */
+[data-group] {
+  display: flex;
+  width: 100%;
+  height: 100%;
+}
+
+/* Panel styles */
+[data-panel] {
+  overflow: hidden;
+}
+
+/* Collapsed panel indicator */
+[data-panel][data-collapsed="true"] {
+  opacity: 0.5;
+}
+
+/* Separator (resize handle) base styles */
+[data-separator] {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  transition: background-color 0.15s ease;
+}
+
+/* Horizontal separator (vertical resize) */
+[data-group][data-orientation="horizontal"] > [data-separator] {
+  width: 8px;
+  cursor: col-resize;
+}
+
+/* Vertical separator (horizontal resize) */
+[data-group][data-orientation="vertical"] > [data-separator] {
+  height: 8px;
+  cursor: row-resize;
+}
+
+/* Separator hover state */
+[data-separator]:hover {
+  background-color: rgba(59, 130, 246, 0.08);
+}
+
+[data-separator]:active,
+[data-separator][data-active] {
+  background-color: rgba(59, 130, 246, 0.15);
+}
+
+/* Dark mode separator */
+.dark [data-separator]:hover {
+  background-color: rgba(96, 165, 250, 0.1);
+}
+
+.dark [data-separator]:active,
+.dark [data-separator][data-active] {
+  background-color: rgba(96, 165, 250, 0.2);
+}
+
+/* Separator visual indicator - horizontal orientation */
+[data-group][data-orientation="horizontal"] > [data-separator]::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 4px;
+  height: 32px;
+  background-color: #d1d5db;
+  border-radius: 2px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+[data-group][data-orientation="horizontal"] > [data-separator]:hover::after,
+[data-group][data-orientation="horizontal"] > [data-separator][data-active]::after {
+  opacity: 1;
+}
+
+/* Separator visual indicator - vertical orientation */
+[data-group][data-orientation="vertical"] > [data-separator]::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 32px;
+  height: 4px;
+  background-color: #d1d5db;
+  border-radius: 2px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+[data-group][data-orientation="vertical"] > [data-separator]:hover::after,
+[data-group][data-orientation="vertical"] > [data-separator][data-active]::after {
+  opacity: 1;
+}
+
+/* Dark mode indicator */
+.dark [data-separator]::after {
+  background-color: #4b5563;
+}

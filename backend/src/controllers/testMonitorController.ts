@@ -19,6 +19,7 @@ import * as comparisonService from '../services/comparisonService';
 import { aiEnhancementService } from '../services/aiEnhancementService';
 import * as documentParserService from '../services/documentParserService';
 import { LangfuseTraceService } from '../services/langfuseTraceService';
+import { getLLMProvider } from '../../../shared/services/llm-provider';
 
 // Path to test-agent database (main database with all test run data)
 const TEST_AGENT_DB_PATH = path.resolve(__dirname, '../../../test-agent/data/test-results.db');
@@ -33,6 +34,17 @@ const FILE_KEY_DISPLAY_NAMES: Record<string, string> = {
   'patient_tool': 'Patient Tool',
   'nodered_flow': 'Node Red Flows',
 };
+
+// ConversationTurn type for trace diagnosis
+interface ConversationTurn {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: string;
+  responseTimeMs?: number;
+  stepId?: string;
+  validationPassed?: boolean;
+  validationMessage?: string;
+}
 
 // ============================================================================
 // MULTER CONFIGURATION FOR FILE UPLOADS
@@ -8561,6 +8573,9 @@ export async function getProductionTraces(
 /**
  * GET /api/test-monitor/production-calls/:traceId
  * Get single trace with observations (for transcript view)
+ *
+ * Query params:
+ * - configId: Optional. If provided and trace not found locally, will attempt on-demand import from Langfuse
  */
 export async function getProductionTrace(
   req: Request,
@@ -8571,14 +8586,30 @@ export async function getProductionTrace(
 
   try {
     const { traceId } = req.params;
+    const configId = req.query.configId ? parseInt(req.query.configId as string, 10) : null;
 
     db = getTestAgentDbWritable();
     const service = new LangfuseTraceService(db);
 
-    const result = service.getTrace(traceId);
+    let result = service.getTrace(traceId);
+
+    // If not found locally and configId provided, try on-demand import from Langfuse
+    if (!result && configId !== null) {
+      console.log(`[getProductionTrace] Trace ${traceId} not found locally, attempting on-demand import from config ${configId}`);
+      try {
+        result = await service.importSingleTrace(traceId, configId);
+      } catch (importError: any) {
+        console.error(`[getProductionTrace] On-demand import failed:`, importError.message);
+        // Fall through to 404 if import fails
+      }
+    }
 
     if (!result) {
-      res.status(404).json({ success: false, error: 'Trace not found' });
+      res.status(404).json({
+        success: false,
+        error: 'Trace not found',
+        hint: configId ? 'Trace not found in Langfuse either' : 'Provide configId query param to attempt on-demand import from Langfuse'
+      });
       return;
     }
 
@@ -8595,6 +8626,827 @@ export async function getProductionTrace(
         transcript: transformToConversationTurns(trace, filteredObservations),
         apiCalls: transformToApiCalls(filteredObservations),
       },
+    });
+  } catch (error) {
+    next(error);
+  } finally {
+    if (db) db.close();
+  }
+}
+
+/**
+ * POST /api/test-monitor/production-calls/:traceId/analyze
+ * Analyze a single production trace with LLM
+ */
+export async function analyzeProductionTrace(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  let db: BetterSqlite3.Database | null = null;
+
+  try {
+    const { traceId } = req.params;
+
+    // Get the trace data first
+    db = getTestAgentDbWritable();
+    const service = new LangfuseTraceService(db);
+    const result = service.getTrace(traceId);
+
+    if (!result) {
+      res.status(404).json({ success: false, error: 'Trace not found' });
+      return;
+    }
+
+    const { trace, observations } = result;
+    const filteredObservations = filterInternalTraces(observations);
+    const transcript = transformToConversationTurns(trace, filteredObservations);
+    const apiCalls = transformToApiCalls(filteredObservations);
+
+    // Close DB before LLM call (may take time)
+    db.close();
+    db = null;
+
+    // Build transcript text for LLM
+    const transcriptText = transcript
+      .map(turn => `[${turn.role.toUpperCase()}]: ${turn.content}`)
+      .join('\n\n');
+
+    // Build API call summary
+    const apiCallSummary = apiCalls
+      .filter(call => call.statusCode && call.statusCode >= 400)
+      .map(call => `- ${call.name}: Status ${call.statusCode}, Error: ${call.output || 'Unknown'}`)
+      .join('\n');
+
+    // Check LLM availability
+    const llmProvider = getLLMProvider();
+    const status = await llmProvider.checkAvailability();
+
+    if (!status.available) {
+      res.status(503).json({
+        success: false,
+        error: `LLM service not available: ${status.error}`,
+      });
+      return;
+    }
+
+    // Create analysis prompt
+    const analysisPrompt = `You are an expert at analyzing dental appointment scheduling chatbot conversations. Analyze the following production conversation and identify any issues or areas for improvement.
+
+## Conversation Transcript
+${transcriptText}
+
+${apiCallSummary ? `## API Errors Detected\n${apiCallSummary}` : ''}
+
+## Analysis Instructions
+Please provide:
+1. **Summary**: A brief 1-2 sentence summary of what happened in this conversation
+2. **Outcome**: Was the conversation successful? (successful booking, successful data collection, transfer to human, user abandoned, system error)
+3. **Issues Found**: List any problems you identified (be specific)
+4. **Root Cause**: What caused the issues (if any)?
+5. **Recommendations**: What changes would fix or improve this interaction?
+
+Format your response as JSON:
+{
+  "summary": "...",
+  "outcome": "success|partial_success|failure|unknown",
+  "outcomeDescription": "...",
+  "issues": [
+    { "type": "...", "description": "...", "severity": "low|medium|high|critical" }
+  ],
+  "rootCause": "...",
+  "recommendations": [
+    { "description": "...", "target": "prompt|tool|flow|api", "priority": "low|medium|high" }
+  ],
+  "bookingCompleted": true|false,
+  "userSatisfied": true|false|"unknown"
+}`;
+
+    // Execute LLM analysis
+    const llmResponse = await llmProvider.execute({
+      prompt: analysisPrompt,
+      systemPrompt: 'You are an expert conversation analyst. Always respond with valid JSON only, no markdown.',
+      maxTokens: 2000,
+      temperature: 0.3,
+      purpose: 'trace_analysis',
+    });
+
+    if (!llmResponse.success || !llmResponse.content) {
+      res.status(500).json({
+        success: false,
+        error: `LLM analysis failed: ${llmResponse.error || 'No response'}`,
+      });
+      return;
+    }
+
+    // Parse LLM response
+    let analysis;
+    try {
+      // Clean potential markdown code blocks
+      const cleanedContent = llmResponse.content
+        .replace(/```json\n?/g, '')
+        .replace(/```\n?/g, '')
+        .trim();
+      analysis = JSON.parse(cleanedContent);
+    } catch (parseError) {
+      // Return raw response if not valid JSON
+      analysis = {
+        summary: llmResponse.content,
+        outcome: 'unknown',
+        issues: [],
+        recommendations: [],
+        parseError: true,
+      };
+    }
+
+    res.json({
+      success: true,
+      data: {
+        traceId,
+        analysis,
+        transcript,
+        apiCallErrors: apiCalls.filter(c => c.statusCode && c.statusCode >= 400).length,
+        provider: llmResponse.provider,
+        durationMs: llmResponse.durationMs,
+      },
+    });
+  } catch (error) {
+    next(error);
+  } finally {
+    if (db) db.close();
+  }
+}
+
+/**
+ * POST /api/test-monitor/production-calls/:traceId/diagnose
+ * Diagnose a production trace and generate fixes (like runDiagnosis for test runs)
+ */
+export async function diagnoseProductionTrace(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  let db: BetterSqlite3.Database | null = null;
+
+  try {
+    const { traceId } = req.params;
+    const { useLLM = true, configId } = req.body;
+
+    // Get the trace data first
+    db = getTestAgentDbWritable();
+    const service = new LangfuseTraceService(db);
+    let result = service.getTrace(traceId);
+
+    // Try on-demand import if not found and configId provided
+    if (!result && configId) {
+      console.log(`[diagnoseProductionTrace] Trace ${traceId} not found locally, attempting on-demand import`);
+      try {
+        result = await service.importSingleTrace(traceId, configId);
+      } catch (importError: any) {
+        console.error(`[diagnoseProductionTrace] On-demand import failed:`, importError.message);
+      }
+    }
+
+    if (!result) {
+      res.status(404).json({ success: false, error: 'Trace not found' });
+      return;
+    }
+
+    const { trace, observations } = result;
+    const filteredObservations = filterInternalTraces(observations);
+    const transcript = transformToConversationTurns(trace, filteredObservations);
+    const apiCalls = transformToApiCalls(filteredObservations);
+
+    // Check for errors in the trace
+    const apiErrors = apiCalls.filter(call =>
+      (call.statusCode && call.statusCode >= 400) ||
+      call.output?.includes('success":false') ||
+      call.output?.includes('_debug_error')
+    );
+
+    const hasErrors = apiErrors.length > 0 ||
+      observations.some((o: any) => o.level === 'ERROR' || o.status_message?.includes('error'));
+
+    // Build transcript text for LLM
+    const transcriptText = transcript
+      .map(turn => `[${turn.role.toUpperCase()}]: ${turn.content}`)
+      .join('\n\n');
+
+    // Build API call summary
+    const apiCallSummary = apiErrors
+      .map(call => `- ${call.name}: ${call.statusCode ? `Status ${call.statusCode}` : 'Error'}, Output: ${call.output?.slice(0, 500) || 'Unknown'}`)
+      .join('\n');
+
+    // Create fix generation ID based on trace
+    const diagnosisRunId = `trace-diag-${traceId.slice(0, 8)}-${Date.now()}`;
+
+    if (!useLLM) {
+      // Return basic analysis without LLM
+      res.json({
+        success: true,
+        message: hasErrors ? 'Trace has errors - LLM analysis recommended' : 'Trace appears successful',
+        fixesGenerated: 0,
+        analyzedCount: 1,
+        totalFailures: hasErrors ? 1 : 0,
+        summary: {
+          promptFixes: 0,
+          toolFixes: 0,
+          highConfidenceFixes: 0,
+          rootCauseBreakdown: {},
+        },
+      });
+      return;
+    }
+
+    // Check LLM availability
+    const llmProvider = getLLMProvider();
+    const status = await llmProvider.checkAvailability();
+
+    if (!status.available) {
+      res.status(503).json({
+        success: false,
+        error: `LLM service not available: ${status.error}`,
+      });
+      return;
+    }
+
+    // Close DB before LLM call (may take time)
+    db.close();
+    db = null;
+
+    // Create fix generation prompt
+    const fixPrompt = `You are an expert at analyzing and fixing dental appointment scheduling chatbot issues. Analyze the following production conversation and generate specific fixes.
+
+## Conversation Transcript
+${transcriptText}
+
+${apiCallSummary ? `## API Errors Detected\n${apiCallSummary}` : ''}
+
+## Fix Generation Instructions
+Analyze the conversation and generate fixes for any issues found. For each issue, provide a concrete fix with code changes.
+
+Format your response as JSON with an array of fixes:
+{
+  "analysis": {
+    "summary": "Brief summary of what happened",
+    "issues": ["issue 1", "issue 2"],
+    "rootCause": "Root cause if identifiable"
+  },
+  "fixes": [
+    {
+      "type": "prompt_modification",
+      "priority": "critical|high|medium|low",
+      "confidence": 0-100,
+      "targetFile": "system_prompt|scheduling_tool|patient_tool",
+      "changeDescription": "What this fix does",
+      "changeCode": "The actual code/text change to make",
+      "rootCause": {
+        "type": "missing_validation|unclear_instruction|api_error|logic_error|other",
+        "evidence": ["evidence from conversation"]
+      }
+    }
+  ]
+}
+
+Fix types:
+- prompt_modification: Changes to system prompt instructions
+- tool_addition: Adding new capabilities to tools
+- workflow_change: Changes to conversation flow logic
+
+Target files:
+- system_prompt: The main Flowise system prompt
+- scheduling_tool: schedule_appointment_ortho tool code
+- patient_tool: chord_ortho_patient tool code
+
+Only generate fixes if there are actual issues. If the conversation was successful, return an empty fixes array.`;
+
+    // Execute LLM analysis
+    const llmResponse = await llmProvider.execute({
+      prompt: fixPrompt,
+      systemPrompt: 'You are an expert chatbot fixer. Always respond with valid JSON only, no markdown.',
+      maxTokens: 4000,
+      temperature: 0.3,
+      purpose: 'failure-analysis',
+    });
+
+    if (!llmResponse.success || !llmResponse.content) {
+      res.status(500).json({
+        success: false,
+        error: `LLM analysis failed: ${llmResponse.error || 'No response'}`,
+      });
+      return;
+    }
+
+    // Parse LLM response
+    let diagnosisResult;
+    try {
+      // First try to remove markdown code blocks
+      let cleanedContent = llmResponse.content
+        .replace(/```json\n?/g, '')
+        .replace(/```\n?/g, '')
+        .trim();
+
+      // If the content doesn't start with {, try to extract JSON object
+      if (!cleanedContent.startsWith('{')) {
+        const jsonStart = cleanedContent.indexOf('{');
+        const jsonEnd = cleanedContent.lastIndexOf('}');
+        if (jsonStart !== -1 && jsonEnd !== -1 && jsonEnd > jsonStart) {
+          cleanedContent = cleanedContent.substring(jsonStart, jsonEnd + 1);
+        }
+      }
+
+      diagnosisResult = JSON.parse(cleanedContent);
+    } catch (parseError) {
+      console.error('[diagnoseProductionTrace] Failed to parse LLM response:', parseError);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to parse LLM response',
+        rawResponse: llmResponse.content,
+      });
+      return;
+    }
+
+    // Store generated fixes in database
+    const fixes = diagnosisResult.fixes || [];
+    let fixesGenerated = 0;
+    let promptFixes = 0;
+    let toolFixes = 0;
+    let highConfidenceFixes = 0;
+    const rootCauseBreakdown: Record<string, number> = {};
+
+    if (fixes.length > 0) {
+      db = getTestAgentDbWritable();
+
+      for (const fix of fixes) {
+        const fixId = `fix-${traceId.slice(0, 8)}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+
+        try {
+          db.prepare(`
+            INSERT INTO generated_fixes (
+              fix_id, run_id, type, target_file, change_description, change_code,
+              priority, confidence, status, root_cause_type, root_cause_evidence,
+              affected_tests, classification_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, datetime('now'))
+          `).run(
+            fixId,
+            diagnosisRunId,
+            fix.type || 'prompt_modification',
+            fix.targetFile || 'system_prompt',
+            fix.changeDescription || '',
+            fix.changeCode || '',
+            fix.priority || 'medium',
+            fix.confidence || 50,
+            fix.rootCause?.type || null,
+            fix.rootCause?.evidence ? JSON.stringify(fix.rootCause.evidence) : null,
+            JSON.stringify([traceId]), // affected_tests contains the traceId
+            JSON.stringify({ issueLocation: 'bot', issueCategory: 'production_trace' })
+          );
+
+          fixesGenerated++;
+
+          // Track stats
+          if (fix.targetFile === 'system_prompt') promptFixes++;
+          else if (fix.targetFile?.includes('tool')) toolFixes++;
+          if (fix.confidence && fix.confidence >= 70) highConfidenceFixes++;
+          if (fix.rootCause?.type) {
+            rootCauseBreakdown[fix.rootCause.type] = (rootCauseBreakdown[fix.rootCause.type] || 0) + 1;
+          }
+        } catch (insertError: any) {
+          console.error(`[diagnoseProductionTrace] Failed to insert fix:`, insertError.message);
+        }
+      }
+
+      db.close();
+      db = null;
+    }
+
+    res.json({
+      success: true,
+      message: fixesGenerated > 0
+        ? `Generated ${fixesGenerated} fix(es) for trace ${traceId}`
+        : 'No fixes needed - trace appears successful',
+      fixesGenerated,
+      analyzedCount: 1,
+      totalFailures: hasErrors ? 1 : 0,
+      summary: {
+        promptFixes,
+        toolFixes,
+        highConfidenceFixes,
+        rootCauseBreakdown,
+      },
+      analysis: diagnosisResult.analysis,
+      runId: diagnosisRunId,
+      provider: llmResponse.provider,
+      durationMs: llmResponse.durationMs,
+    });
+  } catch (error) {
+    next(error);
+  } finally {
+    if (db) db.close();
+  }
+}
+
+/**
+ * POST /api/test-monitor/production-calls/sessions/:sessionId/diagnose
+ * Diagnose all traces in a session and generate fixes
+ */
+export async function diagnoseProductionSession(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  let db: BetterSqlite3.Database | null = null;
+
+  try {
+    const { sessionId } = req.params;
+    const { useLLM = true } = req.body;
+
+    if (!sessionId) {
+      res.status(400).json({ success: false, error: 'sessionId is required' });
+      return;
+    }
+
+    db = getTestAgentDbWritable();
+
+    // Get all traces for this session
+    const traces = db.prepare(`
+      SELECT * FROM production_traces
+      WHERE session_id = ?
+      ORDER BY started_at ASC
+    `).all(sessionId) as any[];
+
+    if (traces.length === 0) {
+      res.status(404).json({ success: false, error: 'Session not found or has no traces' });
+      return;
+    }
+
+    // Get all observations for these traces
+    const traceIds = traces.map(t => t.trace_id);
+    const placeholders = traceIds.map(() => '?').join(',');
+    const observations = db.prepare(`
+      SELECT * FROM production_trace_observations
+      WHERE trace_id IN (${placeholders})
+      ORDER BY started_at ASC
+    `).all(...traceIds) as any[];
+
+    // Build combined transcript from all traces
+    const transcript = buildCombinedTranscript(traces, observations);
+
+    if (transcript.length === 0) {
+      res.json({
+        success: true,
+        message: 'No conversation content found in session',
+        fixesGenerated: 0,
+      });
+      return;
+    }
+
+    if (!useLLM) {
+      res.json({
+        success: true,
+        message: 'Session analysis complete (LLM disabled)',
+        fixesGenerated: 0,
+        transcript,
+      });
+      return;
+    }
+
+    // Get LLM provider for fix generation
+    const llmProvider = getLLMProvider();
+
+    // Create a diagnosis run ID based on the session
+    const diagnosisRunId = `session-diagnosis-${sessionId.slice(0, 20)}-${Date.now().toString(36)}`;
+
+    // Build prompt for LLM analysis
+    const transcriptText = transcript.map((turn: ConversationTurn) =>
+      `[${turn.role}]: ${turn.content}`
+    ).join('\n\n');
+
+    const fixPrompt = `Analyze this chatbot conversation session with ${traces.length} message exchanges and generate specific fixes for any issues found.
+
+## Session Information
+- Session ID: ${sessionId}
+- Number of exchanges: ${traces.length}
+- Total turns: ${transcript.length}
+
+## Conversation Transcript
+${transcriptText}
+
+## Instructions
+1. Identify any issues with the chatbot's responses (incorrect information, missed intents, poor formatting, etc.)
+2. For each issue, generate a specific fix
+
+Return a JSON object with this structure:
+{
+  "fixes": [
+    {
+      "targetType": "prompt" | "tool",
+      "targetId": "system_prompt" | "scheduling_tool" | "patient_tool",
+      "title": "Brief title of the fix",
+      "description": "Detailed description of what needs to be changed",
+      "originalContent": "The problematic content (if applicable)",
+      "suggestedContent": "The suggested replacement content",
+      "confidence": 0.0-1.0,
+      "rootCauseType": "missing_instruction" | "incorrect_logic" | "ambiguous_wording" | "tool_error" | "other"
+    }
+  ],
+  "sessionSummary": "Brief summary of the session and its outcome"
+}
+
+Only generate fixes if there are actual issues. If the conversation was successful, return an empty fixes array.`;
+
+    // Execute LLM analysis
+    const llmResponse = await llmProvider.execute({
+      prompt: fixPrompt,
+      systemPrompt: 'You are an expert chatbot fixer. Always respond with valid JSON only, no markdown.',
+      maxTokens: 4000,
+      temperature: 0.3,
+      purpose: 'failure-analysis',
+    });
+
+    if (!llmResponse.success || !llmResponse.content) {
+      res.status(500).json({
+        success: false,
+        error: `LLM analysis failed: ${llmResponse.error || 'No response'}`,
+      });
+      return;
+    }
+
+    // Parse LLM response
+    let llmResult: { fixes: any[]; sessionSummary?: string };
+    try {
+      // First try to remove markdown code blocks
+      let cleanedContent = llmResponse.content
+        .replace(/```json\n?/g, '')
+        .replace(/```\n?/g, '')
+        .trim();
+
+      // If the content doesn't start with {, try to extract JSON object
+      if (!cleanedContent.startsWith('{')) {
+        const jsonStart = cleanedContent.indexOf('{');
+        const jsonEnd = cleanedContent.lastIndexOf('}');
+        if (jsonStart !== -1 && jsonEnd !== -1 && jsonEnd > jsonStart) {
+          cleanedContent = cleanedContent.substring(jsonStart, jsonEnd + 1);
+        }
+      }
+
+      llmResult = JSON.parse(cleanedContent);
+    } catch (parseError) {
+      console.error('[SessionDiagnosis] Failed to parse LLM response:', llmResponse.content);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to parse LLM response',
+      });
+      return;
+    }
+
+    // Store generated fixes in database
+    let fixesGenerated = 0;
+    const now = new Date().toISOString();
+
+    if (llmResult.fixes && Array.isArray(llmResult.fixes)) {
+      for (const fix of llmResult.fixes) {
+        const fixId = `fix-${uuidv4().slice(0, 8)}`;
+
+        // Map LLM response to actual table schema
+        const changeDescription = `${fix.title || 'Untitled fix'} - ${fix.description || ''}`;
+        const rootCauseJson = JSON.stringify({
+          type: fix.rootCauseType || 'other',
+          evidence: fix.originalContent || '',
+        });
+
+        db.prepare(`
+          INSERT INTO generated_fixes (
+            fix_id, run_id, type, target_file, change_description, change_code,
+            priority, confidence, affected_tests, root_cause_json, classification_json,
+            status, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, 'medium', ?, ?, ?, ?, 'pending', ?)
+        `).run(
+          fixId,
+          diagnosisRunId,
+          fix.targetType || 'prompt',
+          fix.targetId || 'system_prompt',
+          changeDescription,
+          fix.suggestedContent || '',
+          fix.confidence || 0.5,
+          JSON.stringify([sessionId]),
+          rootCauseJson,
+          JSON.stringify({ issueLocation: 'bot', source: 'session_diagnosis' }),
+          now
+        );
+
+        fixesGenerated++;
+      }
+    }
+
+    // Count fix types
+    const promptFixes = (llmResult.fixes || []).filter((f: any) => f.targetType === 'prompt').length;
+    const toolFixes = (llmResult.fixes || []).filter((f: any) => f.targetType === 'tool').length;
+    const highConfidenceFixes = (llmResult.fixes || []).filter((f: any) => (f.confidence || 0) >= 0.7).length;
+
+    res.json({
+      success: true,
+      message: fixesGenerated > 0 ? `Generated ${fixesGenerated} fix(es) from session analysis` : 'No fixes needed',
+      fixesGenerated,
+      summary: {
+        promptFixes,
+        toolFixes,
+        highConfidenceFixes,
+        sessionSummary: llmResult.sessionSummary,
+        traceCount: traces.length,
+        turnCount: transcript.length,
+      },
+      runId: diagnosisRunId,
+    });
+  } catch (error) {
+    next(error);
+  } finally {
+    if (db) db.close();
+  }
+}
+
+/**
+ * GET /api/test-monitor/production-calls/sessions/:sessionId/goal-status
+ * Get goal test status for a session (if it was created by a goal test)
+ */
+export async function getSessionGoalStatus(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  let db: BetterSqlite3.Database | null = null;
+
+  try {
+    const { sessionId } = req.params;
+
+    if (!sessionId) {
+      res.status(400).json({ success: false, error: 'sessionId is required' });
+      return;
+    }
+
+    db = getTestAgentDb();
+
+    // Look up the session in transcripts table to find linked test
+    const transcript = db.prepare(`
+      SELECT run_id, test_id FROM transcripts
+      WHERE session_id = ?
+      LIMIT 1
+    `).get(sessionId) as { run_id: string; test_id: string } | undefined;
+
+    if (!transcript) {
+      // No goal test linked to this session
+      res.json({
+        success: true,
+        hasGoalTest: false,
+        status: null,
+        message: 'No goal test linked to this session',
+      });
+      return;
+    }
+
+    // Get the test result
+    const testResult = db.prepare(`
+      SELECT status, test_name, error_message, duration_ms
+      FROM test_results
+      WHERE run_id = ? AND test_id = ?
+    `).get(transcript.run_id, transcript.test_id) as {
+      status: string;
+      test_name: string;
+      error_message: string | null;
+      duration_ms: number | null;
+    } | undefined;
+
+    // Also check goal_test_results for more details
+    const goalResult = db.prepare(`
+      SELECT passed, turn_count, summary_text, goal_results_json
+      FROM goal_test_results
+      WHERE run_id = ? AND test_id = ?
+    `).get(transcript.run_id, transcript.test_id) as {
+      passed: number;
+      turn_count: number;
+      summary_text: string | null;
+      goal_results_json: string | null;
+    } | undefined;
+
+    // Get run info
+    const runInfo = db.prepare(`
+      SELECT started_at, config_name FROM test_runs WHERE run_id = ?
+    `).get(transcript.run_id) as { started_at: string; config_name: string } | undefined;
+
+    res.json({
+      success: true,
+      hasGoalTest: true,
+      runId: transcript.run_id,
+      testId: transcript.test_id,
+      testName: testResult?.test_name || transcript.test_id,
+      status: testResult?.status || (goalResult?.passed ? 'passed' : 'failed'),
+      passed: goalResult?.passed === 1,
+      turnCount: goalResult?.turn_count,
+      summary: goalResult?.summary_text,
+      errorMessage: testResult?.error_message,
+      durationMs: testResult?.duration_ms,
+      runStartedAt: runInfo?.started_at,
+      configName: runInfo?.config_name,
+    });
+  } catch (error) {
+    next(error);
+  } finally {
+    if (db) db.close();
+  }
+}
+
+/**
+ * GET /api/test-monitor/production-calls/sessions/:sessionId/fixes
+ * Get existing fixes for a session (from previous diagnosis runs)
+ */
+export async function getSessionFixes(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  let db: BetterSqlite3.Database | null = null;
+
+  try {
+    const { sessionId } = req.params;
+
+    if (!sessionId) {
+      res.status(400).json({ success: false, error: 'sessionId is required' });
+      return;
+    }
+
+    db = getTestAgentDb();
+
+    // Look for fixes where affected_tests contains this sessionId
+    // The session diagnosis stores fixes with affected_tests = JSON array containing sessionId
+    const fixes = db.prepare(`
+      SELECT
+        fix_id, run_id, type, target_file, change_description, change_code,
+        priority, confidence, affected_tests, root_cause_json, classification_json,
+        status, created_at
+      FROM generated_fixes
+      WHERE affected_tests LIKE ?
+      ORDER BY created_at DESC
+    `).all(`%${sessionId}%`) as Array<{
+      fix_id: string;
+      run_id: string;
+      type: string;
+      target_file: string;
+      change_description: string;
+      change_code: string;
+      priority: string;
+      confidence: number;
+      affected_tests: string;
+      root_cause_json: string;
+      classification_json: string;
+      status: string;
+      created_at: string;
+    }>;
+
+    if (!fixes || fixes.length === 0) {
+      res.json({
+        success: true,
+        hasExistingFixes: false,
+        fixes: [],
+        fixesCount: 0,
+      });
+      return;
+    }
+
+    // Get the most recent run ID
+    const latestRunId = fixes[0].run_id;
+
+    // Count by type
+    const promptFixes = fixes.filter(f => f.type === 'prompt').length;
+    const toolFixes = fixes.filter(f => f.type === 'tool').length;
+    const highConfidenceFixes = fixes.filter(f => f.confidence >= 0.7).length;
+
+    // Parse and format fixes for frontend
+    const formattedFixes = fixes.map(fix => ({
+      fixId: fix.fix_id,
+      runId: fix.run_id,
+      type: fix.type,
+      targetFile: fix.target_file,
+      changeDescription: fix.change_description,
+      changeCode: fix.change_code,
+      priority: fix.priority,
+      confidence: fix.confidence,
+      status: fix.status,
+      createdAt: fix.created_at,
+      rootCause: fix.root_cause_json ? JSON.parse(fix.root_cause_json) : null,
+      classification: fix.classification_json ? JSON.parse(fix.classification_json) : null,
+    }));
+
+    res.json({
+      success: true,
+      hasExistingFixes: true,
+      runId: latestRunId,
+      fixesCount: fixes.length,
+      summary: {
+        promptFixes,
+        toolFixes,
+        highConfidenceFixes,
+      },
+      fixes: formattedFixes,
     });
   } catch (error) {
     next(error);

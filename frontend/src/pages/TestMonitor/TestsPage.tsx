@@ -84,6 +84,11 @@ const Icons = {
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
     </svg>
   ),
+  Expand: () => (
+    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+    </svg>
+  ),
   Play: () => (
     <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
       <path d="M8 5v14l11-7z" />
@@ -230,6 +235,7 @@ function TestCaseListItem({
   isRunning,
   onSelect,
   onClick,
+  onOpenPopout,
 }: {
   testCase: GoalTestCaseRecord;
   isSelected: boolean;
@@ -237,6 +243,7 @@ function TestCaseListItem({
   isRunning: boolean;
   onSelect: () => void;
   onClick: () => void;
+  onOpenPopout: () => void;
 }) {
   const config = CATEGORY_CONFIG[testCase.category as TestCategory];
 
@@ -286,6 +293,15 @@ function TestCaseListItem({
             {testCase.name || 'Untitled Test'}
           </h4>
         </div>
+
+        {/* Expand button - visible on hover */}
+        <button
+          onClick={(e) => { e.stopPropagation(); onOpenPopout(); }}
+          className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-opacity"
+          title="Quick view"
+        >
+          <Icons.Expand />
+        </button>
       </div>
     </div>
   );
@@ -307,6 +323,7 @@ function CategorySection({
   onToggleSelection,
   onSelectAllInCategory,
   onDeselectAllInCategory,
+  onOpenPopout,
 }: {
   category: TestCategory;
   testCases: GoalTestCaseRecord[];
@@ -319,6 +336,7 @@ function CategorySection({
   onToggleSelection: (id: string) => void;
   onSelectAllInCategory: () => void;
   onDeselectAllInCategory: () => void;
+  onOpenPopout: (testCase: GoalTestCaseRecord) => void;
 }) {
   const config = CATEGORY_CONFIG[category];
 
@@ -394,10 +412,186 @@ function CategorySection({
               isRunning={runningCaseIds.includes(testCase.caseId)}
               onSelect={() => onToggleSelection(String(testCase.id))}
               onClick={() => onSelectTestCase(String(testCase.id))}
+              onOpenPopout={() => onOpenPopout(testCase)}
             />
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ============================================================================
+// TEST DETAIL POPOUT
+// ============================================================================
+
+function TestDetailPopout({
+  testCase,
+  onClose,
+  onEdit,
+  onRun,
+}: {
+  testCase: GoalTestCaseRecord;
+  onClose: () => void;
+  onEdit: () => void;
+  onRun: () => void;
+}) {
+  const config = CATEGORY_CONFIG[testCase.category as TestCategory];
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      onClick={onClose}
+    >
+      <div
+        className="relative w-full max-w-2xl max-h-[80vh] bg-white dark:bg-gray-900 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-start justify-between p-4 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <span className={clsx(
+                'px-2 py-0.5 text-xs font-mono font-bold rounded',
+                config.colors.badge
+              )}>
+                {testCase.caseId}
+              </span>
+              <span className={clsx(
+                'px-2 py-0.5 text-[10px] font-medium rounded',
+                config.colors.badge
+              )}>
+                {config.label}
+              </span>
+            </div>
+            <h2 className="text-lg font-bold text-gray-900 dark:text-gray-100">
+              {testCase.name || 'Untitled Test'}
+            </h2>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+          >
+            <Icons.X />
+          </button>
+        </div>
+
+        {/* Content */}
+        <div className="p-4 overflow-y-auto max-h-[calc(80vh-140px)]">
+          {/* Persona Section */}
+          <div className="mb-4">
+            <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-2 flex items-center gap-2">
+              <Icons.User />
+              Persona
+            </h3>
+            <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-3 space-y-2">
+              {testCase.persona?.name && (
+                <div>
+                  <span className="text-xs text-gray-500 dark:text-gray-400">Name:</span>
+                  <span className="ml-2 text-sm text-gray-900 dark:text-gray-100">{testCase.persona.name}</span>
+                </div>
+              )}
+              {testCase.persona?.dateOfBirth && (
+                <div>
+                  <span className="text-xs text-gray-500 dark:text-gray-400">DOB:</span>
+                  <span className="ml-2 text-sm text-gray-900 dark:text-gray-100">{testCase.persona.dateOfBirth}</span>
+                </div>
+              )}
+              {testCase.persona?.location && (
+                <div>
+                  <span className="text-xs text-gray-500 dark:text-gray-400">Location:</span>
+                  <span className="ml-2 text-sm text-gray-900 dark:text-gray-100">{testCase.persona.location}</span>
+                </div>
+              )}
+              {testCase.persona?.existingPatient !== undefined && (
+                <div>
+                  <span className="text-xs text-gray-500 dark:text-gray-400">Patient Status:</span>
+                  <span className={clsx(
+                    'ml-2 text-sm',
+                    testCase.persona.existingPatient
+                      ? 'text-emerald-600 dark:text-emerald-400'
+                      : 'text-amber-600 dark:text-amber-400'
+                  )}>
+                    {testCase.persona.existingPatient ? 'Existing Patient' : 'New Patient'}
+                  </span>
+                </div>
+              )}
+              {!testCase.persona?.name && (
+                <span className="text-xs text-gray-400 italic">No persona configured</span>
+              )}
+            </div>
+          </div>
+
+          {/* Goals Section */}
+          <div className="mb-4">
+            <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-2 flex items-center gap-2">
+              <Icons.Target />
+              Goals ({testCase.goals?.length || 0})
+            </h3>
+            <div className="space-y-2">
+              {testCase.goals && testCase.goals.length > 0 ? (
+                testCase.goals.map((goal, index) => (
+                  <div
+                    key={index}
+                    className="bg-gray-50 dark:bg-gray-800 rounded-lg p-3 border-l-3 border-primary-500"
+                  >
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <span className="text-xs font-medium text-gray-500 dark:text-gray-400 mr-2">
+                          #{index + 1}
+                        </span>
+                        <span className="text-sm text-gray-900 dark:text-gray-100">
+                          {goal.description || goal.goalType || 'No description'}
+                        </span>
+                      </div>
+                      {goal.required && (
+                        <span className="px-1.5 py-0.5 text-[10px] font-medium bg-rose-100 text-rose-700 dark:bg-rose-900/50 dark:text-rose-300 rounded">
+                          Required
+                        </span>
+                      )}
+                    </div>
+                    {goal.successCriteria && (
+                      <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                        <span className="font-medium">Success:</span> {goal.successCriteria}
+                      </div>
+                    )}
+                  </div>
+                ))
+              ) : (
+                <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-3">
+                  <span className="text-xs text-gray-400 italic">No goals configured</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Response Config Section */}
+          {testCase.responseConfig && Object.keys(testCase.responseConfig).length > 0 && (
+            <div>
+              <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-2 flex items-center gap-2">
+                <Icons.Settings />
+                Response Config
+              </h3>
+              <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-3 text-xs text-gray-600 dark:text-gray-400">
+                <pre className="whitespace-pre-wrap">
+                  {JSON.stringify(testCase.responseConfig, null, 2)}
+                </pre>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Footer Actions */}
+        <div className="flex items-center justify-end gap-2 p-4 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
+          <Button size="sm" variant="secondary" onClick={onEdit}>
+            Edit
+          </Button>
+          <Button size="sm" onClick={onRun}>
+            <Icons.Play />
+            Run Test
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -620,6 +814,8 @@ export function TestsPage() {
   const [retryFailed, setRetryFailed] = useState(false);
   const [enableSemanticEval, setEnableSemanticEval] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [popoutTestCase, setPopoutTestCase] = useState<GoalTestCaseRecord | null>(null);
+  const [showLibraryPopout, setShowLibraryPopout] = useState(false);
 
   // Environment presets state
   const [environmentPresets, setEnvironmentPresets] = useState<TestEnvironmentPresetWithNames[]>([]);
@@ -919,13 +1115,54 @@ export function TestsPage() {
     navigate('/test-monitor/create');
   };
 
+  const handleOpenPopout = (testCase: GoalTestCaseRecord) => {
+    setPopoutTestCase(testCase);
+  };
+
+  const handleClosePopout = () => {
+    setPopoutTestCase(null);
+  };
+
+  const handleEditFromPopout = () => {
+    if (popoutTestCase) {
+      dispatch(selectTestCase(String(popoutTestCase.id)));
+      dispatch(startEditing(popoutTestCase));
+      setPopoutTestCase(null);
+    }
+  };
+
+  const handleRunFromPopout = async () => {
+    if (!popoutTestCase) return;
+    if (!selectedPresetId) {
+      alert('Please select an environment preset before running tests.');
+      return;
+    }
+    try {
+      const selectedPreset = environmentPresets.find(p => p.id === selectedPresetId);
+      const result = await dispatch(runGoalTests({
+        caseIds: [popoutTestCase.caseId],
+        config: {
+          concurrency: 1,
+          environmentPresetId: selectedPresetId,
+          flowiseConfigId: selectedPreset?.flowiseConfigId || undefined,
+          langfuseConfigId: selectedPreset?.langfuseConfigId || undefined,
+        },
+      })).unwrap();
+
+      setPopoutTestCase(null);
+      navigate(`/test-monitor/run/${result.runId}`);
+    } catch (err) {
+      console.error('Failed to run test:', err);
+    }
+  };
+
   // Progress percentage
   const progressPercentage = executionState.progress.total > 0
     ? Math.round((executionState.progress.completed / executionState.progress.total) * 100)
     : 0;
 
   return (
-    <div className="h-full flex flex-col p-4 overflow-hidden">
+    <div className="h-full flex flex-col p-4">
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <div>
@@ -940,10 +1177,10 @@ export function TestsPage() {
         </Button>
       </div>
 
-      {/* 3-Panel Layout */}
-      <div className="flex-1 grid grid-cols-12 gap-4 min-h-0">
+      {/* 3-Panel Layout - CSS Grid */}
+      <div className="flex-1 grid grid-cols-12 gap-4">
         {/* LEFT PANEL - Test Library */}
-        <div className="col-span-3 flex flex-col gap-3 overflow-hidden">
+        <div className="col-span-3 flex flex-col gap-3">
           {/* Search */}
           <div className="relative">
             <div className="absolute inset-y-0 left-0 pl-2.5 flex items-center pointer-events-none text-gray-400">
@@ -969,9 +1206,18 @@ export function TestsPage() {
           <Card className="flex-1 overflow-hidden">
             <div className="p-3 h-full flex flex-col">
               <div className="flex items-center justify-between mb-2">
-                <h3 className="text-sm font-semibold text-gray-900 dark:text-white">
-                  Test Library
-                </h3>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-semibold text-gray-900 dark:text-white">
+                    Test Library
+                  </h3>
+                  <button
+                    onClick={() => setShowLibraryPopout(true)}
+                    className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+                    title="Open in popout"
+                  >
+                    <Icons.Expand />
+                  </button>
+                </div>
                 <div className="flex items-center gap-2">
                   {selectedTestCaseIds.length > 0 && (
                     <button
@@ -1018,6 +1264,7 @@ export function TestsPage() {
                       onToggleSelection={handleToggleSelection}
                       onSelectAllInCategory={() => dispatch(selectAllInCategory(category))}
                       onDeselectAllInCategory={() => dispatch(deselectAllInCategory(category))}
+                      onOpenPopout={handleOpenPopout}
                     />
                   ))
                 )}
@@ -1051,8 +1298,8 @@ export function TestsPage() {
         </div>
 
         {/* CENTER PANEL - Test Editor/Details */}
-        <div className="col-span-6 flex flex-col overflow-hidden">
-          <Card className="flex-1 flex flex-col min-h-0">
+        <div className="col-span-6 flex flex-col">
+          <Card className="flex-1 flex flex-col">
             {activeTestCase ? (
               <>
                 {/* Test Header */}
@@ -1180,7 +1427,7 @@ export function TestsPage() {
         </div>
 
         {/* RIGHT PANEL - History & Status */}
-        <div className="col-span-3 flex flex-col gap-3 overflow-hidden">
+        <div className="col-span-3 flex flex-col gap-3">
           {/* Pass Rate Trend Chart */}
           <Card className="p-3">
             <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-2 flex items-center gap-2">
@@ -1341,6 +1588,223 @@ export function TestsPage() {
           </Card>
         </div>
       </div>
+
+      {/* Test Detail Popout Modal */}
+      {popoutTestCase && (
+        <TestDetailPopout
+          testCase={popoutTestCase}
+          onClose={handleClosePopout}
+          onEdit={handleEditFromPopout}
+          onRun={handleRunFromPopout}
+        />
+      )}
+
+      {/* Test Library Popout Modal */}
+      {showLibraryPopout && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          onClick={() => setShowLibraryPopout(false)}
+        >
+          <div
+            className="relative w-full max-w-4xl max-h-[85vh] bg-white dark:bg-gray-900 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 overflow-hidden flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
+              <div className="flex items-center gap-3">
+                <h2 className="text-lg font-bold text-gray-900 dark:text-gray-100">
+                  Test Library
+                </h2>
+                <span className="px-2 py-0.5 text-xs font-medium bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-full">
+                  {filteredTestCases.length} tests
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                {selectedTestCaseIds.length > 0 && (
+                  <button
+                    onClick={() => dispatch(clearSelection())}
+                    className="text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                  >
+                    Clear ({selectedTestCaseIds.length})
+                  </button>
+                )}
+                <button
+                  onClick={() => dispatch(selectAll())}
+                  className="text-xs text-primary-600 hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300"
+                >
+                  Select All
+                </button>
+                <button
+                  onClick={() => setShowLibraryPopout(false)}
+                  className="p-1 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                >
+                  <Icons.X />
+                </button>
+              </div>
+            </div>
+
+            {/* Search */}
+            <div className="px-4 py-2 border-b border-gray-200 dark:border-gray-700">
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
+                  <Icons.Search />
+                </div>
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search tests..."
+                  className={clsx(
+                    'block w-full pl-10 pr-3 py-2 text-sm rounded-lg',
+                    'border border-gray-200 dark:border-gray-600',
+                    'bg-white dark:bg-gray-800',
+                    'text-gray-900 dark:text-gray-100',
+                    'placeholder-gray-400',
+                    'focus:ring-2 focus:ring-primary-500 focus:border-transparent'
+                  )}
+                />
+              </div>
+            </div>
+
+            {/* Content - 3 column grid for categories */}
+            <div className="flex-1 overflow-y-auto p-4">
+              <div className="grid grid-cols-3 gap-4">
+                {CATEGORIES.map((category) => {
+                  const categoryTests = testCasesByCategory[category] || [];
+                  const config = CATEGORY_CONFIG[category];
+                  const isCollapsed = collapsedCategories.includes(category);
+                  const allSelected = categoryTests.length > 0 && categoryTests.every(tc => selectedTestCaseIds.includes(String(tc.id)));
+                  const someSelected = categoryTests.some(tc => selectedTestCaseIds.includes(String(tc.id)));
+
+                  return (
+                    <div key={category} className="flex flex-col">
+                      {/* Category Header */}
+                      <div
+                        className={clsx(
+                          'flex items-center justify-between px-3 py-2 rounded-t-lg',
+                          config.colors.bg,
+                          'border',
+                          config.colors.border
+                        )}
+                      >
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={allSelected}
+                            ref={(el) => {
+                              if (el) el.indeterminate = someSelected && !allSelected;
+                            }}
+                            onChange={() => {
+                              if (allSelected) {
+                                dispatch(deselectAllInCategory(category));
+                              } else {
+                                dispatch(selectAllInCategory(category));
+                              }
+                            }}
+                            className="w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-primary-600 focus:ring-primary-500 cursor-pointer"
+                          />
+                          <span className={clsx('text-sm font-semibold', config.colors.text)}>
+                            {config.label}
+                          </span>
+                        </div>
+                        <span className={clsx(
+                          'px-2 py-0.5 text-xs font-bold rounded-full',
+                          config.colors.badge
+                        )}>
+                          {categoryTests.length}
+                        </span>
+                      </div>
+
+                      {/* Category Tests */}
+                      <div className={clsx(
+                        'flex-1 border border-t-0 rounded-b-lg p-2 space-y-2 max-h-[50vh] overflow-y-auto',
+                        'border-gray-200 dark:border-gray-700'
+                      )}>
+                        {categoryTests.map((testCase) => (
+                          <div
+                            key={testCase.id}
+                            onClick={() => {
+                              handleSelectTestCase(String(testCase.id));
+                              setShowLibraryPopout(false);
+                            }}
+                            className={clsx(
+                              'group relative rounded-lg border p-2.5 cursor-pointer transition-all duration-200',
+                              selectedTestCaseId === String(testCase.id)
+                                ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
+                                : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-800/50'
+                            )}
+                          >
+                            <div className={clsx('absolute left-0 top-2 bottom-2 w-1 rounded-r', config.colors.accent)} />
+                            <div className="flex items-start gap-2 pl-2">
+                              <div className="pt-0.5" onClick={(e) => { e.stopPropagation(); handleToggleSelection(String(testCase.id)); }}>
+                                <input
+                                  type="checkbox"
+                                  checked={selectedTestCaseIds.includes(String(testCase.id))}
+                                  onChange={() => {}}
+                                  className="w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-primary-600 focus:ring-primary-500 cursor-pointer"
+                                />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-1.5 mb-1">
+                                  <span className={clsx(
+                                    'inline-flex px-1.5 py-0.5 text-[10px] font-mono font-medium rounded',
+                                    config.colors.badge
+                                  )}>
+                                    {testCase.caseId}
+                                  </span>
+                                </div>
+                                <h4 className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
+                                  {testCase.name || 'Untitled Test'}
+                                </h4>
+                                <p className="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5">
+                                  {testCase.persona?.name || 'No persona'} · {testCase.goals?.length || 0} goals
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                        {categoryTests.length === 0 && (
+                          <div className="text-center text-xs text-gray-400 py-4">
+                            No tests in this category
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
+              <div className="text-sm text-gray-500 dark:text-gray-400">
+                {selectedTestCaseIds.length > 0 ? (
+                  <span>{selectedTestCaseIds.length} tests selected</span>
+                ) : (
+                  <span>Click to view, checkbox to select for batch run</span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant="secondary" onClick={() => setShowLibraryPopout(false)}>
+                  Close
+                </Button>
+                {selectedTestCaseIds.length > 0 && (
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      setShowLibraryPopout(false);
+                      handleStartExecution();
+                    }}
+                  >
+                    <Icons.Play />
+                    Run {selectedTestCaseIds.length} Selected
+                  </Button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

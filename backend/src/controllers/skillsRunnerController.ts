@@ -634,6 +634,148 @@ export async function getSkillFiles(_req: Request, res: Response): Promise<void>
   }
 }
 
+/**
+ * GET /api/skills-runner/skill-files/:filePath(*)
+ * Get full content of a skill file
+ */
+export async function getSkillFileContent(req: Request, res: Response): Promise<void> {
+  try {
+    const fs = await import('fs/promises');
+    const path = await import('path');
+
+    const filePath = req.params.filePath || req.params[0];
+
+    if (!filePath) {
+      res.status(400).json({
+        success: false,
+        error: 'File path is required'
+      });
+      return;
+    }
+
+    const claudeSkillService = getClaudeSkillService();
+    const projectRoot = claudeSkillService.getProjectRoot();
+
+    // Resolve full path
+    const fullPath = path.resolve(projectRoot, filePath);
+
+    // Security: Ensure path is within skills directory
+    const skillsDir = path.resolve(projectRoot, '.claude', 'skills');
+    if (!fullPath.startsWith(skillsDir)) {
+      res.status(403).json({
+        success: false,
+        error: 'Access denied: Path must be within .claude/skills directory'
+      });
+      return;
+    }
+
+    // Check if file exists
+    try {
+      await fs.access(fullPath);
+    } catch {
+      res.status(404).json({
+        success: false,
+        error: `File not found: ${filePath}`
+      });
+      return;
+    }
+
+    // Read file content and stats
+    const [content, stats] = await Promise.all([
+      fs.readFile(fullPath, 'utf-8'),
+      fs.stat(fullPath)
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        path: filePath,
+        content,
+        lastModified: stats.mtime.toISOString(),
+        size: stats.size
+      }
+    });
+  } catch (error) {
+    console.error('Error getting skill file content:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to read skill file'
+    });
+  }
+}
+
+/**
+ * PUT /api/skills-runner/skill-files/:filePath(*)
+ * Save edited skill file content
+ */
+export async function saveSkillFileContent(req: Request, res: Response): Promise<void> {
+  try {
+    const fs = await import('fs/promises');
+    const path = await import('path');
+
+    const filePath = req.params.filePath || req.params[0];
+    const { content } = req.body;
+
+    if (!filePath) {
+      res.status(400).json({
+        success: false,
+        error: 'File path is required'
+      });
+      return;
+    }
+
+    if (typeof content !== 'string') {
+      res.status(400).json({
+        success: false,
+        error: 'Content must be a string'
+      });
+      return;
+    }
+
+    const claudeSkillService = getClaudeSkillService();
+    const projectRoot = claudeSkillService.getProjectRoot();
+
+    // Resolve full path
+    const fullPath = path.resolve(projectRoot, filePath);
+
+    // Security: Ensure path is within skills directory
+    const skillsDir = path.resolve(projectRoot, '.claude', 'skills');
+    if (!fullPath.startsWith(skillsDir)) {
+      res.status(403).json({
+        success: false,
+        error: 'Access denied: Path must be within .claude/skills directory'
+      });
+      return;
+    }
+
+    // Validate content (basic YAML frontmatter check for .md files)
+    if (fullPath.endsWith('.md') && !content.trimStart().startsWith('---')) {
+      res.status(400).json({
+        success: false,
+        error: 'Skill file must start with YAML frontmatter (---)'
+      });
+      return;
+    }
+
+    // Write file
+    await fs.writeFile(fullPath, content, 'utf-8');
+
+    res.json({
+      success: true,
+      data: {
+        path: filePath,
+        savedAt: new Date().toISOString()
+      }
+    });
+  } catch (error) {
+    console.error('Error saving skill file content:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to save skill file'
+    });
+  }
+}
+
 // =============================================================================
 // PLUGIN COMMANDS ENDPOINTS
 // =============================================================================

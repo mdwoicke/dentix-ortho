@@ -1,0 +1,1734 @@
+[
+    {
+        "id": "cloud9-ortho-tab",
+        "type": "tab",
+        "label": "Chord-Cloud9-Ortho-Prd",
+        "disabled": false,
+        "info": "Cloud9 Ortho API Integration Flows - Calls Cloud9 Ortho XML API",
+        "env": [
+            {
+                "name": "cloud9Endpoint",
+                "value": "https://us-ea1-partner.cloud9ortho.com/GetData.ashx",
+                "type": "str"
+            },
+            {
+                "name": "cloud9ClientId",
+                "value": "b42c51be-2529-4d31-92cb-50fd1a58c084",
+                "type": "str"
+            },
+            {
+                "name": "cloud9UserName",
+                "value": "Intelepeer",
+                "type": "str"
+            },
+            {
+                "name": "cloud9Password",
+                "value": "$#1Nt-p33R-AwS#$",
+                "type": "str"
+            },
+            {
+                "name": "cloud9Namespace",
+                "value": "http://schemas.practica.ws/cloud9/partners/",
+                "type": "str"
+            },
+            {
+                "name": "vendorUserName",
+                "value": "Intelepeer",
+                "type": "str"
+            },
+            {
+                "name": "defaultProviderGUID",
+                "value": "a79ec244-9503-44b2-87e4-5920b6e60392",
+                "type": "str"
+            },
+            {
+                "name": "defaultLocationGUID",
+                "value": "799d413a-5e1a-46a2-b169-e2108bf517d6",
+                "type": "str"
+            },
+            {
+                "name": "defaultApptTypeGUID",
+                "value": "f6c20c35-9abb-47c2-981a-342996016705",
+                "type": "str"
+            },
+            {
+                "name": "defaultScheduleViewGUID",
+                "value": "b1946f40-3b0b-4e01-87a9-c5060b88443e",
+                "type": "str"
+            },
+            {
+                "name": "defaultScheduleColumnGUID",
+                "value": "dda0b40c-ace5-4427-8b76-493bf9aa26f1",
+                "type": "str"
+            },
+            {
+                "name": "testPatientGUID",
+                "value": "",
+                "type": "str"
+            }
+        ]
+    },
+    {
+        "id": "grp-ortho-patient-lookup",
+        "type": "group",
+        "z": "cloud9-ortho-tab",
+        "name": "Ortho GetPatientByFilter",
+        "style": {
+            "label": true,
+            "fill": "#3f93cf",
+            "color": "#ffffff"
+        },
+        "nodes": [
+            "http-in-patient-lookup",
+            "func-patient-lookup",
+            "http-out-patient-lookup",
+            "debug-patient-lookup-in",
+            "debug-patient-lookup-out",
+            "inject-patient-lookup",
+            "inject-patient-lookup-phone"
+        ],
+        "x": -26,
+        "y": 79,
+        "w": 1292,
+        "h": 162
+    },
+    {
+        "id": "grp-ortho-get-patient",
+        "type": "group",
+        "z": "cloud9-ortho-tab",
+        "name": "Ortho GetPatient",
+        "style": {
+            "label": true,
+            "fill": "#3f93cf",
+            "color": "#ffffff"
+        },
+        "nodes": [
+            "http-in-get-patient",
+            "func-get-patient",
+            "http-out-get-patient",
+            "debug-get-patient-in",
+            "debug-get-patient-out",
+            "inject-get-patient"
+        ],
+        "x": -46,
+        "y": 279,
+        "w": 1292,
+        "h": 162
+    },
+    {
+        "id": "grp-ortho-create-patient",
+        "type": "group",
+        "z": "cloud9-ortho-tab",
+        "name": "Ortho CreatePatient",
+        "style": {
+            "label": true,
+            "fill": "#0070c0",
+            "color": "#ffffff"
+        },
+        "nodes": [
+            "http-in-create-patient",
+            "func-create-patient",
+            "http-out-create-patient",
+            "debug-create-patient-in",
+            "debug-create-patient-out",
+            "inject-create-patient"
+        ],
+        "x": -16,
+        "y": 479,
+        "w": 1282,
+        "h": 162
+    },
+    {
+        "id": "grp-ortho-patient-appts",
+        "type": "group",
+        "z": "cloud9-ortho-tab",
+        "name": "Ortho GetPatientAppts",
+        "style": {
+            "label": true,
+            "fill": "#c8e7a7",
+            "color": "#777777"
+        },
+        "nodes": [
+            "http-in-patient-appts",
+            "func-patient-appts",
+            "http-out-patient-appts",
+            "debug-patient-appts-in",
+            "debug-patient-appts-out",
+            "inject-patient-appts"
+        ],
+        "x": -26,
+        "y": 679,
+        "w": 1292,
+        "h": 162
+    },
+    {
+        "id": "grp-ortho-get-location",
+        "type": "group",
+        "z": "cloud9-ortho-tab",
+        "name": "Ortho GetLocation",
+        "style": {
+            "label": true,
+            "fill": "#a4a4a4",
+            "color": "#ffffff"
+        },
+        "nodes": [
+            "http-in-get-location",
+            "func-get-location",
+            "http-out-get-location",
+            "debug-get-location-in",
+            "debug-get-location-out",
+            "inject-get-location"
+        ],
+        "x": -26,
+        "y": 879,
+        "w": 1272,
+        "h": 162
+    },
+    {
+        "id": "grp-ortho-edit-insurance",
+        "type": "group",
+        "z": "cloud9-ortho-tab",
+        "name": "Ortho EditInsurance",
+        "style": {
+            "label": true,
+            "fill": "#b797cf",
+            "color": "#ffffff"
+        },
+        "nodes": [
+            "http-in-edit-insurance",
+            "func-edit-insurance",
+            "http-out-edit-insurance",
+            "debug-edit-insurance-in",
+            "debug-edit-insurance-out",
+            "inject-edit-insurance"
+        ],
+        "x": -26,
+        "y": 1079,
+        "w": 1292,
+        "h": 162
+    },
+    {
+        "id": "grp-ortho-confirm-appt",
+        "type": "group",
+        "z": "cloud9-ortho-tab",
+        "name": "Ortho ConfirmAppt",
+        "style": {
+            "label": true,
+            "fill": "#e3f3d3",
+            "color": "#777777"
+        },
+        "nodes": [
+            "http-in-confirm-appt",
+            "func-confirm-appt",
+            "http-out-confirm-appt",
+            "debug-confirm-appt-in",
+            "debug-confirm-appt-out",
+            "inject-confirm-appt"
+        ],
+        "x": -46,
+        "y": 1279,
+        "w": 1302,
+        "h": 162
+    },
+    {
+        "id": "grp-ortho-get-appt-slots",
+        "type": "group",
+        "z": "cloud9-ortho-tab",
+        "name": "Ortho GetApptSlots",
+        "style": {
+            "label": true,
+            "fill": "#addb7b",
+            "color": "#ffffff"
+        },
+        "nodes": [
+            "http-in-get-appt-slots",
+            "func-get-appt-slots",
+            "http-out-get-appt-slots",
+            "debug-get-appt-slots-in",
+            "debug-get-appt-slots-out",
+            "inject-get-appt-slots"
+        ],
+        "x": -36,
+        "y": 1479,
+        "w": 1302,
+        "h": 162
+    },
+    {
+        "id": "grp-ortho-grouped-slots",
+        "type": "group",
+        "z": "cloud9-ortho-tab",
+        "name": "Ortho GetGroupedApptSlots",
+        "style": {
+            "label": true,
+            "fill": "#92d04f",
+            "color": "#ffffff"
+        },
+        "nodes": [
+            "http-in-grouped-slots",
+            "func-grouped-slots",
+            "http-out-grouped-slots",
+            "debug-grouped-slots-in",
+            "debug-grouped-slots-out",
+            "inject-grouped-slots"
+        ],
+        "x": -16,
+        "y": 1679,
+        "w": 1292,
+        "h": 162
+    },
+    {
+        "id": "grp-ortho-create-appt",
+        "type": "group",
+        "z": "cloud9-ortho-tab",
+        "name": "Ortho CreateAppt",
+        "style": {
+            "label": true,
+            "fill": "#e3f3d3",
+            "color": "#777777"
+        },
+        "nodes": [
+            "http-in-create-appt",
+            "func-create-appt",
+            "http-out-create-appt",
+            "debug-create-appt-in",
+            "debug-create-appt-out",
+            "inject-create-appt"
+        ],
+        "x": -66,
+        "y": 1879,
+        "w": 1312,
+        "h": 162
+    },
+    {
+        "id": "grp-ortho-cancel-appt",
+        "type": "group",
+        "z": "cloud9-ortho-tab",
+        "name": "Ortho CancelAppt",
+        "style": {
+            "label": true,
+            "fill": "#e3f3d3",
+            "color": "#777777"
+        },
+        "nodes": [
+            "http-in-cancel-appt",
+            "func-cancel-appt",
+            "http-out-cancel-appt",
+            "debug-cancel-appt-in",
+            "debug-cancel-appt-out",
+            "inject-cancel-appt"
+        ],
+        "x": -36,
+        "y": 2079,
+        "w": 1282,
+        "h": 162
+    },
+    {
+        "id": "inject-patient-lookup",
+        "type": "inject",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-patient-lookup",
+        "name": "Test: Lookup by Name (CLITest)",
+        "props": [
+            {
+                "p": "payload.filter",
+                "v": "CLITest",
+                "vt": "str"
+            },
+            {
+                "p": "payload.locationGUID",
+                "v": "799d413a-5e1a-46a2-b169-e2108bf517d6",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 160,
+        "y": 120,
+        "wires": [
+            [
+                "func-patient-lookup",
+                "debug-patient-lookup-in"
+            ]
+        ]
+    },
+    {
+        "id": "inject-patient-lookup-phone",
+        "type": "inject",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-patient-lookup",
+        "name": "Test: Lookup by Phone (7205559876)",
+        "props": [
+            {
+                "p": "payload.phoneNumber",
+                "v": "7205559876",
+                "vt": "str"
+            },
+            {
+                "p": "payload.locationGUID",
+                "v": "799d413a-5e1a-46a2-b169-e2108bf517d6",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 190,
+        "y": 160,
+        "wires": [
+            [
+                "func-patient-lookup",
+                "debug-patient-lookup-in"
+            ]
+        ]
+    },
+    {
+        "id": "http-in-patient-lookup",
+        "type": "http in",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-patient-lookup",
+        "name": "",
+        "url": "/chord/ortho-prd/getPatientByFilter",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 220,
+        "y": 200,
+        "wires": [
+            [
+                "func-patient-lookup",
+                "debug-patient-lookup-in"
+            ]
+        ]
+    },
+    {
+        "id": "debug-patient-lookup-in",
+        "type": "debug",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-patient-lookup",
+        "name": "Ingress PatientLookup",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 620,
+        "y": 120,
+        "wires": []
+    },
+    {
+        "id": "func-patient-lookup",
+        "type": "function",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-patient-lookup",
+        "name": "getPatientByFilter",
+        "func": "// Ortho Patient Lookup - Uses GetPortalPatientLookup for names, GetPatientInformation for phone\nconst CLOUD9 = {\n    endpoint: env.get('cloud9Endpoint'),\n    clientId: env.get('cloud9ClientId'),\n    userName: env.get('cloud9UserName'),\n    password: env.get('cloud9Password'),\n    namespace: env.get('cloud9Namespace')\n};\n\nfunction escapeXml(str) {\n    if (str === null || str === undefined) return '';\n    return String(str).replace(/[<>&'\"]/g, c => ({'<': '&lt;', '>': '&gt;', '&': '&amp;', \"'\": '&apos;', '\"': '&quot;'}[c]));\n}\n\nfunction buildXmlRequest(procedure, params = {}) {\n    const paramElements = Object.entries(params)\n        .filter(([_, v]) => v !== null && v !== undefined && v !== '')\n        .map(([k, v]) => `<${k}>${escapeXml(v)}</${k}>`)\n        .join('');\n    return `<?xml version=\"1.0\" encoding=\"utf-8\"?><GetDataRequest xmlns=\"${CLOUD9.namespace}\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"><ClientID>${CLOUD9.clientId}</ClientID><UserName>${CLOUD9.userName}</UserName><Password>${escapeXml(CLOUD9.password)}</Password><Procedure>${procedure}</Procedure><Parameters>${paramElements}</Parameters></GetDataRequest>`;\n}\n\nfunction parseXmlResponse(xmlText) {\n    const statusMatch = xmlText.match(/<ResponseStatus>([^<]+)<\\/ResponseStatus>/);\n    const status = statusMatch ? statusMatch[1] : 'Unknown';\n    if (status === 'Error' || status !== 'Success') {\n        const errorMatch = xmlText.match(/<Result>([^<]+)<\\/Result>/);\n        if (errorMatch && (errorMatch[1].includes('Error') || errorMatch[1].includes('error'))) {\n            throw new Error(errorMatch[1]);\n        }\n    }\n    const records = [];\n    const recordRegex = /<Record>([\\s\\S]*?)<\\/Record>/g;\n    let match;\n    while ((match = recordRegex.exec(xmlText)) !== null) {\n        const record = {};\n        const fieldRegex = /<([A-Za-z0-9_]+)>([^<]*)<\\/\\1>/g;\n        let fieldMatch;\n        while ((fieldMatch = fieldRegex.exec(match[1])) !== null) {\n            record[fieldMatch[1]] = fieldMatch[2];\n        }\n        records.push(record);\n    }\n    return { status, records };\n}\n\nasync function callCloud9(procedure, params) {\n    const xmlRequest = buildXmlRequest(procedure, params);\n    const response = await fetch(CLOUD9.endpoint, {\n        method: 'POST',\n        headers: { 'Content-Type': 'application/xml' },\n        body: xmlRequest\n    });\n    if (!response.ok) throw new Error(`HTTP ${response.status}`);\n    return parseXmlResponse(await response.text());\n}\n\nasync function lookupPatient() {\n    try {\n        const phoneNumber = msg.payload.phoneNumber;\n        const filter = msg.payload.filter;\n        const locationGUID = msg.payload.locationGUID;\n        \n        if (!phoneNumber && !filter) {\n            throw new Error('phoneNumber or filter required');\n        }\n        \n        // NAME SEARCH: Use GetPortalPatientLookup\n        if (filter && !phoneNumber) {\n            node.warn('Name search using GetPortalPatientLookup: ' + filter);\n            const parsed = await callCloud9('GetPortalPatientLookup', { filter: filter, lookupByPatient: '1', pageIndex: '1', pageSize: '25' });\n            const patients = parsed.records.map(p => {\n                const firstName = p.PatientFirstName || '';\n                const lastName = p.PatientLastName || '';\n                const fullName = firstName && lastName ? `${firstName} ${lastName}` : (firstName || lastName || '');\n                return {\n                    patientGUID: p.PatientGUID || p.patGUID,\n                    PatientFirstName: firstName,\n                    PatientLastName: lastName,\n                    PatientName: fullName,\n                    patientName: fullName,\n                    PatientID: p.PatientID,\n                    PatientBirthDate: p.PatientBirthDate || p.PatientBirthdate || '',\n                    birthDate: p.PatientBirthDate || p.PatientBirthdate || '',\n                    LocationGUID: p.LocationGUID,\n                    LocationName: p.LocationName\n                };\n            });\n            msg.payload = { patients, count: patients.length };\n            return msg;\n        }\n        \n        // PHONE SEARCH: Get patient list, then get contact info for each in parallel batches\n        if (phoneNumber) {\n            const searchPhone = phoneNumber.replace(/\\D/g, '');\n            node.warn('Phone search: ' + searchPhone + ' - Getting patient list first');\n            \n            const apiParams = {};\n            if (locationGUID) apiParams.LocGUIDs = locationGUID;\n            const listResult = await callCloud9('GetPatientList', apiParams);\n            \n            node.warn('Found ' + listResult.records.length + ' patients, checking phone numbers...');\n            \n            // Process in parallel batches for better performance\n            const matches = [];\n            const batchSize = 10; // Concurrent requests per batch\n            const maxToCheck = Math.min(listResult.records.length, 200); // Increased limit for better coverage\n            \n            for (let batchStart = 0; batchStart < maxToCheck; batchStart += batchSize) {\n                const batchEnd = Math.min(batchStart + batchSize, maxToCheck);\n                const batch = listResult.records.slice(batchStart, batchEnd);\n                \n                // Process batch in parallel\n                const batchPromises = batch.map(async (patient) => {\n                    const patGUID = patient.PatientGUID || patient.patGUID;\n                    if (!patGUID) return null;\n                    \n                    try {\n                        const infoResult = await callCloud9('GetPatientInformation', { patguid: patGUID });\n                        if (infoResult.records.length > 0) {\n                            const info = infoResult.records[0];\n                            const phones = [\n                                info.HomePhone, info.CellPhone, info.WorkPhone,\n                                info.Phone, info.PhoneNumber, info.MobilePhone\n                            ].filter(Boolean).map(p => p.replace(/\\D/g, ''));\n                            \n                            if (phones.some(p => p.includes(searchPhone) || searchPhone.includes(p.slice(-10)))) {\n                                return {\n                                    ...patient,\n                                    patientGUID: patGUID,\n                                    HomePhone: info.HomePhone,\n                                    CellPhone: info.CellPhone,\n                                    WorkPhone: info.WorkPhone,\n                                    Email: info.Email\n                                };\n                            }\n                        }\n                    } catch (e) { /* skip on error */ }\n                    return null;\n                });\n                \n                const batchResults = await Promise.all(batchPromises);\n                matches.push(...batchResults.filter(Boolean));\n                \n                // Stop early if we found matches (optimization for exact phone matches)\n                if (matches.length > 0 && searchPhone.length >= 10) break;\n            }\n            \n            node.warn('Phone search complete. Found ' + matches.length + ' matches (checked ' + maxToCheck + ' patients)');\n            msg.payload = { patients: matches, count: matches.length, searchedCount: maxToCheck, totalPatients: listResult.records.length };\n            return msg;\n        }\n        \n        msg.payload = { patients: [], count: 0 };\n        return msg;\n    } catch (error) {\n        node.error('Patient lookup error: ' + error.message, msg);\n        msg.payload = { error: 'Failed to lookup patient', message: error.message, timestamp: new Date().toISOString() };\n        msg.statusCode = 500;\n        return msg;\n    }\n}\n\nreturn lookupPatient();",
+        "outputs": 1,
+        "timeout": 60,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [
+            {
+                "var": "fetch",
+                "module": "node-fetch"
+            }
+        ],
+        "x": 810,
+        "y": 200,
+        "wires": [
+            [
+                "http-out-patient-lookup",
+                "debug-patient-lookup-out"
+            ]
+        ]
+    },
+    {
+        "id": "debug-patient-lookup-out",
+        "type": "debug",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-patient-lookup",
+        "name": "Egress PatientLookup",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 1120,
+        "y": 120,
+        "wires": []
+    },
+    {
+        "id": "http-out-patient-lookup",
+        "type": "http response",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-patient-lookup",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 1110,
+        "y": 200,
+        "wires": []
+    },
+    {
+        "id": "inject-get-patient",
+        "type": "inject",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-get-patient",
+        "name": "Test: Get Patient (PhoneTest User)",
+        "props": [
+            {
+                "p": "payload.patientGUID",
+                "v": "64DA8F5C-7E54-4659-8AE1-7BB6A033D2A5",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 140,
+        "y": 320,
+        "wires": [
+            [
+                "func-get-patient",
+                "debug-get-patient-in"
+            ]
+        ]
+    },
+    {
+        "id": "http-in-get-patient",
+        "type": "http in",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-get-patient",
+        "name": "",
+        "url": "/chord/ortho-prd/getPatient",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 190,
+        "y": 400,
+        "wires": [
+            [
+                "func-get-patient",
+                "debug-get-patient-in"
+            ]
+        ]
+    },
+    {
+        "id": "debug-get-patient-in",
+        "type": "debug",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-get-patient",
+        "name": "Ingress GetPatient",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 610,
+        "y": 320,
+        "wires": []
+    },
+    {
+        "id": "func-get-patient",
+        "type": "function",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-get-patient",
+        "name": "getPatient",
+        "func": "// Ortho Get Patient - Calls Cloud9 GetPatientInformation\nconst CLOUD9 = {\n    endpoint: env.get('cloud9Endpoint'),\n    clientId: env.get('cloud9ClientId'),\n    userName: env.get('cloud9UserName'),\n    password: env.get('cloud9Password'),\n    namespace: env.get('cloud9Namespace')\n};\n\nfunction escapeXml(str) {\n    if (str === null || str === undefined) return '';\n    return String(str).replace(/[<>&'\"]/g, c => ({'<': '&lt;', '>': '&gt;', '&': '&amp;', \"'\": '&apos;', '\"': '&quot;'}[c]));\n}\n\nfunction buildXmlRequest(procedure, params = {}) {\n    const paramElements = Object.entries(params)\n        .filter(([_, v]) => v !== null && v !== undefined && v !== '')\n        .map(([k, v]) => `<${k}>${escapeXml(v)}</${k}>`)\n        .join('');\n    return `<?xml version=\"1.0\" encoding=\"utf-8\"?><GetDataRequest xmlns=\"${CLOUD9.namespace}\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"><ClientID>${CLOUD9.clientId}</ClientID><UserName>${CLOUD9.userName}</UserName><Password>${escapeXml(CLOUD9.password)}</Password><Procedure>${procedure}</Procedure><Parameters>${paramElements}</Parameters></GetDataRequest>`;\n}\n\nfunction parseXmlResponse(xmlText) {\n    const statusMatch = xmlText.match(/<ResponseStatus>([^<]+)<\\/ResponseStatus>/);\n    const status = statusMatch ? statusMatch[1] : 'Unknown';\n    const records = [];\n    const recordRegex = /<Record>([\\s\\S]*?)<\\/Record>/g;\n    let match;\n    while ((match = recordRegex.exec(xmlText)) !== null) {\n        const record = {};\n        const fieldRegex = /<([A-Za-z0-9_]+)>([^<]*)<\\/\\1>/g;\n        let fieldMatch;\n        while ((fieldMatch = fieldRegex.exec(match[1])) !== null) {\n            record[fieldMatch[1]] = fieldMatch[2];\n        }\n        records.push(record);\n    }\n    return { status, records };\n}\n\nasync function getPatient() {\n    try {\n        const patientGUID = msg.payload.patientGUID;\n        if (!patientGUID) throw new Error('patientGUID required');\n        \n        const xmlRequest = buildXmlRequest('GetPatientInformation', { patguid: patientGUID });\n        node.warn('Calling Cloud9 GetPatientInformation');\n        \n        const response = await fetch(CLOUD9.endpoint, {\n            method: 'POST',\n            headers: { 'Content-Type': 'application/xml' },\n            body: xmlRequest,\n            timeout: 45000\n        });\n        \n        if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);\n        const xmlText = await response.text();\n        const parsed = parseXmlResponse(xmlText);\n        \n        msg.payload = { patient: parsed.records[0] || null };\n        return msg;\n    } catch (error) {\n        node.error('Get patient error: ' + error.message, msg);\n        msg.payload = { error: 'Failed to get patient', message: error.message, timestamp: new Date().toISOString() };\n        msg.statusCode = 500;\n        return msg;\n    }\n}\n\nreturn getPatient();",
+        "outputs": 1,
+        "timeout": 60,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [
+            {
+                "var": "fetch",
+                "module": "node-fetch"
+            }
+        ],
+        "x": 790,
+        "y": 400,
+        "wires": [
+            [
+                "http-out-get-patient",
+                "debug-get-patient-out"
+            ]
+        ]
+    },
+    {
+        "id": "debug-get-patient-out",
+        "type": "debug",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-get-patient",
+        "name": "Egress GetPatient",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 1110,
+        "y": 320,
+        "wires": []
+    },
+    {
+        "id": "http-out-get-patient",
+        "type": "http response",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-get-patient",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 1110,
+        "y": 400,
+        "wires": []
+    },
+    {
+        "id": "inject-create-patient",
+        "type": "inject",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-create-patient",
+        "name": "Test: Create Patient",
+        "props": [
+            {
+                "p": "payload.patientFirstName",
+                "v": "TestJohn",
+                "vt": "str"
+            },
+            {
+                "p": "payload.patientLastName",
+                "v": "TestDoe",
+                "vt": "str"
+            },
+            {
+                "p": "payload.birthdayDateTime",
+                "v": "01/15/2010",
+                "vt": "str"
+            },
+            {
+                "p": "payload.phoneNumber",
+                "v": "3035551234",
+                "vt": "str"
+            },
+            {
+                "p": "payload.emailAddress",
+                "v": "testjohn@example.com",
+                "vt": "str"
+            },
+            {
+                "p": "payload.gender",
+                "v": "M",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 150,
+        "y": 520,
+        "wires": [
+            [
+                "func-create-patient",
+                "debug-create-patient-in"
+            ]
+        ]
+    },
+    {
+        "id": "http-in-create-patient",
+        "type": "http in",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-create-patient",
+        "name": "",
+        "url": "/chord/ortho-prd/createPatient",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 210,
+        "y": 600,
+        "wires": [
+            [
+                "func-create-patient",
+                "debug-create-patient-in"
+            ]
+        ]
+    },
+    {
+        "id": "debug-create-patient-in",
+        "type": "debug",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-create-patient",
+        "name": "Ingress CreatePatient",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 620,
+        "y": 520,
+        "wires": []
+    },
+    {
+        "id": "func-create-patient",
+        "type": "function",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-create-patient",
+        "name": "createPatient",
+        "func": "// Ortho Create Patient - Calls Cloud9 SetPatient\nconst CLOUD9 = {\n    endpoint: env.get('cloud9Endpoint'),\n    clientId: env.get('cloud9ClientId'),\n    userName: env.get('cloud9UserName'),\n    password: env.get('cloud9Password'),\n    namespace: env.get('cloud9Namespace'),\n    vendorUserName: env.get('vendorUserName'),\n    defaultProviderGUID: env.get('defaultProviderGUID'),\n    defaultLocationGUID: env.get('defaultLocationGUID')\n};\n\nfunction escapeXml(str) {\n    if (str === null || str === undefined) return '';\n    return String(str).replace(/[<>&'\"]/g, c => ({'<': '&lt;', '>': '&gt;', '&': '&amp;', \"'\": '&apos;', '\"': '&quot;'}[c]));\n}\n\nfunction buildXmlRequest(procedure, params = {}) {\n    const paramElements = Object.entries(params)\n        .filter(([_, v]) => v !== null && v !== undefined && v !== '')\n        .map(([k, v]) => `<${k}>${escapeXml(v)}</${k}>`)\n        .join('');\n    return `<?xml version=\"1.0\" encoding=\"utf-8\"?><GetDataRequest xmlns=\"${CLOUD9.namespace}\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"><ClientID>${CLOUD9.clientId}</ClientID><UserName>${CLOUD9.userName}</UserName><Password>${escapeXml(CLOUD9.password)}</Password><Procedure>${procedure}</Procedure><Parameters>${paramElements}</Parameters></GetDataRequest>`;\n}\n\nfunction parseXmlResponse(xmlText) {\n    const statusMatch = xmlText.match(/<ResponseStatus>([^<]+)<\\/ResponseStatus>/);\n    const status = statusMatch ? statusMatch[1] : 'Unknown';\n    const records = [];\n    const recordRegex = /<Record>([\\s\\S]*?)<\\/Record>/g;\n    let match;\n    while ((match = recordRegex.exec(xmlText)) !== null) {\n        const record = {};\n        const fieldRegex = /<([A-Za-z0-9_]+)>([^<]*)<\\/\\1>/g;\n        let fieldMatch;\n        while ((fieldMatch = fieldRegex.exec(match[1])) !== null) {\n            record[fieldMatch[1]] = fieldMatch[2];\n        }\n        records.push(record);\n    }\n    return { status, records };\n}\n\nfunction formatBirthdayForCloud9(dateStr) {\n    if (!dateStr) return null;\n    const parts = dateStr.split('/');\n    if (parts.length !== 3) return dateStr;\n    return `${parts[2]}-${parts[0].padStart(2,'0')}-${parts[1].padStart(2,'0')}T00:00:00`;\n}\n\nfunction extractGuidFromResult(result, pattern) {\n    if (!result) return null;\n    const match = result.match(pattern);\n    return match ? match[1] : null;\n}\n\nasync function createPatient() {\n    try {\n        const params = msg.payload;\n        if (!params.patientFirstName) throw new Error('patientFirstName required');\n        if (!params.patientLastName) throw new Error('patientLastName required');\n        \n        const providerGUID = params.providerGUID || CLOUD9.defaultProviderGUID;\n        \n        // Validate locationGUID is a proper GUID format (UUID), otherwise use default\n        // This prevents legacy numeric IDs like '77522' from causing patient creation failures\n        let locationGUID = CLOUD9.defaultLocationGUID;\n        if (params.locationGUID && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(params.locationGUID)) {\n            locationGUID = params.locationGUID;\n        } else if (params.locationGUID) {\n            node.warn(`Invalid locationGUID format \"${params.locationGUID}\", using default: ${CLOUD9.defaultLocationGUID}`);\n        }\n        \n        node.warn(`Using providerGUID: ${providerGUID}`);\n        node.warn(`Using locationGUID: ${locationGUID}`);\n        \n        const apiParams = {\n            patientFirstName: params.patientFirstName,\n            patientLastName: params.patientLastName,\n            providerGUID: providerGUID,\n            locationGUID: locationGUID,\n            VendorUserName: CLOUD9.vendorUserName\n        };\n        \n        if (params.birthdayDateTime) apiParams.birthdayDateTime = formatBirthdayForCloud9(params.birthdayDateTime);\n        if (params.phoneNumber) apiParams.phoneNumber = params.phoneNumber;\n        if (params.emailAddress) apiParams.email = params.emailAddress;\n        if (params.gender) apiParams.gender = params.gender;\n        \n        const xmlRequest = buildXmlRequest('SetPatient', apiParams);\n        node.warn('Calling Cloud9 SetPatient');\n        \n        const response = await fetch(CLOUD9.endpoint, {\n            method: 'POST',\n            headers: { 'Content-Type': 'application/xml' },\n            body: xmlRequest,\n            timeout: 45000\n        });\n        \n        if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);\n        const xmlText = await response.text();\n        const parsed = parseXmlResponse(xmlText);\n        \n        const createResult = parsed.records[0]?.Result || '';\n        const patientGUID = extractGuidFromResult(createResult, /Patient Added:\\s*([A-Fa-f0-9-]+)/i);\n        const patientCreated = createResult.includes('Added');\n        \n        // LLM Guidance\n        const llmGuidance = {\n            current_state: patientCreated ? \"EXECUTE_BOOKING\" : \"PATIENT_CREATE_FAILED\",\n            next_action: patientCreated ? \"call_book_child_immediately\" : \"transfer_to_agent\",\n            critical_instruction: patientCreated\n                ? \"Patient created successfully. You MUST now IMMEDIATELY call schedule_appointment_dso with action=book_child using this patientGUID. Do NOT say 'Let me check' or 'One moment'. Do NOT respond to caller until booking is complete.\"\n                : \"Patient creation failed. Transfer to live agent.\",\n            patientGUID_for_booking: patientGUID,\n            prohibited_responses: [\"Let me check on that\", \"One moment while I look into this\", \"I'm verifying\", \"Let me confirm\"],\n            booking_sequence: \"After patient create -> IMMEDIATELY call book_child -> THEN confirm to caller\"\n        };\n        \n        msg.payload = {\n            success: patientCreated,\n            patientGUID: patientGUID,\n            message: createResult,\n            llm_guidance: llmGuidance\n        };\n        \n        node.warn(`Patient created: ${patientGUID}`);\n        return msg;\n    } catch (error) {\n        node.error('Create patient error: ' + error.message, msg);\n        msg.payload = { error: 'Failed to create patient', message: error.message, timestamp: new Date().toISOString() };\n        msg.statusCode = 500;\n        return msg;\n    }\n}\n\nreturn createPatient();",
+        "outputs": 1,
+        "timeout": 60,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [
+            {
+                "var": "fetch",
+                "module": "node-fetch"
+            }
+        ],
+        "x": 800,
+        "y": 600,
+        "wires": [
+            [
+                "http-out-create-patient",
+                "debug-create-patient-out"
+            ]
+        ]
+    },
+    {
+        "id": "debug-create-patient-out",
+        "type": "debug",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-create-patient",
+        "name": "Egress CreatePatient",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 1120,
+        "y": 520,
+        "wires": []
+    },
+    {
+        "id": "http-out-create-patient",
+        "type": "http response",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-create-patient",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 1110,
+        "y": 600,
+        "wires": []
+    },
+    {
+        "id": "inject-patient-appts",
+        "type": "inject",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-patient-appts",
+        "name": "Test: Get Patient Appts (PhoneTest)",
+        "props": [
+            {
+                "p": "payload.patientGUID",
+                "v": "64DA8F5C-7E54-4659-8AE1-7BB6A033D2A5",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 160,
+        "y": 720,
+        "wires": [
+            [
+                "func-patient-appts",
+                "debug-patient-appts-in"
+            ]
+        ]
+    },
+    {
+        "id": "http-in-patient-appts",
+        "type": "http in",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-patient-appts",
+        "name": "",
+        "url": "/chord/ortho-prd/getPatientAppts",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 220,
+        "y": 800,
+        "wires": [
+            [
+                "func-patient-appts",
+                "debug-patient-appts-in"
+            ]
+        ]
+    },
+    {
+        "id": "debug-patient-appts-in",
+        "type": "debug",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-patient-appts",
+        "name": "Ingress PatientAppts",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 630,
+        "y": 720,
+        "wires": []
+    },
+    {
+        "id": "func-patient-appts",
+        "type": "function",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-patient-appts",
+        "name": "getPatientAppts",
+        "func": "// Ortho Get Patient Appointments - Calls Cloud9 GetAppointmentListByPatient\nconst CLOUD9 = {\n    endpoint: env.get('cloud9Endpoint'),\n    clientId: env.get('cloud9ClientId'),\n    userName: env.get('cloud9UserName'),\n    password: env.get('cloud9Password'),\n    namespace: env.get('cloud9Namespace')\n};\n\nfunction escapeXml(str) {\n    if (str === null || str === undefined) return '';\n    return String(str).replace(/[<>&'\"]/g, c => ({'<': '&lt;', '>': '&gt;', '&': '&amp;', \"'\": '&apos;', '\"': '&quot;'}[c]));\n}\n\nfunction buildXmlRequest(procedure, params = {}) {\n    const paramElements = Object.entries(params)\n        .filter(([_, v]) => v !== null && v !== undefined && v !== '')\n        .map(([k, v]) => `<${k}>${escapeXml(v)}</${k}>`)\n        .join('');\n    return `<?xml version=\"1.0\" encoding=\"utf-8\"?><GetDataRequest xmlns=\"${CLOUD9.namespace}\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"><ClientID>${CLOUD9.clientId}</ClientID><UserName>${CLOUD9.userName}</UserName><Password>${escapeXml(CLOUD9.password)}</Password><Procedure>${procedure}</Procedure><Parameters>${paramElements}</Parameters></GetDataRequest>`;\n}\n\nfunction parseXmlResponse(xmlText) {\n    const statusMatch = xmlText.match(/<ResponseStatus>([^<]+)<\\/ResponseStatus>/);\n    const status = statusMatch ? statusMatch[1] : 'Unknown';\n    const records = [];\n    const recordRegex = /<Record>([\\s\\S]*?)<\\/Record>/g;\n    let match;\n    while ((match = recordRegex.exec(xmlText)) !== null) {\n        const record = {};\n        const fieldRegex = /<([A-Za-z0-9_]+)>([^<]*)<\\/\\1>/g;\n        let fieldMatch;\n        while ((fieldMatch = fieldRegex.exec(match[1])) !== null) {\n            record[fieldMatch[1]] = fieldMatch[2];\n        }\n        records.push(record);\n    }\n    return { status, records };\n}\n\nasync function getPatientAppts() {\n    try {\n        const patientGUID = msg.payload.patientGUID;\n        if (!patientGUID) throw new Error('patientGUID required');\n        \n        const xmlRequest = buildXmlRequest('GetAppointmentListByPatient', { patGUID: patientGUID });\n        node.warn('Calling Cloud9 GetAppointmentListByPatient');\n        \n        const response = await fetch(CLOUD9.endpoint, {\n            method: 'POST',\n            headers: { 'Content-Type': 'application/xml' },\n            body: xmlRequest,\n            timeout: 45000\n        });\n        \n        if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);\n        const xmlText = await response.text();\n        const parsed = parseXmlResponse(xmlText);\n        \n        const appointments = parsed.records.map(a => ({\n            ...a,\n            // Map to frontend-expected field names\n            StartTime: a.AppointmentDateTime,\n            AppointmentDate: a.AppointmentDateTime,\n            AppointmentType: a.AppointmentTypeDescription,\n            Status: a.AppointmentStatusDescription,\n            GUID: a.AppointmentGUID,\n            patientName: `${a.PatientFirstName || ''} ${a.PatientLastName || ''}`.trim()\n        }));\n        msg.payload = { appointments, count: appointments.length };\n        return msg;\n    } catch (error) {\n        node.error('Get patient appts error: ' + error.message, msg);\n        msg.payload = { error: 'Failed to get patient appointments', message: error.message, timestamp: new Date().toISOString() };\n        msg.statusCode = 500;\n        return msg;\n    }\n}\n\nreturn getPatientAppts();",
+        "outputs": 1,
+        "timeout": 60,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [
+            {
+                "var": "fetch",
+                "module": "node-fetch"
+            }
+        ],
+        "x": 810,
+        "y": 800,
+        "wires": [
+            [
+                "http-out-patient-appts",
+                "debug-patient-appts-out"
+            ]
+        ]
+    },
+    {
+        "id": "debug-patient-appts-out",
+        "type": "debug",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-patient-appts",
+        "name": "Egress PatientAppts",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 1120,
+        "y": 720,
+        "wires": []
+    },
+    {
+        "id": "http-out-patient-appts",
+        "type": "http response",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-patient-appts",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 1110,
+        "y": 800,
+        "wires": []
+    },
+    {
+        "id": "inject-get-location",
+        "type": "inject",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-get-location",
+        "name": "Test: Get Locations",
+        "props": [
+            {
+                "p": "payload.locationGUID",
+                "v": "799d413a-5e1a-46a2-b169-e2108bf517d6",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 150,
+        "y": 920,
+        "wires": [
+            [
+                "func-get-location",
+                "debug-get-location-in"
+            ]
+        ]
+    },
+    {
+        "id": "http-in-get-location",
+        "type": "http in",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-get-location",
+        "name": "",
+        "url": "/chord/ortho-prd/getLocation",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 200,
+        "y": 1000,
+        "wires": [
+            [
+                "func-get-location",
+                "debug-get-location-in"
+            ]
+        ]
+    },
+    {
+        "id": "debug-get-location-in",
+        "type": "debug",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-get-location",
+        "name": "Ingress GetLocation",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 620,
+        "y": 920,
+        "wires": []
+    },
+    {
+        "id": "func-get-location",
+        "type": "function",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-get-location",
+        "name": "getLocation",
+        "func": "// Ortho Get Location - Calls Cloud9 GetLocations\nconst CLOUD9 = {\n    endpoint: env.get('cloud9Endpoint'),\n    clientId: env.get('cloud9ClientId'),\n    userName: env.get('cloud9UserName'),\n    password: env.get('cloud9Password'),\n    namespace: env.get('cloud9Namespace')\n};\n\nfunction escapeXml(str) {\n    if (str === null || str === undefined) return '';\n    return String(str).replace(/[<>&'\"]/g, c => ({'<': '&lt;', '>': '&gt;', '&': '&amp;', \"'\": '&apos;', '\"': '&quot;'}[c]));\n}\n\nfunction buildXmlRequest(procedure, params = {}) {\n    const paramElements = Object.entries(params)\n        .filter(([_, v]) => v !== null && v !== undefined && v !== '')\n        .map(([k, v]) => `<${k}>${escapeXml(v)}</${k}>`)\n        .join('');\n    return `<?xml version=\"1.0\" encoding=\"utf-8\"?><GetDataRequest xmlns=\"${CLOUD9.namespace}\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"><ClientID>${CLOUD9.clientId}</ClientID><UserName>${CLOUD9.userName}</UserName><Password>${escapeXml(CLOUD9.password)}</Password><Procedure>${procedure}</Procedure><Parameters>${paramElements}</Parameters></GetDataRequest>`;\n}\n\nfunction parseXmlResponse(xmlText) {\n    const statusMatch = xmlText.match(/<ResponseStatus>([^<]+)<\\/ResponseStatus>/);\n    const status = statusMatch ? statusMatch[1] : 'Unknown';\n    const records = [];\n    const recordRegex = /<Record>([\\s\\S]*?)<\\/Record>/g;\n    let match;\n    while ((match = recordRegex.exec(xmlText)) !== null) {\n        const record = {};\n        const fieldRegex = /<([A-Za-z0-9_]+)>([^<]*)<\\/\\1>/g;\n        let fieldMatch;\n        while ((fieldMatch = fieldRegex.exec(match[1])) !== null) {\n            record[fieldMatch[1]] = fieldMatch[2];\n        }\n        records.push(record);\n    }\n    return { status, records };\n}\n\nasync function getLocation() {\n    try {\n        const locationGUID = msg.payload.locationGUID;\n        \n        const xmlRequest = buildXmlRequest('GetLocations', {});\n        node.warn('Calling Cloud9 GetLocations');\n        \n        const response = await fetch(CLOUD9.endpoint, {\n            method: 'POST',\n            headers: { 'Content-Type': 'application/xml' },\n            body: xmlRequest,\n            timeout: 45000\n        });\n        \n        if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);\n        const xmlText = await response.text();\n        const parsed = parseXmlResponse(xmlText);\n        \n        const locations = parsed.records;\n        let result;\n        \n        if (locationGUID) {\n            const match = locations.find(l => l.LocationGUID && l.LocationGUID.toLowerCase() === locationGUID.toLowerCase());\n            if (match) {\n                result = { success: true, location: match, matchType: 'guid' };\n            }\n        }\n        \n        if (!result) {\n            result = { success: true, locations: locations, count: locations.length, location: locations[0] || null };\n        }\n        \n        msg.payload = result;\n        return msg;\n    } catch (error) {\n        node.error('Get location error: ' + error.message, msg);\n        msg.payload = { error: 'Failed to get location', message: error.message, timestamp: new Date().toISOString() };\n        msg.statusCode = 500;\n        return msg;\n    }\n}\n\nreturn getLocation();",
+        "outputs": 1,
+        "timeout": 60,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [
+            {
+                "var": "fetch",
+                "module": "node-fetch"
+            }
+        ],
+        "x": 800,
+        "y": 1000,
+        "wires": [
+            [
+                "http-out-get-location",
+                "debug-get-location-out"
+            ]
+        ]
+    },
+    {
+        "id": "debug-get-location-out",
+        "type": "debug",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-get-location",
+        "name": "Egress GetLocation",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 1110,
+        "y": 920,
+        "wires": []
+    },
+    {
+        "id": "http-out-get-location",
+        "type": "http response",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-get-location",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 1110,
+        "y": 1000,
+        "wires": []
+    },
+    {
+        "id": "inject-edit-insurance",
+        "type": "inject",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-edit-insurance",
+        "name": "Test: Edit Insurance (PhoneTest)",
+        "props": [
+            {
+                "p": "payload.patientGUID",
+                "v": "64DA8F5C-7E54-4659-8AE1-7BB6A033D2A5",
+                "vt": "str"
+            },
+            {
+                "p": "payload.insuranceProvider",
+                "v": "Blue Cross Blue Shield",
+                "vt": "str"
+            },
+            {
+                "p": "payload.insuranceGroupId",
+                "v": "GRP12345",
+                "vt": "str"
+            },
+            {
+                "p": "payload.insuranceMemberId",
+                "v": "MEM67890",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 150,
+        "y": 1120,
+        "wires": [
+            [
+                "func-edit-insurance",
+                "debug-edit-insurance-in"
+            ]
+        ]
+    },
+    {
+        "id": "http-in-edit-insurance",
+        "type": "http in",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-edit-insurance",
+        "name": "",
+        "url": "/chord/ortho-prd/editInsurance",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 210,
+        "y": 1200,
+        "wires": [
+            [
+                "func-edit-insurance",
+                "debug-edit-insurance-in"
+            ]
+        ]
+    },
+    {
+        "id": "debug-edit-insurance-in",
+        "type": "debug",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-edit-insurance",
+        "name": "Ingress EditInsurance",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 630,
+        "y": 1120,
+        "wires": []
+    },
+    {
+        "id": "func-edit-insurance",
+        "type": "function",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-edit-insurance",
+        "name": "editInsurance",
+        "func": "// Ortho Edit Insurance - Calls Cloud9 SetPatientComment\nconst CLOUD9 = {\n    endpoint: env.get('cloud9Endpoint'),\n    clientId: env.get('cloud9ClientId'),\n    userName: env.get('cloud9UserName'),\n    password: env.get('cloud9Password'),\n    namespace: env.get('cloud9Namespace')\n};\n\nfunction escapeXml(str) {\n    if (str === null || str === undefined) return '';\n    return String(str).replace(/[<>&'\"]/g, c => ({'<': '&lt;', '>': '&gt;', '&': '&amp;', \"'\": '&apos;', '\"': '&quot;'}[c]));\n}\n\nfunction buildXmlRequest(procedure, params = {}) {\n    const paramElements = Object.entries(params)\n        .filter(([_, v]) => v !== null && v !== undefined && v !== '')\n        .map(([k, v]) => `<${k}>${escapeXml(v)}</${k}>`)\n        .join('');\n    return `<?xml version=\"1.0\" encoding=\"utf-8\"?><GetDataRequest xmlns=\"${CLOUD9.namespace}\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"><ClientID>${CLOUD9.clientId}</ClientID><UserName>${CLOUD9.userName}</UserName><Password>${escapeXml(CLOUD9.password)}</Password><Procedure>${procedure}</Procedure><Parameters>${paramElements}</Parameters></GetDataRequest>`;\n}\n\nfunction parseXmlResponse(xmlText) {\n    const statusMatch = xmlText.match(/<ResponseStatus>([^<]+)<\\/ResponseStatus>/);\n    const status = statusMatch ? statusMatch[1] : 'Unknown';\n    const records = [];\n    const recordRegex = /<Record>([\\s\\S]*?)<\\/Record>/g;\n    let match;\n    while ((match = recordRegex.exec(xmlText)) !== null) {\n        const record = {};\n        const fieldRegex = /<([A-Za-z0-9_]+)>([^<]*)<\\/\\1>/g;\n        let fieldMatch;\n        while ((fieldMatch = fieldRegex.exec(match[1])) !== null) {\n            record[fieldMatch[1]] = fieldMatch[2];\n        }\n        records.push(record);\n    }\n    return { status, records };\n}\n\nasync function editInsurance() {\n    try {\n        const params = msg.payload;\n        if (!params.patientGUID) throw new Error('patientGUID required');\n        \n        const insuranceNote = `=== Insurance Information ==\\nProvider: ${params.insuranceProvider || 'N/A'}\\nGroup ID: ${params.insuranceGroupId || 'N/A'}\\nMember ID: ${params.insuranceMemberId || 'N/A'}\\nUpdated: ${new Date().toISOString()}`;\n        \n        const xmlRequest = buildXmlRequest('SetPatientComment', { \n            patGUID: params.patientGUID, \n            patComment: insuranceNote \n        });\n        node.warn('Calling Cloud9 SetPatientComment');\n        \n        const response = await fetch(CLOUD9.endpoint, {\n            method: 'POST',\n            headers: { 'Content-Type': 'application/xml' },\n            body: xmlRequest,\n            timeout: 45000\n        });\n        \n        if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);\n        const xmlText = await response.text();\n        const parsed = parseXmlResponse(xmlText);\n        \n        const updateResult = parsed.records[0]?.Result || 'Insurance info saved';\n        msg.payload = { success: !updateResult.toLowerCase().includes('error'), message: updateResult };\n        return msg;\n    } catch (error) {\n        node.error('Edit insurance error: ' + error.message, msg);\n        msg.payload = { error: 'Failed to edit insurance', message: error.message, timestamp: new Date().toISOString() };\n        msg.statusCode = 500;\n        return msg;\n    }\n}\n\nreturn editInsurance();",
+        "outputs": 1,
+        "timeout": 60,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [
+            {
+                "var": "fetch",
+                "module": "node-fetch"
+            }
+        ],
+        "x": 800,
+        "y": 1200,
+        "wires": [
+            [
+                "http-out-edit-insurance",
+                "debug-edit-insurance-out"
+            ]
+        ]
+    },
+    {
+        "id": "debug-edit-insurance-out",
+        "type": "debug",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-edit-insurance",
+        "name": "Egress EditInsurance",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 1120,
+        "y": 1120,
+        "wires": []
+    },
+    {
+        "id": "http-out-edit-insurance",
+        "type": "http response",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-edit-insurance",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 1110,
+        "y": 1200,
+        "wires": []
+    },
+    {
+        "id": "inject-confirm-appt",
+        "type": "inject",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-confirm-appt",
+        "name": "Test: Confirm Appt (needs real GUID)",
+        "props": [
+            {
+                "p": "payload.appointmentId",
+                "v": "GET_FROM_CREATE_APPT_RESPONSE",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 150,
+        "y": 1320,
+        "wires": [
+            [
+                "func-confirm-appt",
+                "debug-confirm-appt-in"
+            ]
+        ]
+    },
+    {
+        "id": "http-in-confirm-appt",
+        "type": "http in",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-confirm-appt",
+        "name": "",
+        "url": "/chord/ortho-prd/confirmAppt",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 200,
+        "y": 1400,
+        "wires": [
+            [
+                "func-confirm-appt",
+                "debug-confirm-appt-in"
+            ]
+        ]
+    },
+    {
+        "id": "debug-confirm-appt-in",
+        "type": "debug",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-confirm-appt",
+        "name": "Ingress ConfirmAppt",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 620,
+        "y": 1320,
+        "wires": []
+    },
+    {
+        "id": "func-confirm-appt",
+        "type": "function",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-confirm-appt",
+        "name": "confirmAppt",
+        "func": "// Ortho Confirm Appointment - Calls Cloud9 SetAppointmentStatusConfirmed\nconst CLOUD9 = {\n    endpoint: env.get('cloud9Endpoint'),\n    clientId: env.get('cloud9ClientId'),\n    userName: env.get('cloud9UserName'),\n    password: env.get('cloud9Password'),\n    namespace: env.get('cloud9Namespace')\n};\n\nfunction escapeXml(str) {\n    if (str === null || str === undefined) return '';\n    return String(str).replace(/[<>&'\"]/g, c => ({'<': '&lt;', '>': '&gt;', '&': '&amp;', \"'\": '&apos;', '\"': '&quot;'}[c]));\n}\n\nfunction buildXmlRequest(procedure, params = {}) {\n    const paramElements = Object.entries(params)\n        .filter(([_, v]) => v !== null && v !== undefined && v !== '')\n        .map(([k, v]) => `<${k}>${escapeXml(v)}</${k}>`)\n        .join('');\n    return `<?xml version=\"1.0\" encoding=\"utf-8\"?><GetDataRequest xmlns=\"${CLOUD9.namespace}\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"><ClientID>${CLOUD9.clientId}</ClientID><UserName>${CLOUD9.userName}</UserName><Password>${escapeXml(CLOUD9.password)}</Password><Procedure>${procedure}</Procedure><Parameters>${paramElements}</Parameters></GetDataRequest>`;\n}\n\nfunction parseXmlResponse(xmlText) {\n    const statusMatch = xmlText.match(/<ResponseStatus>([^<]+)<\\/ResponseStatus>/);\n    const status = statusMatch ? statusMatch[1] : 'Unknown';\n    const records = [];\n    const recordRegex = /<Record>([\\s\\S]*?)<\\/Record>/g;\n    let match;\n    while ((match = recordRegex.exec(xmlText)) !== null) {\n        const record = {};\n        const fieldRegex = /<([A-Za-z0-9_]+)>([^<]*)<\\/\\1>/g;\n        let fieldMatch;\n        while ((fieldMatch = fieldRegex.exec(match[1])) !== null) {\n            record[fieldMatch[1]] = fieldMatch[2];\n        }\n        records.push(record);\n    }\n    return { status, records };\n}\n\nasync function confirmAppt() {\n    try {\n        const appointmentId = msg.payload.appointmentId;\n        if (!appointmentId) throw new Error('appointmentId required');\n        \n        const xmlRequest = buildXmlRequest('SetAppointmentStatusConfirmed', { apptGUID: appointmentId });\n        node.warn('Calling Cloud9 SetAppointmentStatusConfirmed');\n        \n        const response = await fetch(CLOUD9.endpoint, {\n            method: 'POST',\n            headers: { 'Content-Type': 'application/xml' },\n            body: xmlRequest,\n            timeout: 45000\n        });\n        \n        if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);\n        const xmlText = await response.text();\n        const parsed = parseXmlResponse(xmlText);\n        \n        const confirmResult = parsed.records[0]?.Result || 'Appointment confirmed';\n        msg.payload = { success: !confirmResult.toLowerCase().includes('error'), message: confirmResult };\n        return msg;\n    } catch (error) {\n        node.error('Confirm appt error: ' + error.message, msg);\n        msg.payload = { error: 'Failed to confirm appointment', message: error.message, timestamp: new Date().toISOString() };\n        msg.statusCode = 500;\n        return msg;\n    }\n}\n\nreturn confirmAppt();",
+        "outputs": 1,
+        "timeout": 60,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [
+            {
+                "var": "fetch",
+                "module": "node-fetch"
+            }
+        ],
+        "x": 800,
+        "y": 1400,
+        "wires": [
+            [
+                "http-out-confirm-appt",
+                "debug-confirm-appt-out"
+            ]
+        ]
+    },
+    {
+        "id": "debug-confirm-appt-out",
+        "type": "debug",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-confirm-appt",
+        "name": "Egress ConfirmAppt",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 1110,
+        "y": 1320,
+        "wires": []
+    },
+    {
+        "id": "http-out-confirm-appt",
+        "type": "http response",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-confirm-appt",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 1110,
+        "y": 1400,
+        "wires": []
+    },
+    {
+        "id": "inject-get-appt-slots",
+        "type": "inject",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-get-appt-slots",
+        "name": "Test: Get Appt Slots (Next 14 Days)",
+        "props": [
+            {
+                "p": "payload.startDate",
+                "v": "",
+                "vt": "str"
+            },
+            {
+                "p": "payload.endDate",
+                "v": "",
+                "vt": "str"
+            },
+            {
+                "p": "payload.scheduleViewGUIDs",
+                "v": "defaultScheduleViewGUID",
+                "vt": "env"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 150,
+        "y": 1520,
+        "wires": [
+            [
+                "func-get-appt-slots",
+                "debug-get-appt-slots-in"
+            ]
+        ]
+    },
+    {
+        "id": "http-in-get-appt-slots",
+        "type": "http in",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-get-appt-slots",
+        "name": "",
+        "url": "/chord/ortho-prd/getApptSlots",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 210,
+        "y": 1600,
+        "wires": [
+            [
+                "func-get-appt-slots",
+                "debug-get-appt-slots-in"
+            ]
+        ]
+    },
+    {
+        "id": "debug-get-appt-slots-in",
+        "type": "debug",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-get-appt-slots",
+        "name": "Ingress GetApptSlots",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 630,
+        "y": 1520,
+        "wires": []
+    },
+    {
+        "id": "func-get-appt-slots",
+        "type": "function",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-get-appt-slots",
+        "name": "getApptSlots",
+        "func": "// Ortho Get Appointment Slots - Calls Cloud9 GetOnlineReservations with stepwise search\nconst CLOUD9 = {\n    endpoint: env.get('cloud9Endpoint'),\n    clientId: env.get('cloud9ClientId'),\n    userName: env.get('cloud9UserName'),\n    password: env.get('cloud9Password'),\n    namespace: env.get('cloud9Namespace'),\n    defaultApptTypeGUID: env.get('defaultApptTypeGUID')\n};\n\nconst STEPWISE_CONFIG = {\n    maxAttempts: 2,\n    expansionDays: 10,\n    maxRangeDays: 196,\n    requestTimeoutMs: 25000\n};\n\nconst VOICE_TEMPLATES = {\n    slotOffer: (time, day, date) => `I have ${time} available on ${day}. Would that work?`,\n    noSlotsExpanding: \"Let me check a few more dates.\",\n    transferOnFailure: \"I want to connect you with a specialist who can assist you.\"\n};\n\nconst CONFIRMATION_PATTERNS = {\n    affirmative: ['yes', 'yeah', 'yep', 'yup', 'sure', 'okay', 'ok', 'alright', 'that works', 'works for me', 'perfect', 'sounds good'],\n    negative: ['no', 'nope', 'not that', 'different', 'another', 'other times'],\n    goodbye: ['that\\'s all', 'that\\'s it', 'no thanks', 'i\\'m good', 'goodbye', 'bye']\n};\n\nfunction escapeXml(str) {\n    if (str === null || str === undefined) return '';\n    return String(str).replace(/[<>&'\"]/g, c => ({'<': '&lt;', '>': '&gt;', '&': '&amp;', \"'\": '&apos;', '\"': '&quot;'}[c]));\n}\n\nfunction buildXmlRequest(procedure, params = {}) {\n    const paramElements = Object.entries(params)\n        .filter(([_, v]) => v !== null && v !== undefined && v !== '')\n        .map(([k, v]) => `<${k}>${escapeXml(v)}</${k}>`)\n        .join('');\n    return `<?xml version=\"1.0\" encoding=\"utf-8\"?><GetDataRequest xmlns=\"${CLOUD9.namespace}\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"><ClientID>${CLOUD9.clientId}</ClientID><UserName>${CLOUD9.userName}</UserName><Password>${escapeXml(CLOUD9.password)}</Password><Procedure>${procedure}</Procedure><Parameters>${paramElements}</Parameters></GetDataRequest>`;\n}\n\nfunction parseXmlResponse(xmlText) {\n    const statusMatch = xmlText.match(/<ResponseStatus>([^<]+)<\\/ResponseStatus>/);\n    const status = statusMatch ? statusMatch[1] : 'Unknown';\n    const records = [];\n    const recordRegex = /<Record>([\\s\\S]*?)<\\/Record>/g;\n    let match;\n    while ((match = recordRegex.exec(xmlText)) !== null) {\n        const record = {};\n        const fieldRegex = /<([A-Za-z0-9_]+)>([^<]*)<\\/\\1>/g;\n        let fieldMatch;\n        while ((fieldMatch = fieldRegex.exec(match[1])) !== null) {\n            record[fieldMatch[1]] = fieldMatch[2];\n        }\n        records.push(record);\n    }\n    return { status, records };\n}\n\nfunction formatDate(d) {\n    const month = (d.getMonth() + 1).toString().padStart(2, '0');\n    const day = d.getDate().toString().padStart(2, '0');\n    return `${month}/${day}/${d.getFullYear()}`;\n}\n\nfunction parseDate(dateStr) {\n    const parts = dateStr.split('/');\n    if (parts.length === 3) return new Date(parseInt(parts[2]), parseInt(parts[0]) - 1, parseInt(parts[1]));\n    return new Date(dateStr);\n}\n\nfunction addDays(dateStr, days) {\n    const date = parseDate(dateStr);\n    date.setDate(date.getDate() + days);\n    return formatDate(date);\n}\n\nfunction getDayName(dateStr) {\n    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];\n    return days[parseDate(dateStr).getDay()];\n}\n\nfunction formatSlotForVoice(slot) {\n    const date = slot.StartTime.split(' ')[0];\n    const time = slot.StartTime.split(' ').slice(1).join(' ');\n    return { time: time, date: date, day: getDayName(date), raw: slot };\n}\n\nfunction validateAndCorrectDates(startDateStr, endDateStr) {\n    const today = new Date();\n    today.setHours(0, 0, 0, 0);\n    const tomorrow = new Date(today);\n    tomorrow.setDate(tomorrow.getDate() + 1);\n\n    let correctedStart = startDateStr;\n    let wasDateCorrected = false;\n\n    if (startDateStr) {\n        const startDate = parseDate(startDateStr);\n        startDate.setHours(0, 0, 0, 0);\n        if (startDate < today) {\n            correctedStart = formatDate(tomorrow);\n            wasDateCorrected = true;\n        }\n    }\n\n    let correctedEnd = endDateStr;\n    if (endDateStr && correctedStart) {\n        const endDate = parseDate(endDateStr);\n        const startDate = parseDate(correctedStart);\n        if (endDate <= startDate) {\n            const newEnd = new Date(startDate);\n            newEnd.setDate(newEnd.getDate() + 14);\n            correctedEnd = formatDate(newEnd);\n        }\n    }\n\n    return { startDate: correctedStart, endDate: correctedEnd, wasDateCorrected };\n}\n\nfunction createLlmGuidance(scenario, context = {}) {\n    const baseGuidance = {\n        timestamp: new Date().toISOString(),\n        confirmation_triggers: CONFIRMATION_PATTERNS.affirmative,\n        goodbye_triggers: CONFIRMATION_PATTERNS.goodbye,\n        prohibited_responses: [\"Let me check on that\", \"One moment while I look into this\", \"I'm verifying\", \"sorry\", \"unfortunately\", \"error\", \"problem\"]\n    };\n\n    switch (scenario) {\n        case 'slots_found':\n            return {\n                ...baseGuidance,\n                current_state: \"SCHEDULING\",\n                next_state: \"SCHEDULING\",\n                action_required: \"offer_time_to_caller\",\n                voice_response: VOICE_TEMPLATES.slotOffer(context.firstSlot?.time, context.firstSlot?.day, context.firstSlot?.date),\n                chain_of_action: [\n                    \"1. Speak the time offer to caller\",\n                    \"2. Wait for response\",\n                    \"3. If affirmative → call chord_dso_patient action=create\",\n                    \"4. Then IMMEDIATELY call book_child with patientGUID\",\n                    \"5. Confirm booking to caller\"\n                ],\n                on_user_confirms: { action: \"PROCEED_TO_BOOKING\", do_not_say: \"Would you like to book?\", do_say: \"Perfect! Let me get that booked.\" },\n                on_user_declines: { action: \"OFFER_ALTERNATIVE\", do_say: \"No problem. How about [next slot]?\" }\n            };\n        case 'slots_not_found':\n            return {\n                ...baseGuidance,\n                current_state: \"SCHEDULING\",\n                next_state: context.attempts < 3 ? \"SCHEDULING\" : \"TRANSFER\",\n                action_required: context.attempts < 3 ? \"expand_and_retry\" : \"transfer_to_agent\",\n                voice_response: context.attempts < 3 ? VOICE_TEMPLATES.noSlotsExpanding : VOICE_TEMPLATES.transferOnFailure\n            };\n        default:\n            return baseGuidance;\n    }\n}\n\nasync function searchSlotsWithExpansion(startDate, endDate, scheduleViewGUIDs) {\n    let currentEndDate = endDate;\n    let attempt = 0;\n\n    while (attempt < STEPWISE_CONFIG.maxAttempts) {\n        attempt++;\n        node.warn(`Slot search attempt ${attempt}: ${startDate} to ${currentEndDate}`);\n\n        try {\n            const apiParams = {\n                startDate: `${startDate} 7:00:00 AM`,\n                endDate: `${currentEndDate} 5:00:00 PM`,\n                morning: 'True',\n                afternoon: 'True',\n                appttypGUIDs: CLOUD9.defaultApptTypeGUID\n            };\n            if (scheduleViewGUIDs) apiParams.schdvwGUIDs = scheduleViewGUIDs;\n            const xmlRequest = buildXmlRequest('GetOnlineReservations', apiParams);\n\n            const response = await fetch(CLOUD9.endpoint, {\n                method: 'POST',\n                headers: { 'Content-Type': 'application/xml' },\n                body: xmlRequest,\n                timeout: STEPWISE_CONFIG.requestTimeoutMs\n            });\n\n            if (!response.ok) throw new Error(`HTTP ${response.status}`);\n            const xmlText = await response.text();\n            const parsed = parseXmlResponse(xmlText);\n\n            if (parsed.records.length > 0) {\n                return {\n                    success: true,\n                    records: parsed.records,\n                    attempts: attempt,\n                    expanded: attempt > 1,\n                    searchRange: { startDate, endDate: currentEndDate }\n                };\n            }\n\n            currentEndDate = addDays(currentEndDate, STEPWISE_CONFIG.expansionDays);\n        } catch (error) {\n            node.error(`Slot search error on attempt ${attempt}: ${error.message}`);\n            const isTimeout = ['timeout', 'ETIMEDOUT', 'ECONNRESET'].some(e => error.message.toLowerCase().includes(e.toLowerCase()));\n            return {\n                success: false,\n                records: [],\n                attempts: attempt,\n                errorType: isTimeout ? 'timeout' : 'api_error',\n                shouldTransfer: true\n            };\n        }\n    }\n\n    return { success: false, records: [], attempts: attempt, shouldTransfer: attempt >= STEPWISE_CONFIG.maxAttempts };\n}\n\nasync function getApptSlots() {\n    try {\n        const params = msg.payload;\n        const dates = validateAndCorrectDates(\n            params.startDate || formatDate(new Date(Date.now() + 86400000)),\n            params.endDate || formatDate(new Date(Date.now() + 15 * 86400000))\n        );\n\n        const result = await searchSlotsWithExpansion(dates.startDate, dates.endDate, params.scheduleViewGUIDs);\n\n        if (result.success && result.records.length > 0) {\n            // Inject default appointmentTypeGUID if empty (Cloud9 sandbox returns empty)\n            // FIX: Normalize ALL field names to camelCase for LLM consistency\n            const DEFAULT_APPT_TYPE_GUID = 'f6c20c35-9abb-47c2-981a-342996016705';\n            const enrichedSlots = result.records.map(slot => ({\n                ...slot,\n                // CRITICAL: Add camelCase aliases for booking-critical fields\n                scheduleViewGUID: slot.ScheduleViewGUID || slot.scheduleViewGUID,\n                scheduleColumnGUID: slot.ScheduleColumnGUID || slot.scheduleColumnGUID,\n                startTime: slot.StartTime || slot.startTime,\n                minutes: slot.Minutes || slot.minutes || '45',\n                appointmentTypeGUID: slot.AppointmentTypeGUID || slot.appointmentTypeGUID || CLOUD9.defaultApptTypeGUID || DEFAULT_APPT_TYPE_GUID,\n                // Keep original PascalCase for backwards compatibility\n                ScheduleViewGUID: slot.ScheduleViewGUID || slot.scheduleViewGUID,\n                ScheduleColumnGUID: slot.ScheduleColumnGUID || slot.scheduleColumnGUID,\n                AppointmentTypeGUID: slot.AppointmentTypeGUID || slot.appointmentTypeGUID || CLOUD9.defaultApptTypeGUID || DEFAULT_APPT_TYPE_GUID\n            }));\n            const voiceSlots = enrichedSlots.slice(0, 5).map(formatSlotForVoice);\n            const firstSlot = voiceSlots[0];\n\n            msg.payload = {\n                slots: enrichedSlots,\n                count: result.records.length,\n                voiceSlots: voiceSlots,\n                searchRange: result.searchRange,\n                attempts: result.attempts,\n                expanded: result.expanded,\n                llm_guidance: createLlmGuidance('slots_found', { firstSlot })\n            };\n        } else if (result.shouldTransfer || result.errorType) {\n            msg.payload = {\n                slots: [],\n                count: 0,\n                attempts: result.attempts,\n                llm_guidance: {\n                    ...createLlmGuidance('slots_not_found', { attempts: STEPWISE_CONFIG.maxAttempts }),\n                    action_required: \"transfer_to_agent\",\n                    voice_response: \"I want to connect you with a specialist who can assist you. One moment while I transfer your call.\",\n                    transfer_reason: result.errorType || \"no_slots_after_retries\",\n                    CRITICAL: \"Do NOT mention error, timeout, or technical problems. Transfer gracefully without explanation.\",\n                    prohibited_responses: [\"error\", \"timeout\", \"problem\", \"issue\", \"technical\", \"system\", \"down\", \"difficulties\", \"went wrong\"]\n                }\n            };\n        } else {\n            msg.payload = {\n                slots: [],\n                count: 0,\n                attempts: result.attempts,\n                llm_guidance: createLlmGuidance('slots_not_found', { attempts: result.attempts })\n            };\n        }\n\n        return msg;\n    } catch (error) {\n        node.error('Get appt slots error: ' + error.message, msg);\n        msg.payload = { error: 'Failed to get appointment slots', message: error.message, timestamp: new Date().toISOString() };\n        msg.statusCode = 500;\n        return msg;\n    }\n}\n\nreturn getApptSlots();",
+        "outputs": 1,
+        "timeout": 120,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [
+            {
+                "var": "fetch",
+                "module": "node-fetch"
+            }
+        ],
+        "x": 800,
+        "y": 1600,
+        "wires": [
+            [
+                "http-out-get-appt-slots",
+                "debug-get-appt-slots-out"
+            ]
+        ]
+    },
+    {
+        "id": "debug-get-appt-slots-out",
+        "type": "debug",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-get-appt-slots",
+        "name": "Egress GetApptSlots",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 1120,
+        "y": 1520,
+        "wires": []
+    },
+    {
+        "id": "http-out-get-appt-slots",
+        "type": "http response",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-get-appt-slots",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 1110,
+        "y": 1600,
+        "wires": []
+    },
+    {
+        "id": "inject-grouped-slots",
+        "type": "inject",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-grouped-slots",
+        "name": "Test: Grouped Slots (2 kids)",
+        "props": [
+            {
+                "p": "payload.numberOfPatients",
+                "v": "2",
+                "vt": "num"
+            },
+            {
+                "p": "payload.timeWindowMinutes",
+                "v": "30",
+                "vt": "num"
+            },
+            {
+                "p": "payload.scheduleViewGUIDs",
+                "v": "defaultScheduleViewGUID",
+                "vt": "env"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 180,
+        "y": 1720,
+        "wires": [
+            [
+                "func-grouped-slots",
+                "debug-grouped-slots-in"
+            ]
+        ]
+    },
+    {
+        "id": "http-in-grouped-slots",
+        "type": "http in",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-grouped-slots",
+        "name": "",
+        "url": "/chord/ortho-prd/getGroupedApptSlots",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 240,
+        "y": 1800,
+        "wires": [
+            [
+                "func-grouped-slots",
+                "debug-grouped-slots-in"
+            ]
+        ]
+    },
+    {
+        "id": "debug-grouped-slots-in",
+        "type": "debug",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-grouped-slots",
+        "name": "Ingress GroupedSlots",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 650,
+        "y": 1720,
+        "wires": []
+    },
+    {
+        "id": "func-grouped-slots",
+        "type": "function",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-grouped-slots",
+        "name": "getGroupedApptSlots",
+        "func": "// Ortho Get Grouped Appointment Slots - For sibling booking\nconst CLOUD9 = {\n    endpoint: env.get('cloud9Endpoint'),\n    clientId: env.get('cloud9ClientId'),\n    userName: env.get('cloud9UserName'),\n    password: env.get('cloud9Password'),\n    namespace: env.get('cloud9Namespace'),\n    defaultApptTypeGUID: env.get('defaultApptTypeGUID')\n};\n\nfunction escapeXml(str) {\n    if (str === null || str === undefined) return '';\n    return String(str).replace(/[<>&'\"]/g, c => ({'<': '&lt;', '>': '&gt;', '&': '&amp;', \"'\": '&apos;', '\"': '&quot;'}[c]));\n}\n\nfunction buildXmlRequest(procedure, params = {}) {\n    const paramElements = Object.entries(params)\n        .filter(([_, v]) => v !== null && v !== undefined && v !== '')\n        .map(([k, v]) => `<${k}>${escapeXml(v)}</${k}>`)\n        .join('');\n    return `<?xml version=\"1.0\" encoding=\"utf-8\"?><GetDataRequest xmlns=\"${CLOUD9.namespace}\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"><ClientID>${CLOUD9.clientId}</ClientID><UserName>${CLOUD9.userName}</UserName><Password>${escapeXml(CLOUD9.password)}</Password><Procedure>${procedure}</Procedure><Parameters>${paramElements}</Parameters></GetDataRequest>`;\n}\n\nfunction parseXmlResponse(xmlText) {\n    const statusMatch = xmlText.match(/<ResponseStatus>([^<]+)<\\/ResponseStatus>/);\n    const status = statusMatch ? statusMatch[1] : 'Unknown';\n    const records = [];\n    const recordRegex = /<Record>([\\s\\S]*?)<\\/Record>/g;\n    let match;\n    while ((match = recordRegex.exec(xmlText)) !== null) {\n        const record = {};\n        const fieldRegex = /<([A-Za-z0-9_]+)>([^<]*)<\\/\\1>/g;\n        let fieldMatch;\n        while ((fieldMatch = fieldRegex.exec(match[1])) !== null) {\n            record[fieldMatch[1]] = fieldMatch[2];\n        }\n        records.push(record);\n    }\n    return { status, records };\n}\n\nfunction formatDate(d) {\n    const month = (d.getMonth() + 1).toString().padStart(2, '0');\n    const day = d.getDate().toString().padStart(2, '0');\n    return `${month}/${day}/${d.getFullYear()}`;\n}\n\nfunction parseDate(dateStr) {\n    const parts = dateStr.split('/');\n    if (parts.length === 3) return new Date(parseInt(parts[2]), parseInt(parts[0]) - 1, parseInt(parts[1]));\n    return new Date(dateStr);\n}\n\nfunction getDayName(dateStr) {\n    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];\n    return days[parseDate(dateStr).getDay()];\n}\n\nfunction groupConsecutiveSlots(slots, numberOfPatients, timeWindowMinutes) {\n    const groups = [];\n    const sortedSlots = [...slots].sort((a, b) => new Date(a.StartTime) - new Date(b.StartTime));\n\n    for (let i = 0; i <= sortedSlots.length - numberOfPatients; i++) {\n        const group = [sortedSlots[i]];\n        let lastEndTime = new Date(sortedSlots[i].StartTime);\n        lastEndTime.setMinutes(lastEndTime.getMinutes() + parseInt(sortedSlots[i].Minutes || 45));\n\n        for (let j = i + 1; j < sortedSlots.length && group.length < numberOfPatients; j++) {\n            const nextStart = new Date(sortedSlots[j].StartTime);\n            const timeDiff = (nextStart - lastEndTime) / 60000;\n\n            if (timeDiff >= 0 && timeDiff <= timeWindowMinutes) {\n                group.push(sortedSlots[j]);\n                lastEndTime = new Date(sortedSlots[j].StartTime);\n                lastEndTime.setMinutes(lastEndTime.getMinutes() + parseInt(sortedSlots[j].Minutes || 45));\n            }\n        }\n\n        if (group.length === numberOfPatients) {\n            const date = group[0].StartTime.split(' ')[0];\n            groups.push({\n                slots: group,\n                date: date,\n                day: getDayName(date),\n                times: group.map(s => s.StartTime.split(' ').slice(1).join(' '))\n            });\n        }\n    }\n\n    return groups;\n}\n\nasync function getGroupedSlots() {\n    try {\n        const params = msg.payload;\n        const numberOfPatients = parseInt(params.numberOfPatients) || 2;\n        const timeWindowMinutes = parseInt(params.timeWindowMinutes) || 30;\n\n        const startDate = params.startDate || formatDate(new Date(Date.now() + 86400000));\n        const endDate = params.endDate || formatDate(new Date(Date.now() + 15 * 86400000));\n\n        const apiParams = {\n            startDate: `${startDate} 7:00:00 AM`,\n            endDate: `${endDate} 5:00:00 PM`,\n            morning: 'True',\n            afternoon: 'True',\n            appttypGUIDs: CLOUD9.defaultApptTypeGUID\n        };\n        if (params.scheduleViewGUIDs) apiParams.schdvwGUIDs = params.scheduleViewGUIDs;\n        const xmlRequest = buildXmlRequest('GetOnlineReservations', apiParams);\n\n        node.warn('Calling Cloud9 GetOnlineReservations for grouped slots');\n\n        const response = await fetch(CLOUD9.endpoint, {\n            method: 'POST',\n            headers: { 'Content-Type': 'application/xml' },\n            body: xmlRequest,\n            timeout: 60000\n        });\n\n        if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);\n        const xmlText = await response.text();\n        const parsed = parseXmlResponse(xmlText);\n\n        const groups = groupConsecutiveSlots(parsed.records, numberOfPatients, timeWindowMinutes);\n\n        // Inject default appointmentTypeGUID if empty (Cloud9 sandbox returns empty)\n        // FIX: Normalize ALL field names to camelCase for LLM consistency\n        const DEFAULT_APPT_TYPE_GUID = 'f6c20c35-9abb-47c2-981a-342996016705';\n        const enrichedGroups = groups.map(group => ({\n            ...group,\n            slots: group.slots.map(slot => ({\n                ...slot,\n                // CRITICAL: Add camelCase aliases for booking-critical fields\n                scheduleViewGUID: slot.ScheduleViewGUID || slot.scheduleViewGUID,\n                scheduleColumnGUID: slot.ScheduleColumnGUID || slot.scheduleColumnGUID,\n                startTime: slot.StartTime || slot.startTime,\n                minutes: slot.Minutes || slot.minutes || '45',\n                appointmentTypeGUID: slot.AppointmentTypeGUID || slot.appointmentTypeGUID || CLOUD9.defaultApptTypeGUID || DEFAULT_APPT_TYPE_GUID,\n                // Keep original PascalCase for backwards compatibility\n                ScheduleViewGUID: slot.ScheduleViewGUID || slot.scheduleViewGUID,\n                ScheduleColumnGUID: slot.ScheduleColumnGUID || slot.scheduleColumnGUID,\n                AppointmentTypeGUID: slot.AppointmentTypeGUID || slot.appointmentTypeGUID || CLOUD9.defaultApptTypeGUID || DEFAULT_APPT_TYPE_GUID\n            }))\n        }));\n\n        msg.payload = {\n            groups: enrichedGroups.slice(0, 10),\n            totalGroups: groups.length,\n            numberOfPatients: numberOfPatients,\n            timeWindowMinutes: timeWindowMinutes,\n            searchRange: { startDate, endDate },\n            llm_guidance: {\n                current_state: 'SCHEDULING',\n                action_required: groups.length > 0 ? 'offer_grouped_times_to_caller' : 'expand_search_or_transfer',\n                on_user_confirms: { action: 'PROCEED_TO_BOOKING', do_not_say: 'Would you like to book?', do_say: 'Perfect! Let me get those appointments booked.' }\n            }\n        };\n\n        return msg;\n    } catch (error) {\n        node.error('Get grouped slots error: ' + error.message, msg);\n        const isTimeout = ['timeout', 'ETIMEDOUT', 'ECONNRESET'].some(e => error.message.toLowerCase().includes(e.toLowerCase()));\n        msg.payload = {\n            groups: [],\n            totalGroups: 0,\n            error: true,\n            llm_guidance: {\n                current_state: 'SCHEDULING',\n                next_state: 'TRANSFER',\n                action_required: 'transfer_to_agent',\n                voice_response: 'I want to connect you with a specialist who can assist you. One moment while I transfer your call.',\n                transfer_reason: isTimeout ? 'timeout' : 'api_error',\n                CRITICAL: 'Do NOT mention error, timeout, or technical problems. Transfer gracefully without explanation.',\n                prohibited_responses: ['error', 'timeout', 'problem', 'issue', 'technical', 'system', 'down', 'difficulties', 'went wrong']\n            }\n        };\n        msg.statusCode = 500;\n        return msg;\n    }\n}\n\nreturn getGroupedSlots();",
+        "outputs": 1,
+        "timeout": 120,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [
+            {
+                "var": "fetch",
+                "module": "node-fetch"
+            }
+        ],
+        "x": 820,
+        "y": 1800,
+        "wires": [
+            [
+                "http-out-grouped-slots",
+                "debug-grouped-slots-out"
+            ]
+        ]
+    },
+    {
+        "id": "debug-grouped-slots-out",
+        "type": "debug",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-grouped-slots",
+        "name": "Egress GroupedSlots",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 1130,
+        "y": 1720,
+        "wires": []
+    },
+    {
+        "id": "http-out-grouped-slots",
+        "type": "http response",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-grouped-slots",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 1110,
+        "y": 1800,
+        "wires": []
+    },
+    {
+        "id": "inject-create-appt",
+        "type": "inject",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-create-appt",
+        "name": "Test: Book Appt (update GUIDs from slots)",
+        "props": [
+            {
+                "p": "payload.patientGUID",
+                "v": "64DA8F5C-7E54-4659-8AE1-7BB6A033D2A5",
+                "vt": "str"
+            },
+            {
+                "p": "payload.startTime",
+                "v": "01/15/2025 9:00 AM",
+                "vt": "str"
+            },
+            {
+                "p": "payload.scheduleViewGUID",
+                "v": "defaultScheduleViewGUID",
+                "vt": "env"
+            },
+            {
+                "p": "payload.scheduleColumnGUID",
+                "v": "defaultScheduleColumnGUID",
+                "vt": "env"
+            },
+            {
+                "p": "payload.minutes",
+                "v": "45",
+                "vt": "num"
+            },
+            {
+                "p": "payload.childName",
+                "v": "PhoneTest",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 140,
+        "y": 1920,
+        "wires": [
+            [
+                "func-create-appt",
+                "debug-create-appt-in"
+            ]
+        ]
+    },
+    {
+        "id": "http-in-create-appt",
+        "type": "http in",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-create-appt",
+        "name": "",
+        "url": "/chord/ortho-prd/createAppt",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 200,
+        "y": 2000,
+        "wires": [
+            [
+                "func-create-appt",
+                "debug-create-appt-in"
+            ]
+        ]
+    },
+    {
+        "id": "debug-create-appt-in",
+        "type": "debug",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-create-appt",
+        "name": "Ingress CreateAppt",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 620,
+        "y": 1920,
+        "wires": []
+    },
+    {
+        "id": "func-create-appt",
+        "type": "function",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-create-appt",
+        "name": "createAppt",
+        "func": "// Ortho Create Appointment - Calls Cloud9 SetAppointment\n// v2: Enhanced error logging to expose actual Cloud9 error messages\nconst CLOUD9 = {\n    endpoint: env.get('cloud9Endpoint'),\n    clientId: env.get('cloud9ClientId'),\n    userName: env.get('cloud9UserName'),\n    password: env.get('cloud9Password'),\n    namespace: env.get('cloud9Namespace'),\n    vendorUserName: env.get('vendorUserName'),\n    defaultApptTypeGUID: env.get('defaultApptTypeGUID')\n};\n\nconst VOICE_TEMPLATES = {\n    bookingConfirmed: (childName, day, date, time) =>\n        `Your appointment is confirmed! ${childName}, ${day} ${date} at ${time}.`,\n    transferOnFailure: \"I want to connect you with a specialist who can assist you.\"\n};\n\n// Error type detection for better debugging\nconst ERROR_PATTERNS = {\n    PATIENT_NOT_FOUND: /patient.*guid.*does not exist/i,\n    SLOT_NOT_AVAILABLE: /slot.*not available|time.*not available|already.*booked/i,\n    INVALID_SCHEDULE_VIEW: /schedule.*view.*invalid|schedule.*view.*not found/i,\n    INVALID_SCHEDULE_COLUMN: /schedule.*column.*invalid|column.*not found/i,\n    INVALID_APPT_TYPE: /appointment.*type.*invalid/i,\n    AUTHORIZATION_ERROR: /not authorized|authorization/i\n};\n\nfunction detectErrorType(resultMessage) {\n    for (const [errorType, pattern] of Object.entries(ERROR_PATTERNS)) {\n        if (pattern.test(resultMessage)) return errorType;\n    }\n    return resultMessage.toLowerCase().includes('error') ? 'CLOUD9_ERROR' : 'UNKNOWN';\n}\n\nfunction escapeXml(str) {\n    if (str === null || str === undefined) return '';\n    return String(str).replace(/[<>&'\"]/g, c => ({'<': '&lt;', '>': '&gt;', '&': '&amp;', \"'\": '&apos;', '\"': '&quot;'}[c]));\n}\n\nfunction buildXmlRequest(procedure, params = {}) {\n    const paramElements = Object.entries(params)\n        .filter(([_, v]) => v !== null && v !== undefined && v !== '')\n        .map(([k, v]) => `<${k}>${escapeXml(v)}</${k}>`)\n        .join('');\n    return `<?xml version=\"1.0\" encoding=\"utf-8\"?><GetDataRequest xmlns=\"${CLOUD9.namespace}\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"><ClientID>${CLOUD9.clientId}</ClientID><UserName>${CLOUD9.userName}</UserName><Password>${escapeXml(CLOUD9.password)}</Password><Procedure>${procedure}</Procedure><Parameters>${paramElements}</Parameters></GetDataRequest>`;\n}\n\nfunction parseXmlResponse(xmlText) {\n    const statusMatch = xmlText.match(/<ResponseStatus>([^<]+)<\\/ResponseStatus>/);\n    const status = statusMatch ? statusMatch[1] : 'Unknown';\n    const errorMatch = xmlText.match(/<ErrorMessage>([^<]+)<\\/ErrorMessage>/);\n    const errorMessage = errorMatch ? errorMatch[1] : null;\n    const records = [];\n    const recordRegex = /<Record>([\\s\\S]*?)<\\/Record>/g;\n    let match;\n    while ((match = recordRegex.exec(xmlText)) !== null) {\n        const record = {};\n        const fieldRegex = /<([A-Za-z0-9_]+)>([^<]*)<\\/\\1>/g;\n        let fieldMatch;\n        while ((fieldMatch = fieldRegex.exec(match[1])) !== null) {\n            record[fieldMatch[1]] = fieldMatch[2];\n        }\n        records.push(record);\n    }\n    return { status, errorMessage, records };\n}\n\nfunction parseDate(dateStr) {\n    const parts = dateStr.split('/');\n    if (parts.length === 3) return new Date(parseInt(parts[2]), parseInt(parts[0]) - 1, parseInt(parts[1]));\n    return new Date(dateStr);\n}\n\nfunction getDayName(dateStr) {\n    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];\n    return days[parseDate(dateStr).getDay()];\n}\n\nfunction createLlmGuidance(scenario, context = {}) {\n    const baseGuidance = {\n        timestamp: new Date().toISOString(),\n        prohibited_responses: [\"Let me check on that\", \"One moment while I look into this\", \"I'm verifying\", \"sorry\", \"unfortunately\", \"error\", \"problem\"]\n    };\n\n    switch (scenario) {\n        case 'booking_success':\n            return {\n                ...baseGuidance,\n                current_state: \"CONFIRMATION\",\n                next_state: \"CONFIRMATION\",\n                action_required: \"confirm_booking_to_caller\",\n                voice_response: VOICE_TEMPLATES.bookingConfirmed(context.childName, context.day, context.date, context.time),\n                required_keywords: [\"scheduled\", \"booked\", \"confirmed\", \"all set\"],\n                chain_of_action: [\n                    \"1. Confirm booking with enthusiasm\",\n                    \"2. State child name, day, date, time, location\",\n                    \"3. Ask 'Would you like the address?'\",\n                    \"4. Mention legal guardian requirement\",\n                    \"5. Ask 'Anything else?'\"\n                ],\n                never_do: [\"Ask for re-confirmation\", \"Say 'Let me verify'\", \"Delay the confirmation\"]\n            };\n        case 'booking_failed':\n            return {\n                ...baseGuidance,\n                current_state: \"SCHEDULING\",\n                next_state: context.canRetry ? \"SCHEDULING\" : \"TRANSFER\",\n                action_required: context.canRetry ? \"offer_alternative_slot\" : \"transfer_to_agent\",\n                voice_response: context.canRetry ? \"That time isn't available. How about [alternative]?\" : VOICE_TEMPLATES.transferOnFailure\n            };\n        case 'patient_not_found':\n            return {\n                ...baseGuidance,\n                current_state: \"SCHEDULING\",\n                next_state: \"SCHEDULING\",\n                action_required: \"recreate_patient_then_retry\",\n                voice_response: \"Let me verify your information.\",\n                CRITICAL: \"Patient does not exist in Cloud9. You MUST call chord_dso_patient action=create BEFORE booking.\",\n                recovery_steps: [\"1. Call chord_dso_patient with action=create\", \"2. Use returned patientGUID\", \"3. Retry book_child with new patientGUID\"]\n            };\n        case 'missing_slot_data':\n            return {\n                ...baseGuidance,\n                current_state: \"TRANSFER\",\n                next_state: \"TRANSFER\",\n                action_required: \"transfer_to_agent\",\n                transfer_reason: \"missing_scheduling_data\",\n                voice_response: VOICE_TEMPLATES.transferOnFailure\n            };\n        default:\n            return baseGuidance;\n    }\n}\n\nasync function createAppt() {\n    const requestTimestamp = new Date().toISOString();\n    try {\n        const params = msg.payload;\n        \n        // Enhanced input validation with debugging\n        const missingFields = [];\n        if (!params.patientGUID) missingFields.push('patientGUID');\n        if (!params.startTime) missingFields.push('startTime');\n        if (!params.scheduleViewGUID) missingFields.push('scheduleViewGUID');\n        if (!params.scheduleColumnGUID) missingFields.push('scheduleColumnGUID');\n        \n        if (missingFields.length > 0) {\n            const errorMsg = `Missing required fields: ${missingFields.join(', ')}`;\n            node.warn('CreateAppt validation failed: ' + errorMsg);\n            msg.payload = {\n                success: false,\n                message: errorMsg,\n                _debug: {\n                    error_type: 'VALIDATION_ERROR',\n                    missing_fields: missingFields,\n                    received_params: {\n                        patientGUID: params.patientGUID ? params.patientGUID.substring(0, 8) + '...' : null,\n                        startTime: params.startTime,\n                        scheduleViewGUID: params.scheduleViewGUID ? 'present' : null,\n                        scheduleColumnGUID: params.scheduleColumnGUID ? 'present' : null\n                    },\n                    timestamp: requestTimestamp\n                },\n                llm_guidance: createLlmGuidance('missing_slot_data')\n            };\n            return msg;\n        }\n\n        const xmlRequest = buildXmlRequest('SetAppointment', {\n            PatientGUID: params.patientGUID,\n            StartTime: params.startTime,\n            ScheduleViewGUID: params.scheduleViewGUID,\n            ScheduleColumnGUID: params.scheduleColumnGUID,\n            AppointmentTypeGUID: params.appointmentTypeGUID || CLOUD9.defaultApptTypeGUID || 'f6c20c35-9abb-47c2-981a-342996016705',\n            Minutes: String(params.minutes || 45),\n            VendorUserName: CLOUD9.vendorUserName\n        });\n\n        node.warn('Calling Cloud9 SetAppointment for patient: ' + params.patientGUID.substring(0, 8) + '...');\n\n        const response = await fetch(CLOUD9.endpoint, {\n            method: 'POST',\n            headers: { 'Content-Type': 'application/xml' },\n            body: xmlRequest,\n            timeout: 45000\n        });\n\n        if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);\n        const xmlText = await response.text();\n        const parsed = parseXmlResponse(xmlText);\n\n        const result = parsed.records[0]?.Result || '';\n        const apptGUID = result.match(/Appointment GUID Added:\\s*([A-Fa-f0-9-]+)/i)?.[1];\n        const success = result.includes('Added');\n        const errorType = success ? null : detectErrorType(result);\n\n        const timeParts = params.startTime.split(' ');\n        const date = timeParts[0];\n        const time = timeParts.slice(1).join(' ');\n\n        // Log the actual Cloud9 response for debugging\n        if (!success) {\n            node.warn(`CreateAppt FAILED - Cloud9 Result: ${result || '(empty)'} | ErrorType: ${errorType}`);\n        }\n\n        // Determine appropriate guidance based on error type\n        let guidance;\n        if (success) {\n            guidance = createLlmGuidance('booking_success', {\n                childName: params.childName || 'your child',\n                date: date,\n                time: time,\n                day: getDayName(date)\n            });\n        } else if (errorType === 'PATIENT_NOT_FOUND') {\n            guidance = createLlmGuidance('patient_not_found', { canRetry: true });\n        } else {\n            guidance = createLlmGuidance('booking_failed', {\n                childName: params.childName || 'your child',\n                date: date,\n                time: time,\n                day: getDayName(date),\n                canRetry: errorType === 'SLOT_NOT_AVAILABLE'\n            });\n        }\n\n        msg.payload = {\n            success: success,\n            appointmentGUID: apptGUID,\n            message: result,\n            _debug: {\n                cloud9_result: result,\n                cloud9_status: parsed.status,\n                cloud9_error_message: parsed.errorMessage,\n                error_type: errorType,\n                request_params: {\n                    patientGUID: params.patientGUID,\n                    startTime: params.startTime,\n                    scheduleViewGUID: params.scheduleViewGUID,\n                    scheduleColumnGUID: params.scheduleColumnGUID\n                },\n                timestamp: requestTimestamp,\n                response_timestamp: new Date().toISOString()\n            },\n            llm_guidance: guidance\n        };\n\n        return msg;\n    } catch (error) {\n        node.error('Create appt error: ' + error.message, msg);\n        const isTimeout = ['timeout', 'ETIMEDOUT', 'ECONNRESET'].some(e => error.message.toLowerCase().includes(e.toLowerCase()));\n        \n        msg.payload = {\n            success: false,\n            message: error.message,\n            _debug: {\n                error_type: isTimeout ? 'TIMEOUT' : 'EXCEPTION',\n                error_message: error.message,\n                timestamp: requestTimestamp\n            },\n            llm_guidance: {\n                ...createLlmGuidance('booking_failed', { canRetry: false }),\n                error_type: isTimeout ? 'timeout' : 'api_error',\n                voice_response: \"I want to connect you with a specialist who can assist you. One moment while I transfer your call.\",\n                action_required: \"transfer_to_agent\",\n                transfer_reason: isTimeout ? \"scheduling_timeout\" : \"api_failure\",\n                CRITICAL: \"Do NOT mention error, timeout, or system problems to caller. Transfer gracefully.\",\n                prohibited_responses: [\"error\", \"timeout\", \"problem\", \"issue\", \"failed\", \"system is down\", \"technical difficulties\", \"something went wrong\"]\n            }\n        };\n        return msg;\n    }\n}\n\nreturn createAppt();",
+        "outputs": 1,
+        "timeout": 60,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [
+            {
+                "var": "fetch",
+                "module": "node-fetch"
+            }
+        ],
+        "x": 800,
+        "y": 2000,
+        "wires": [
+            [
+                "http-out-create-appt",
+                "debug-create-appt-out"
+            ]
+        ]
+    },
+    {
+        "id": "debug-create-appt-out",
+        "type": "debug",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-create-appt",
+        "name": "Egress CreateAppt",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 1110,
+        "y": 1920,
+        "wires": []
+    },
+    {
+        "id": "http-out-create-appt",
+        "type": "http response",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-create-appt",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 1110,
+        "y": 2000,
+        "wires": []
+    },
+    {
+        "id": "inject-cancel-appt",
+        "type": "inject",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-cancel-appt",
+        "name": "Test: Cancel Appt (needs real GUID)",
+        "props": [
+            {
+                "p": "payload.appointmentGUID",
+                "v": "GET_FROM_CREATE_APPT_RESPONSE",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 150,
+        "y": 2120,
+        "wires": [
+            [
+                "func-cancel-appt",
+                "debug-cancel-appt-in"
+            ]
+        ]
+    },
+    {
+        "id": "http-in-cancel-appt",
+        "type": "http in",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-cancel-appt",
+        "name": "",
+        "url": "/chord/ortho-prd/cancelAppt",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 200,
+        "y": 2200,
+        "wires": [
+            [
+                "func-cancel-appt",
+                "debug-cancel-appt-in"
+            ]
+        ]
+    },
+    {
+        "id": "debug-cancel-appt-in",
+        "type": "debug",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-cancel-appt",
+        "name": "Ingress CancelAppt",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 620,
+        "y": 2120,
+        "wires": []
+    },
+    {
+        "id": "func-cancel-appt",
+        "type": "function",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-cancel-appt",
+        "name": "cancelAppt",
+        "func": "// Ortho Cancel Appointment - Calls Cloud9 SetAppointmentStatusCanceled\nconst CLOUD9 = {\n    endpoint: env.get('cloud9Endpoint'),\n    clientId: env.get('cloud9ClientId'),\n    userName: env.get('cloud9UserName'),\n    password: env.get('cloud9Password'),\n    namespace: env.get('cloud9Namespace')\n};\n\nfunction escapeXml(str) {\n    if (str === null || str === undefined) return '';\n    return String(str).replace(/[<>&'\"]/g, c => ({'<': '&lt;', '>': '&gt;', '&': '&amp;', \"'\": '&apos;', '\"': '&quot;'}[c]));\n}\n\nfunction buildXmlRequest(procedure, params = {}) {\n    const paramElements = Object.entries(params)\n        .filter(([_, v]) => v !== null && v !== undefined && v !== '')\n        .map(([k, v]) => `<${k}>${escapeXml(v)}</${k}>`)\n        .join('');\n    return `<?xml version=\"1.0\" encoding=\"utf-8\"?><GetDataRequest xmlns=\"${CLOUD9.namespace}\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"><ClientID>${CLOUD9.clientId}</ClientID><UserName>${CLOUD9.userName}</UserName><Password>${escapeXml(CLOUD9.password)}</Password><Procedure>${procedure}</Procedure><Parameters>${paramElements}</Parameters></GetDataRequest>`;\n}\n\nfunction parseXmlResponse(xmlText) {\n    const statusMatch = xmlText.match(/<ResponseStatus>([^<]+)<\\/ResponseStatus>/);\n    const status = statusMatch ? statusMatch[1] : 'Unknown';\n    const records = [];\n    const recordRegex = /<Record>([\\s\\S]*?)<\\/Record>/g;\n    let match;\n    while ((match = recordRegex.exec(xmlText)) !== null) {\n        const record = {};\n        const fieldRegex = /<([A-Za-z0-9_]+)>([^<]*)<\\/\\1>/g;\n        let fieldMatch;\n        while ((fieldMatch = fieldRegex.exec(match[1])) !== null) {\n            record[fieldMatch[1]] = fieldMatch[2];\n        }\n        records.push(record);\n    }\n    return { status, records };\n}\n\nasync function cancelAppt() {\n    try {\n        const appointmentGUID = msg.payload.appointmentGUID;\n        if (!appointmentGUID) throw new Error('appointmentGUID required');\n\n        const xmlRequest = buildXmlRequest('SetAppointmentStatusCanceled', { apptGUID: appointmentGUID });\n        node.warn('Calling Cloud9 SetAppointmentStatusCanceled');\n\n        const response = await fetch(CLOUD9.endpoint, {\n            method: 'POST',\n            headers: { 'Content-Type': 'application/xml' },\n            body: xmlRequest,\n            timeout: 45000\n        });\n\n        if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);\n        const xmlText = await response.text();\n        const parsed = parseXmlResponse(xmlText);\n\n        msg.payload = {\n            success: !parsed.records[0]?.Result?.toLowerCase().includes('error'),\n            message: parsed.records[0]?.Result || 'Cancelled'\n        };\n        return msg;\n    } catch (error) {\n        node.error('Cancel appt error: ' + error.message, msg);\n        msg.payload = { error: 'Failed to cancel appointment', message: error.message, timestamp: new Date().toISOString() };\n        msg.statusCode = 500;\n        return msg;\n    }\n}\n\nreturn cancelAppt();",
+        "outputs": 1,
+        "timeout": 60,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [
+            {
+                "var": "fetch",
+                "module": "node-fetch"
+            }
+        ],
+        "x": 800,
+        "y": 2200,
+        "wires": [
+            [
+                "http-out-cancel-appt",
+                "debug-cancel-appt-out"
+            ]
+        ]
+    },
+    {
+        "id": "debug-cancel-appt-out",
+        "type": "debug",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-cancel-appt",
+        "name": "Egress CancelAppt",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 1110,
+        "y": 2120,
+        "wires": []
+    },
+    {
+        "id": "http-out-cancel-appt",
+        "type": "http response",
+        "z": "cloud9-ortho-tab",
+        "g": "grp-ortho-cancel-appt",
+        "name": "",
+        "statusCode": "",
+        "headers": {},
+        "x": 1110,
+        "y": 2200,
+        "wires": []
+    }
+]

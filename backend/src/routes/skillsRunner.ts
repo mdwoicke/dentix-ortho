@@ -30,6 +30,13 @@ router.get('/skills/:skillId', skillsRunnerController.getSkill);
 // GET /api/skills-runner/skill-files - List available Claude skill .MD files
 router.get('/skill-files', skillsRunnerController.getSkillFiles);
 
+// GET /api/skills-runner/skill-files/:filePath(*) - Get skill file content
+// Note: Using wildcard (*) to capture paths with slashes like .claude/skills/e2e-test.md
+router.get('/skill-files/*', skillsRunnerController.getSkillFileContent);
+
+// PUT /api/skills-runner/skill-files/:filePath(*) - Save skill file content
+router.put('/skill-files/*', skillsRunnerController.saveSkillFileContent);
+
 // =============================================================================
 // PLUGIN COMMANDS ROUTES
 // =============================================================================

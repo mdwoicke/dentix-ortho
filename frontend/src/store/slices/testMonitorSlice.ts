@@ -589,9 +589,12 @@ export const fetchPromptContent = createAsyncThunk(
  */
 export const fetchPromptHistory = createAsyncThunk(
   'testMonitor/fetchPromptHistory',
-  async (fileKey: string, { rejectWithValue }) => {
+  async ({ fileKey, context }: { fileKey: string; context?: PromptContext }, { rejectWithValue, getState }) => {
     try {
-      const history = await testMonitorApi.getPromptHistory(fileKey);
+      // Use provided context or fall back to selected environment from state
+      const state = getState() as RootState;
+      const effectiveContext = context || state.testMonitor.selectedEnvironment;
+      const history = await testMonitorApi.getPromptHistory(fileKey, 20, effectiveContext);
       return history;
     } catch (error) {
       logError(error, 'fetchPromptHistory');

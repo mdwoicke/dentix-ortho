@@ -37,13 +37,15 @@ export const ROUTES = {
   TEST_MONITOR_EXPERIMENTS: '/test-monitor/experiments',
   TEST_MONITOR_CALL_TRACE: '/test-monitor/call-trace',
   TEST_MONITOR_SKILLS_RUNNER: '/test-monitor/skills-runner',
+  TEST_MONITOR_PROD_TRACKER: '/test-monitor/prod-tracker',
+  TEST_MONITOR_ALERTS: '/test-monitor/alerts',
 } as const;
 
 /**
  * API configuration
  */
 export const API_CONFIG = {
-  BASE_URL: import.meta.env.VITE_API_URL || 'http://localhost:3001/api',
+  BASE_URL: import.meta.env.VITE_API_URL || 'http://localhost:3002/api',
   DEFAULT_ENVIRONMENT: (import.meta.env.VITE_DEFAULT_ENVIRONMENT || 'sandbox') as 'sandbox' | 'production',
   TIMEOUT: 30000, // 30 seconds
   AI_TIMEOUT: 600000, // 10 minutes for AI enhancement operations (large prompts need more time)

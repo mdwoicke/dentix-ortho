@@ -5,6 +5,7 @@
 
 import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
+import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from 'react-resizable-panels';
 import { useAppDispatch, useAppSelector } from '../../hooks';
 import { PageHeader } from '../../components/layout';
 import { Button, Modal, Spinner } from '../../components/ui';
@@ -129,6 +130,11 @@ export function TestRunDetail() {
   // Conversation diff comparison state
   const [showDiffModal, setShowDiffModal] = useState(false);
   const [compareRunId, setCompareRunId] = useState<string | null>(null);
+
+  // Clear old layout key on mount (migration to library's built-in persistence)
+  useEffect(() => {
+    localStorage.removeItem('test-run-detail-layout');
+  }, []);
 
   // Code viewer modal state (for Navigate to Code links in Findings)
   const [codeViewerModal, setCodeViewerModal] = useState<{
@@ -357,11 +363,12 @@ export function TestRunDetail() {
   }, [dispatch, runs, selectedRun?.runId, selectedRun?.status, isStreaming]);
 
   // Auto-select run from URL parameter
+  // Also handles navigation between different runs (when selectedRun is already set but for a different runId)
   useEffect(() => {
-    if (runId && !selectedRun) {
+    if (runId && (!selectedRun || selectedRun.runId !== runId)) {
       handleSelectRun(runId);
     }
-  }, [runId, selectedRun]);
+  }, [runId, selectedRun?.runId]);
 
   // Subscribe to real-time updates when viewing a running test run
   useEffect(() => {
@@ -481,7 +488,7 @@ export function TestRunDetail() {
 
   // Handle selecting a prompt file to view history
   const handleSelectPromptFile = (fileKey: string) => {
-    dispatch(fetchPromptHistory(fileKey));
+    dispatch(fetchPromptHistory({ fileKey }));
   };
 
   // Handle navigation to code files from Findings panel
@@ -571,7 +578,7 @@ export function TestRunDetail() {
     const result = await testMonitorApi.savePromptVersion(fileKey, content, changeDescription);
     // Refresh prompt files and history to reflect new version
     dispatch(fetchPromptFiles());
-    dispatch(fetchPromptHistory(fileKey));
+    dispatch(fetchPromptHistory({ fileKey }));
     return { newVersion: result.newVersion };
   };
 
@@ -737,9 +744,19 @@ export function TestRunDetail() {
         }
       />
 
-      <div className="flex-1 grid grid-cols-12 gap-4 min-h-0">
+      <PanelGroup
+        orientation="horizontal"
+        autoSaveId="test-run-detail"
+        className="flex-1 min-h-0"
+      >
         {/* Left Panel - Test Runs */}
-        <div className="col-span-3 flex flex-col min-h-0">
+        <Panel
+          id="test-runs-panel"
+          defaultSize={20}
+          minSize={15}
+          maxSize={35}
+          className="flex flex-col min-h-0"
+        >
           <ExpandablePanel title="Test Runs" contentClassName="p-2" grow>
             {/* Environment Filter */}
             <div className="mb-2">
@@ -763,10 +780,21 @@ export function TestRunDetail() {
               loading={loading && filteredRuns.length === 0}
             />
           </ExpandablePanel>
-        </div>
+        </Panel>
+
+        {/* Resize Handle */}
+        <PanelResizeHandle className="w-2 flex items-center justify-center group mx-1">
+          <div className="w-1 h-8 rounded-full bg-gray-300 dark:bg-gray-600 opacity-0 group-hover:opacity-100 transition-opacity" />
+        </PanelResizeHandle>
 
         {/* Center Panel - Test Results */}
-        <div className="col-span-5 flex flex-col min-h-0">
+        <Panel
+          id="test-results-panel"
+          defaultSize={40}
+          minSize={25}
+          maxSize={60}
+          className="flex flex-col min-h-0"
+        >
           <ExpandablePanel
             title={
               <span className="flex items-center gap-2">
@@ -792,10 +820,21 @@ export function TestRunDetail() {
               loading={loading && !selectedRun}
             />
           </ExpandablePanel>
-        </div>
+        </Panel>
+
+        {/* Resize Handle */}
+        <PanelResizeHandle className="w-2 flex items-center justify-center group mx-1">
+          <div className="w-1 h-8 rounded-full bg-gray-300 dark:bg-gray-600 opacity-0 group-hover:opacity-100 transition-opacity" />
+        </PanelResizeHandle>
 
         {/* Right Panel - Details */}
-        <div className="col-span-4 flex flex-col gap-4 min-h-0 overflow-y-auto">
+        <Panel
+          id="details-panel"
+          defaultSize={40}
+          minSize={25}
+          maxSize={55}
+          className="flex flex-col gap-4 min-h-0 overflow-y-auto"
+        >
           {/* Transcript */}
           <ExpandablePanel
             title={
@@ -953,8 +992,8 @@ export function TestRunDetail() {
               onSaveContent={handleSavePromptContent}
             />
           </ExpandablePanel>
-        </div>
-      </div>
+        </Panel>
+      </PanelGroup>
 
       {/* Conversation Diff Modal */}
       {showDiffModal && selectedTest && selectedRun && (

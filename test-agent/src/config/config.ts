@@ -13,7 +13,7 @@ export const config = {
 
   // Backend API Configuration (for Cloud 9 sandbox data)
   backend: {
-    baseUrl: process.env.BACKEND_URL || 'http://localhost:3001',
+    baseUrl: process.env.BACKEND_URL || 'http://localhost:3002',
     timeout: 30000, // 30 seconds
   },
 
