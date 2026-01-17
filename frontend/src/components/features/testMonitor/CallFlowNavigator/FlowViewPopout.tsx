@@ -183,7 +183,7 @@ function NodeDetailSidebar({ node, onClose, langfuseHost, traceId }: NodeDetailS
   const layerConfig = LAYER_CONFIG[node.layer];
 
   return (
-    <div className="w-[450px] h-full bg-white dark:bg-gray-900 border-l border-gray-200 dark:border-gray-700 flex flex-col overflow-hidden">
+    <div className="w-[400px] xl:w-[500px] 2xl:w-[600px] h-full bg-white dark:bg-gray-900 border-l border-gray-200 dark:border-gray-700 flex flex-col overflow-hidden transition-all duration-200">
       {/* Header */}
       <div className="flex-shrink-0 px-6 py-4 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
         <div className="flex items-center justify-between">
@@ -290,7 +290,7 @@ function NodeDetailSidebar({ node, onClose, langfuseHost, traceId }: NodeDetailS
                 {copiedField === 'content' ? 'Copied!' : 'Copy'}
               </button>
             </div>
-            <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-3 text-sm text-gray-700 dark:text-gray-300 max-h-40 overflow-y-auto">
+            <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-3 text-sm text-gray-700 dark:text-gray-300 max-h-40 xl:max-h-52 2xl:max-h-64 overflow-y-auto">
               {node.data.content}
             </div>
           </div>
@@ -309,7 +309,7 @@ function NodeDetailSidebar({ node, onClose, langfuseHost, traceId }: NodeDetailS
                 {copiedField === 'input' ? 'Copied!' : 'Copy'}
               </button>
             </div>
-            <pre className="bg-gray-50 dark:bg-gray-800 rounded-lg p-3 text-xs text-gray-700 dark:text-gray-300 max-h-40 overflow-auto font-mono">
+            <pre className="bg-gray-50 dark:bg-gray-800 rounded-lg p-3 text-xs text-gray-700 dark:text-gray-300 max-h-40 xl:max-h-52 2xl:max-h-64 overflow-auto font-mono">
               {JSON.stringify(node.data.input, null, 2)}
             </pre>
           </div>
@@ -327,7 +327,7 @@ function NodeDetailSidebar({ node, onClose, langfuseHost, traceId }: NodeDetailS
                 {copiedField === 'output' ? 'Copied!' : 'Copy'}
               </button>
             </div>
-            <pre className="bg-gray-50 dark:bg-gray-800 rounded-lg p-3 text-xs text-gray-700 dark:text-gray-300 max-h-40 overflow-auto font-mono">
+            <pre className="bg-gray-50 dark:bg-gray-800 rounded-lg p-3 text-xs text-gray-700 dark:text-gray-300 max-h-40 xl:max-h-52 2xl:max-h-64 overflow-auto font-mono">
               {JSON.stringify(node.data.output, null, 2)}
             </pre>
           </div>

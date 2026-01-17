@@ -485,8 +485,8 @@ export function DataPipelineView({
 
       {/* Main Content with Sidebars */}
       <div className="flex-1 flex overflow-hidden bg-gray-50 dark:bg-gray-950">
-        {/* Left Sidebar - Pipeline Stats */}
-        <div className="w-48 flex-shrink-0 border-r border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 overflow-y-auto p-3">
+        {/* Left Sidebar - Pipeline Stats (collapsible on smaller screens) */}
+        <div className="w-44 xl:w-52 2xl:w-56 flex-shrink-0 border-r border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 overflow-y-auto p-2 xl:p-3">
           <div className="space-y-4">
             {/* Layer Breakdown */}
             <div>
@@ -612,20 +612,20 @@ export function DataPipelineView({
           </div>
         </div>
 
-        {/* Pipeline View - Center */}
+        {/* Pipeline View - Center (expands to fill available space) */}
         <div
           ref={scrollRef}
-          className="flex-1 overflow-y-auto p-6"
+          className="flex-1 overflow-y-auto p-4 xl:p-6"
         >
           {/* Data Flow Direction Indicator */}
-          <div className="flex items-center justify-center gap-2 mb-6 text-gray-400 dark:text-gray-500">
+          <div className="flex items-center justify-center gap-2 mb-4 xl:mb-6 text-gray-400 dark:text-gray-500">
             <span className="text-xs font-medium uppercase tracking-wide">Data Flow</span>
             <Icons.ArrowDown />
             <span className="text-xs opacity-60">Top to Bottom</span>
           </div>
 
-          {/* Pipeline Turns */}
-          <div className="space-y-6 max-w-3xl mx-auto">
+          {/* Pipeline Turns - Responsive width: contained on small, expands on large screens */}
+          <div className="space-y-4 xl:space-y-6 max-w-3xl xl:max-w-4xl 2xl:max-w-5xl mx-auto">
             {pipelineTurns.map((turn, idx) => (
               <div key={turn.id}>
                 <TurnPipeline
