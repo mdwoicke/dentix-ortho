@@ -10,6 +10,7 @@ import { TranscriptViewer } from '../../components/features/testMonitor/Transcri
 import { PerformanceWaterfall } from '../../components/features/testMonitor/PerformanceWaterfall';
 import { LangfuseConnectionsManager } from '../../components/features/testMonitor/LangfuseConnectionsManager';
 import { TraceInsights } from '../../components/features/testMonitor/TraceInsights';
+import { CallFlowNavigator } from '../../components/features/testMonitor/CallFlowNavigator';
 import {
   getImportHistory,
   getLastImportDate,
@@ -124,6 +125,11 @@ const Icons = {
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 14l2 2 4-4" />
     </svg>
   ),
+  Flow: () => (
+    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+    </svg>
+  ),
 };
 
 // ============================================================================
@@ -230,7 +236,7 @@ interface TraceModalProps {
   onClose: () => void;
 }
 
-type TraceModalTab = 'transcript' | 'performance';
+type TraceModalTab = 'transcript' | 'performance' | 'flow';
 
 function TraceModal({ traceId, timezone, onClose }: TraceModalProps) {
   const [loading, setLoading] = useState(true);
@@ -283,7 +289,7 @@ function TraceModal({ traceId, timezone, onClose }: TraceModalProps) {
               <div className="flex items-center gap-4 mt-1 text-sm text-gray-500">
                 <span>{formatDateWithTimezone(traceDetail.trace.startedAt, timezone)}</span>
                 {traceDetail.trace.sessionId && (
-                  <span className="font-mono text-xs">{traceDetail.trace.sessionId.slice(0, 8)}...</span>
+                  <span className="font-mono text-xs">{traceDetail.trace.sessionId}</span>
                 )}
                 {traceDetail.trace.latencyMs && (
                   <span className="text-xs px-2 py-0.5 bg-gray-100 dark:bg-gray-700 rounded">
@@ -337,6 +343,17 @@ function TraceModal({ traceId, timezone, onClose }: TraceModalProps) {
                 <Icons.Clock />
                 Performance
               </button>
+              <button
+                onClick={() => setActiveTab('flow')}
+                className={`pb-2 text-sm font-medium border-b-2 transition-colors flex items-center gap-1 ${
+                  activeTab === 'flow'
+                    ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300'
+                }`}
+              >
+                <Icons.Flow />
+                Flow View
+              </button>
             </nav>
           </div>
         )}
@@ -373,6 +390,18 @@ function TraceModal({ traceId, timezone, onClose }: TraceModalProps) {
               bottleneckThresholdMs={2000}
             />
           )}
+
+          {traceDetail && activeTab === 'flow' && (
+            <CallFlowNavigator
+              observations={traceDetail.observations}
+              transcript={traceDetail.transcript}
+              traceStartTime={traceDetail.trace.startedAt}
+              traceDurationMs={traceDetail.trace.latencyMs || undefined}
+              bottleneckThresholdMs={2000}
+              langfuseHost={traceDetail.trace.langfuseHost}
+              traceId={traceDetail.trace.traceId}
+            />
+          )}
         </div>
       </div>
     </div>
@@ -391,7 +420,7 @@ interface SessionModalProps {
   onClose: () => void;
 }
 
-type SessionModalTab = 'transcript' | 'performance' | 'traces';
+type SessionModalTab = 'transcript' | 'performance' | 'flow' | 'traces';
 
 function SessionModal({ sessionId, configId, timezone, langfuseProjectId, onClose }: SessionModalProps) {
   const [loading, setLoading] = useState(true);
@@ -520,7 +549,7 @@ function SessionModal({ sessionId, configId, timezone, langfuseProjectId, onClos
             </h2>
             {sessionDetail && (
               <div className="flex items-center gap-4 mt-1 text-sm text-gray-500">
-                <span className="font-mono text-xs">{sessionDetail.session.sessionId.slice(0, 12)}...</span>
+                <span className="font-mono text-xs">{sessionDetail.session.sessionId}</span>
                 <span>{sessionDetail.session.traceCount} messages</span>
                 {sessionDetail.session.totalLatencyMs && (
                   <span className="text-xs px-2 py-0.5 bg-gray-100 dark:bg-gray-700 rounded">
@@ -606,6 +635,17 @@ function SessionModal({ sessionId, configId, timezone, langfuseProjectId, onClos
                 Performance
               </button>
               <button
+                onClick={() => setActiveTab('flow')}
+                className={`pb-2 text-sm font-medium border-b-2 transition-colors flex items-center gap-1 ${
+                  activeTab === 'flow'
+                    ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300'
+                }`}
+              >
+                <Icons.Flow />
+                Flow View
+              </button>
+              <button
                 onClick={() => setActiveTab('traces')}
                 className={`pb-2 text-sm font-medium border-b-2 transition-colors ${
                   activeTab === 'traces'
@@ -649,6 +689,18 @@ function SessionModal({ sessionId, configId, timezone, langfuseProjectId, onClos
               testStartTime={sessionDetail.session.firstTraceAt}
               testDurationMs={sessionDetail.session.totalLatencyMs || undefined}
               bottleneckThresholdMs={2000}
+            />
+          )}
+
+          {sessionDetail && activeTab === 'flow' && (
+            <CallFlowNavigator
+              observations={sessionDetail.observations || []}
+              transcript={sessionDetail.transcript}
+              traceStartTime={sessionDetail.session.firstTraceAt}
+              traceDurationMs={sessionDetail.session.totalLatencyMs || undefined}
+              bottleneckThresholdMs={2000}
+              langfuseHost={sessionDetail.session.langfuseHost}
+              traceId={sessionDetail.traces[0]?.traceId}
             />
           )}
 
@@ -1416,7 +1468,7 @@ export default function CallTracePage() {
             )}
             {filterSessionId && (
               <span className="px-2 py-0.5 bg-blue-100 dark:bg-blue-800 rounded text-xs font-mono">
-                Session: {filterSessionId.slice(0, 12)}...
+                Session: {filterSessionId}
               </span>
             )}
             <span className="text-blue-500 dark:text-blue-400">({currentTotal} results)</span>
@@ -1500,13 +1552,13 @@ export default function CallTracePage() {
                       onClick={() => setSelectedSessionId(session.sessionId)}
                     >
                       <td className="px-4 py-3 text-sm font-mono text-gray-900 dark:text-white">
-                        {session.sessionId.slice(0, 12)}...
+                        {session.sessionId}
                       </td>
                       <td className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 max-w-xs truncate" title={session.inputPreview || undefined}>
                         {session.inputPreview || '-'}
                       </td>
                       <td className="px-4 py-3 text-sm">
-                        <span className="px-2 py-1 text-xs font-medium rounded-full bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300">
+                        <span className="px-2 py-1 text-xs font-medium rounded-full bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 whitespace-nowrap">
                           {session.traceCount} {session.traceCount === 1 ? 'message' : 'messages'}
                         </span>
                       </td>
@@ -1636,7 +1688,7 @@ export default function CallTracePage() {
                             className="hover:text-blue-600 dark:hover:text-blue-400 hover:underline"
                             title={`Filter by session: ${trace.sessionId}`}
                           >
-                            {trace.sessionId.slice(0, 8)}...
+                            {trace.sessionId}
                         </button>
                       ) : '-'}
                     </td>
