@@ -9,7 +9,7 @@
  */
 
 import { FlowiseClient, FlowiseResponse } from '../core/flowise-client';
-import { Database, TestResult, ApiCall } from '../storage/database';
+import { Database, TestResult, ApiCall, ProdTestRecordInput } from '../storage/database';
 import { IntentDetector } from '../services/intent-detector';
 import { ResponseGenerator } from '../services/response-generator';
 import { ProgressTracker } from '../services/progress-tracker';
@@ -246,6 +246,10 @@ export class GoalTestRunner {
   private semanticEntityExtractor: SemanticEntityExtractor;
   private responseStrategyEngine: ResponseStrategyEngine;
 
+  // Track current persona and appointment count for child info extraction
+  private currentPersona: UserPersona | null = null;
+  private appointmentCountInRun: number = 0;
+
   constructor(
     flowiseClient: FlowiseClient,
     database: Database,
@@ -337,6 +341,10 @@ export class GoalTestRunner {
     } else {
       personaToUse = testCase.persona;
     }
+
+    // Track persona for child info extraction in appointment records
+    this.currentPersona = personaToUse;
+    this.appointmentCountInRun = 0;
 
     // Initialize services for this test using resolved persona
     const responseGenerator = new ResponseGenerator(personaToUse, {
@@ -902,6 +910,10 @@ export class GoalTestRunner {
           };
           this.database.saveApiCall(apiCall);
 
+          // Save to Prod Tracker if this created a patient or appointment
+          const traceContext = getCurrentTraceContext();
+          this.saveToProdTrackerIfNeeded(toolCall, runId, testId, traceContext?.traceId, this.flowiseClient.getSessionId());
+
           // Emit for real-time streaming
           console.log(JSON.stringify({
             type: 'api-call',
@@ -1175,6 +1187,101 @@ export class GoalTestRunner {
    */
   private delay(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Check if a tool call created a patient or appointment and save to Prod Tracker
+   */
+  private saveToProdTrackerIfNeeded(toolCall: any, runId: string, testId: string, traceId?: string, sessionId?: string): void {
+    try {
+      const output = this.parseToolOutput(toolCall.output);
+      const input = this.parseToolOutput(toolCall.input);
+
+      // Patient creation: chord_ortho_patient with patientGUID in output
+      if (toolCall.toolName === 'chord_ortho_patient' && output.patientGUID) {
+        this.database.saveProdTestRecord({
+          recordType: 'patient',
+          patientGuid: output.patientGUID,
+          patientFirstName: input.patientFirstName || input.firstName,
+          patientLastName: input.patientLastName || input.lastName,
+          patientBirthdate: input.birthdayDateTime || input.birthdate,
+          patientPhone: input.phoneNumber || input.phone,
+          patientEmail: input.email,
+          locationGuid: input.locationGUID,
+          runId,
+          testId,
+          traceId,
+          sessionId,
+        });
+        console.log(`[GoalTestRunner] Saved patient to Prod Tracker: ${output.patientGUID}`);
+      }
+
+      // Appointment booking: schedule_appointment_ortho with appointmentGUID in output
+      if (toolCall.toolName === 'schedule_appointment_ortho' && output.appointmentGUID) {
+        // Construct note from child info
+        // Priority: 1. Tool input childName, 2. Persona children (by appointment order)
+        let note: string | undefined;
+        let childName = input.childName;
+        let childDOB = input.childDOB;
+        let insuranceProvider = input.insuranceProvider;
+
+        // Fallback to persona if childName not in tool input
+        if (!childName && this.currentPersona?.inventory?.children) {
+          const children = this.currentPersona.inventory.children;
+          const childIndex = this.appointmentCountInRun;
+
+          if (childIndex < children.length) {
+            const child = children[childIndex];
+            childName = `${child.firstName} ${child.lastName}`.trim();
+            childDOB = childDOB || child.dateOfBirth;
+            insuranceProvider = insuranceProvider || this.currentPersona.inventory.insuranceProvider;
+            console.log(`[GoalTestRunner] Extracted child info from persona: ${childName} (child #${childIndex + 1})`);
+          }
+        }
+
+        // Increment appointment counter for this run
+        this.appointmentCountInRun++;
+
+        if (childName) {
+          const parts = [`Child: ${childName}`];
+          if (childDOB) parts.push(`DOB: ${childDOB}`);
+          if (insuranceProvider) parts.push(`Insurance: ${insuranceProvider}`);
+          note = parts.join(' | ');
+        }
+
+        this.database.saveProdTestRecord({
+          recordType: 'appointment',
+          patientGuid: input.PatientGUID || input.patientGUID || '',
+          appointmentGuid: output.appointmentGUID,
+          appointmentDatetime: input.StartTime || input.startTime,
+          scheduleViewGuid: input.ScheduleViewGUID || input.scheduleViewGUID,
+          scheduleColumnGuid: input.ScheduleColumnGUID || input.scheduleColumnGUID,
+          appointmentTypeGuid: input.AppointmentTypeGUID || input.appointmentTypeGUID,
+          appointmentMinutes: input.Minutes || input.minutes,
+          note,
+          runId,
+          testId,
+          traceId,
+          sessionId,
+        });
+        console.log(`[GoalTestRunner] Saved appointment to Prod Tracker: ${output.appointmentGUID}${note ? ' with note' : ''}`);
+      }
+    } catch (error: any) {
+      console.error(`[GoalTestRunner] Failed to save to Prod Tracker: ${error.message}`);
+    }
+  }
+
+  /**
+   * Parse tool input/output - handles both string and object formats
+   */
+  private parseToolOutput(value: any): any {
+    if (!value) return {};
+    if (typeof value === 'object') return value;
+    try {
+      return JSON.parse(value);
+    } catch {
+      return {};
+    }
   }
 }
 

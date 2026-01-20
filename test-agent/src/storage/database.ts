@@ -74,6 +74,33 @@ export interface ApiCall {
 }
 
 // ============================================================================
+// PROD TEST RECORD INPUT
+// ============================================================================
+
+export interface ProdTestRecordInput {
+  recordType: 'patient' | 'appointment';
+  patientGuid: string;
+  appointmentGuid?: string;
+  patientFirstName?: string;
+  patientLastName?: string;
+  patientBirthdate?: string;
+  patientPhone?: string;
+  patientEmail?: string;
+  appointmentDatetime?: string;
+  scheduleViewGuid?: string;
+  scheduleColumnGuid?: string;
+  appointmentTypeGuid?: string;
+  appointmentMinutes?: number;
+  locationGuid?: string;
+  note?: string;
+  runId?: string;
+  testId?: string;
+  // Langfuse trace context for note extraction
+  traceId?: string;
+  sessionId?: string;
+}
+
+// ============================================================================
 // DYNAMIC AGENT TUNING SYSTEM - New Interfaces
 // ============================================================================
 
@@ -2264,6 +2291,91 @@ export class Database {
   saveApiCalls(apiCalls: ApiCall[]): void {
     for (const apiCall of apiCalls) {
       this.saveApiCall(apiCall);
+    }
+  }
+
+  /**
+   * Save a record to the prod_test_records table for tracking created patients/appointments
+   * Returns true if inserted, false if duplicate (already exists)
+   */
+  saveProdTestRecord(record: ProdTestRecordInput): boolean {
+    const db = this.getDb();
+
+    try {
+      // Check for duplicate based on record type
+      if (record.recordType === 'patient') {
+        const existing = db.prepare(`
+          SELECT id FROM prod_test_records WHERE patient_guid = ? AND record_type = 'patient'
+        `).get(record.patientGuid);
+        if (existing) {
+          console.log(`[Database] Skipping duplicate patient: ${record.patientGuid}`);
+          return false;
+        }
+      } else if (record.recordType === 'appointment' && record.appointmentGuid) {
+        const existing = db.prepare(`
+          SELECT id FROM prod_test_records WHERE appointment_guid = ? AND record_type = 'appointment'
+        `).get(record.appointmentGuid);
+        if (existing) {
+          console.log(`[Database] Skipping duplicate appointment: ${record.appointmentGuid}`);
+          return false;
+        }
+      }
+
+      // For appointments without patient names, try to look up from existing patient record
+      let firstName = record.patientFirstName || null;
+      let lastName = record.patientLastName || null;
+      if (record.recordType === 'appointment' && !firstName && record.patientGuid) {
+        const patientRecord = db.prepare(`
+          SELECT patient_first_name, patient_last_name
+          FROM prod_test_records
+          WHERE patient_guid = ?
+            AND patient_first_name IS NOT NULL
+            AND patient_first_name != ''
+          LIMIT 1
+        `).get(record.patientGuid) as { patient_first_name: string; patient_last_name: string } | undefined;
+        if (patientRecord) {
+          firstName = patientRecord.patient_first_name;
+          lastName = patientRecord.patient_last_name;
+          console.log(`[Database] Auto-filled patient name for appointment: ${firstName} ${lastName}`);
+        }
+      }
+
+      // Insert the record
+      db.prepare(`
+        INSERT INTO prod_test_records (
+          record_type, patient_guid, appointment_guid,
+          patient_first_name, patient_last_name, patient_birthdate, patient_phone, patient_email,
+          appointment_datetime, schedule_view_guid, schedule_column_guid,
+          appointment_type_guid, appointment_minutes, location_guid, note,
+          status, cleanup_notes, trace_id, session_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        record.recordType,
+        record.patientGuid,
+        record.appointmentGuid || null,
+        firstName,
+        lastName,
+        record.patientBirthdate || null,
+        record.patientPhone || null,
+        record.patientEmail || null,
+        record.appointmentDatetime || null,
+        record.scheduleViewGuid || null,
+        record.scheduleColumnGuid || null,
+        record.appointmentTypeGuid || null,
+        record.appointmentMinutes || null,
+        record.locationGuid || null,
+        record.note || null,
+        'active',
+        record.runId && record.testId ? `Goal Test: ${record.testId} (Run: ${record.runId})` : null,
+        record.traceId || null,
+        record.sessionId || null
+      );
+
+      console.log(`[Database] Saved ${record.recordType} to prod_test_records: ${record.recordType === 'patient' ? record.patientGuid : record.appointmentGuid}`);
+      return true;
+    } catch (error: any) {
+      console.error(`[Database] Failed to save prod test record: ${error.message}`);
+      return false;
     }
   }
 
