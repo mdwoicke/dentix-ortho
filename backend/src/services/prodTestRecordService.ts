@@ -9,7 +9,11 @@
  */
 
 import BetterSqlite3 from 'better-sqlite3';
+import { EventEmitter } from 'events';
 import { Cloud9Client } from './cloud9/client';
+
+// Rate limit buffer between Cloud9 API calls (5 seconds)
+export const CANCELLATION_DELAY_MS = 5000;
 
 // ============================================================================
 // TYPE DEFINITIONS
@@ -44,6 +48,7 @@ export interface ProdTestRecord {
   provider_name: string | null;
   schedule_view_guid: string | null;
   schedule_column_guid: string | null;
+  chair: string | null;
 
   // Langfuse tracing
   trace_id: string | null;
@@ -62,6 +67,9 @@ export interface ProdTestRecord {
   created_at: string;
   updated_at: string;
   cloud9_created_at: string | null;
+
+  // Family linkage note (parent info, insurance, etc.)
+  note: string | null;
 }
 
 export interface ImportOptions {
@@ -93,6 +101,30 @@ export interface CancelResult {
   appointmentGuid: string;
   message: string;
   error?: string;
+}
+
+export interface StreamingCancellationItem {
+  id: number;
+  appointmentGuid: string;
+  patientName: string;
+  appointmentDate: string | null;
+  status: 'pending' | 'processing' | 'success' | 'failed' | 'already_cancelled';
+  error?: string;
+}
+
+export interface StreamingCancellationProgress {
+  operationId: string;
+  item: StreamingCancellationItem;
+  currentIndex: number;
+  total: number;
+}
+
+export interface StreamingCancellationSummary {
+  operationId: string;
+  total: number;
+  succeeded: number;
+  failed: number;
+  alreadyCancelled: number;
 }
 
 // ============================================================================
@@ -147,8 +179,8 @@ export class ProdTestRecordService {
         WHERE pt.langfuse_config_id = ?
           AND pt.started_at >= ?
           AND (
-            -- SetPatient success responses
-            (pto.name = 'chord_ortho_patient' AND pto.output LIKE '%Patient GUID Added%')
+            -- SetPatient success responses (matches "Patient Added:" or "Patient GUID Added:")
+            (pto.name = 'chord_ortho_patient' AND (pto.output LIKE '%Patient Added:%' OR pto.output LIKE '%Patient GUID Added%'))
             OR
             -- SetAppointment success responses
             (pto.name = 'schedule_appointment_ortho' AND pto.output LIKE '%Appointment GUID Added%')
@@ -202,7 +234,7 @@ export class ProdTestRecordService {
           } else if (obs.name === 'schedule_appointment_ortho' && output) {
             const appointmentGuid = this.extractAppointmentGuid(output);
             if (appointmentGuid) {
-              const imported = this.importAppointmentRecord(obs, input, appointmentGuid);
+              const imported = await this.importAppointmentRecord(obs, input, appointmentGuid);
               if (imported) {
                 result.appointmentsFound++;
                 existingObservationIds.add(obs.observation_id); // Add to set for subsequent checks
@@ -228,19 +260,23 @@ export class ProdTestRecordService {
 
   /**
    * Extract Patient GUID from SetPatient response
-   * Pattern: "Patient GUID Added: {guid}" or similar
+   * Patterns: "Patient Added: {guid}" or "Patient GUID Added: {guid}" or patientGUID field
    */
   private extractPatientGuid(output: any): string | null {
-    const outputStr = typeof output === 'string' ? output : JSON.stringify(output);
-
-    // Pattern: "Patient GUID Added: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-    const match = outputStr.match(/Patient GUID Added:\s*([a-f0-9-]{36})/i);
-    if (match) return match[1];
-
-    // Alternative pattern: patientGUID in JSON response
+    // First check for patientGUID in JSON response (most reliable)
     if (typeof output === 'object' && output.patientGUID) {
       return output.patientGUID;
     }
+
+    const outputStr = typeof output === 'string' ? output : JSON.stringify(output);
+
+    // Pattern: "Patient Added: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+    const patientAddedMatch = outputStr.match(/Patient Added:\s*([a-f0-9-]{36})/i);
+    if (patientAddedMatch) return patientAddedMatch[1];
+
+    // Pattern: "Patient GUID Added: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+    const guidAddedMatch = outputStr.match(/Patient GUID Added:\s*([a-f0-9-]{36})/i);
+    if (guidAddedMatch) return guidAddedMatch[1];
 
     return null;
   }
@@ -262,6 +298,88 @@ export class ProdTestRecordService {
     }
 
     return null;
+  }
+
+  /**
+   * Extract child info from the trace's Call_Summary by matching appointment GUID
+   * The LLM outputs a Call_Summary with Child1_appointmentGUID, Child2_appointmentGUID, etc.
+   * that maps to Child1_FirstName, Child1_LastName, Child1_DOB, etc.
+   */
+  private extractChildInfoFromCallSummary(traceId: string, appointmentGuid: string): {
+    childName: string | null;
+    childDOB: string | null;
+    insuranceProvider: string | null;
+    groupID: string | null;
+    memberID: string | null;
+  } | null {
+    try {
+      // Get the trace output which contains the Call_Summary
+      const trace = this.db.prepare(`
+        SELECT output FROM production_traces WHERE trace_id = ?
+      `).get(traceId) as any;
+
+      if (!trace || !trace.output) return null;
+
+      let outputStr = typeof trace.output === 'string' ? trace.output : JSON.stringify(trace.output);
+
+      // If the output is a JSON-encoded string (starts with "), parse it first
+      if (outputStr.startsWith('"')) {
+        try {
+          outputStr = JSON.parse(outputStr);
+        } catch (e) {
+          // Continue with original string
+        }
+      }
+
+      // Extract the PAYLOAD JSON from the output
+      const payloadMatch = outputStr.match(/PAYLOAD:\s*(\{[\s\S]*\})/);
+      if (!payloadMatch) return null;
+
+      // Parse the PAYLOAD
+      let payload: any;
+      try {
+        payload = JSON.parse(payloadMatch[1]);
+      } catch (e) {
+        // Try parsing with escaped quotes removed
+        try {
+          const cleaned = payloadMatch[1].replace(/\\"/g, '"').replace(/\\n/g, ' ');
+          payload = JSON.parse(cleaned);
+        } catch (e2) {
+          return null;
+        }
+      }
+
+      const callSummary = payload?.Call_Summary;
+      if (!callSummary) return null;
+
+      const upperApptGuid = appointmentGuid.toUpperCase();
+
+      // Check Child1, Child2, Child3, etc.
+      for (let i = 1; i <= 5; i++) {
+        const childApptGuid = callSummary[`Child${i}_appointmentGUID`] || callSummary[`Child${i}_appointmentId`];
+        if (childApptGuid && childApptGuid.toUpperCase() === upperApptGuid) {
+          const firstName = callSummary[`Child${i}_FirstName`];
+          const lastName = callSummary[`Child${i}_LastName`];
+          const dob = callSummary[`Child${i}_DOB`];
+
+          if (firstName) {
+            console.log(`[ProdTestRecordService] Found child info in Call_Summary: Child${i} = ${firstName} ${lastName || ''}`);
+            return {
+              childName: lastName ? `${firstName} ${lastName}` : firstName,
+              childDOB: dob || null,
+              insuranceProvider: callSummary.insurance_provider || callSummary.insuranceProvider || null,
+              groupID: callSummary.insurance_group || callSummary.groupID || null,
+              memberID: callSummary.insurance_member_id || callSummary.memberID || null,
+            };
+          }
+        }
+      }
+
+      return null;
+    } catch (err: any) {
+      console.log(`[ProdTestRecordService] Error extracting child info from Call_Summary: ${err.message}`);
+      return null;
+    }
   }
 
   /**
@@ -316,8 +434,9 @@ export class ProdTestRecordService {
 
   /**
    * Import an appointment record from observation data
+   * Looks up patient info from existing records or Cloud9 API if not in input
    */
-  private importAppointmentRecord(obs: any, input: any, appointmentGuid: string): boolean {
+  private async importAppointmentRecord(obs: any, input: any, appointmentGuid: string): Promise<boolean> {
     // Check for duplicate
     const existing = this.db.prepare(`
       SELECT id FROM prod_test_records WHERE appointment_guid = ? AND record_type = 'appointment'
@@ -330,6 +449,73 @@ export class ProdTestRecordService {
 
     // Extract appointment info from input
     const apptData = input || {};
+    const patientGuid = apptData.PatientGUID || apptData.patientGUID || '';
+
+    // Try to get patient name from multiple sources
+    let patientFirstName = apptData.patientFirstName || null;
+    let patientLastName = apptData.patientLastName || null;
+
+    // If patient name not in input, try to get from existing records
+    if (!patientFirstName && !patientLastName && patientGuid) {
+      const existingPatient = this.db.prepare(`
+        SELECT patient_first_name, patient_last_name FROM prod_test_records
+        WHERE patient_guid = ? AND (patient_first_name IS NOT NULL OR patient_last_name IS NOT NULL)
+        LIMIT 1
+      `).get(patientGuid) as any;
+
+      if (existingPatient) {
+        patientFirstName = existingPatient.patient_first_name;
+        patientLastName = existingPatient.patient_last_name;
+        console.log(`[ProdTestRecordService] Got patient name from existing record: ${patientFirstName} ${patientLastName}`);
+      }
+    }
+
+    // If still no name, try Cloud9 API lookup
+    if (!patientFirstName && !patientLastName && patientGuid) {
+      try {
+        console.log(`[ProdTestRecordService] Looking up patient info from Cloud9 for: ${patientGuid}`);
+        const cloud9Response = await this.cloud9Client.getPatientInformation(patientGuid);
+        if (cloud9Response.status === 'Success' && cloud9Response.records.length > 0) {
+          const patientInfo = cloud9Response.records[0];
+          patientFirstName = patientInfo.FirstName || patientInfo.persFirstName || null;
+          patientLastName = patientInfo.LastName || patientInfo.persLastName || null;
+          console.log(`[ProdTestRecordService] Got patient name from Cloud9: ${patientFirstName} ${patientLastName}`);
+        }
+      } catch (err: any) {
+        console.log(`[ProdTestRecordService] Could not look up patient from Cloud9: ${err.message}`);
+      }
+    }
+
+    // Extract or construct note from apptData - this contains child info for parent-as-patient model
+    // The note may be directly in apptData.note, OR we need to construct it from child fields
+    // (same logic as the scheduling tool which constructs: "Child: X | DOB: Y | Insurance: Z")
+    let appointmentNote = apptData.note || apptData.Note || null;
+
+    // If no direct note but we have child info, construct it (matches scheduling tool v54 format)
+    if (!appointmentNote && apptData.childName) {
+      const parts: string[] = [`Child: ${apptData.childName}`];
+      if (apptData.childDOB) parts.push(`DOB: ${apptData.childDOB}`);
+      if (apptData.insuranceProvider) parts.push(`Insurance: ${apptData.insuranceProvider}`);
+      if (apptData.groupID) parts.push(`GroupID: ${apptData.groupID}`);
+      if (apptData.memberID) parts.push(`MemberID: ${apptData.memberID}`);
+      appointmentNote = parts.join(' | ');
+      console.log(`[ProdTestRecordService] Constructed note from child info: ${appointmentNote}`);
+    }
+
+    // If still no note, try to extract child info from the trace's Call_Summary
+    // The LLM outputs Child1_appointmentGUID, Child2_appointmentGUID, etc. in the Call_Summary
+    if (!appointmentNote && obs.trace_id) {
+      const childInfo = this.extractChildInfoFromCallSummary(obs.trace_id, appointmentGuid);
+      if (childInfo && childInfo.childName) {
+        const parts: string[] = [`Child: ${childInfo.childName}`];
+        if (childInfo.childDOB) parts.push(`DOB: ${childInfo.childDOB}`);
+        if (childInfo.insuranceProvider) parts.push(`Insurance: ${childInfo.insuranceProvider}`);
+        if (childInfo.groupID) parts.push(`GroupID: ${childInfo.groupID}`);
+        if (childInfo.memberID) parts.push(`MemberID: ${childInfo.memberID}`);
+        appointmentNote = parts.join(' | ');
+        console.log(`[ProdTestRecordService] Constructed note from Call_Summary: ${appointmentNote}`);
+      }
+    }
 
     this.db.prepare(`
       INSERT INTO prod_test_records (
@@ -339,14 +525,14 @@ export class ProdTestRecordService {
         location_guid, location_name, provider_guid, provider_name,
         schedule_view_guid, schedule_column_guid,
         trace_id, observation_id, session_id, langfuse_config_id,
-        status, cloud9_created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        status, cloud9_created_at, note
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       'appointment',
-      apptData.PatientGUID || apptData.patientGUID || '',
+      patientGuid,
       appointmentGuid,
-      apptData.patientFirstName || null,
-      apptData.patientLastName || null,
+      patientFirstName,
+      patientLastName,
       apptData.StartTime || apptData.startTime || null,
       apptData.appointmentType || null,
       apptData.AppointmentTypeGUID || apptData.appointmentTypeGUID || null,
@@ -362,11 +548,428 @@ export class ProdTestRecordService {
       obs.session_id,
       obs.langfuse_config_id,
       'active',
-      obs.started_at
+      obs.started_at,
+      appointmentNote
     );
 
-    console.log(`[ProdTestRecordService] Imported appointment: ${appointmentGuid}`);
+    console.log(`[ProdTestRecordService] Imported appointment: ${appointmentGuid} (patient: ${patientFirstName || 'Unknown'} ${patientLastName || ''})${appointmentNote ? ' with note' : ''}`);
     return true;
+  }
+
+  /**
+   * Update notes for existing appointment records by re-parsing observation data
+   * This is useful for records that were imported before the note field was populated
+   */
+  async updateNotesFromObservations(sessionId?: string): Promise<{ updated: number; errors: string[] }> {
+    const result = { updated: 0, errors: [] as string[] };
+
+    try {
+      // Find appointment records that have no note but have an observation_id
+      let sql = `
+        SELECT ptr.id, ptr.appointment_guid, ptr.observation_id
+        FROM prod_test_records ptr
+        WHERE ptr.record_type = 'appointment'
+          AND (ptr.note IS NULL OR ptr.note = '')
+          AND ptr.observation_id IS NOT NULL
+      `;
+      const params: any[] = [];
+
+      if (sessionId) {
+        sql += ` AND ptr.session_id = ?`;
+        params.push(sessionId);
+      }
+
+      const recordsToUpdate = this.db.prepare(sql).all(...params) as any[];
+      console.log(`[ProdTestRecordService] Found ${recordsToUpdate.length} appointment records without notes`);
+
+      for (const record of recordsToUpdate) {
+        try {
+          // Get the observation data including trace_id
+          const obs = this.db.prepare(`
+            SELECT input, trace_id FROM production_trace_observations WHERE observation_id = ?
+          `).get(record.observation_id) as any;
+
+          if (!obs) continue;
+
+          const input = obs.input ? this.parseJson(obs.input) : null;
+
+          // Construct note from child info (same logic as importAppointmentRecord)
+          let appointmentNote: string | null = null;
+          if (input && input.childName) {
+            const parts: string[] = [`Child: ${input.childName}`];
+            if (input.childDOB) parts.push(`DOB: ${input.childDOB}`);
+            if (input.insuranceProvider) parts.push(`Insurance: ${input.insuranceProvider}`);
+            if (input.groupID) parts.push(`GroupID: ${input.groupID}`);
+            if (input.memberID) parts.push(`MemberID: ${input.memberID}`);
+            appointmentNote = parts.join(' | ');
+          }
+
+          // If no childName in tool input, try to extract from Call_Summary
+          if (!appointmentNote && obs.trace_id && record.appointment_guid) {
+            const childInfo = this.extractChildInfoFromCallSummary(obs.trace_id, record.appointment_guid);
+            if (childInfo && childInfo.childName) {
+              const parts: string[] = [`Child: ${childInfo.childName}`];
+              if (childInfo.childDOB) parts.push(`DOB: ${childInfo.childDOB}`);
+              if (childInfo.insuranceProvider) parts.push(`Insurance: ${childInfo.insuranceProvider}`);
+              if (childInfo.groupID) parts.push(`GroupID: ${childInfo.groupID}`);
+              if (childInfo.memberID) parts.push(`MemberID: ${childInfo.memberID}`);
+              appointmentNote = parts.join(' | ');
+              console.log(`[ProdTestRecordService] Extracted note from Call_Summary for ${record.appointment_guid}`);
+            }
+          }
+
+          if (appointmentNote) {
+            this.db.prepare(`
+              UPDATE prod_test_records SET note = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+            `).run(appointmentNote, record.id);
+            result.updated++;
+            console.log(`[ProdTestRecordService] Updated note for appointment ${record.appointment_guid}: ${appointmentNote}`);
+          }
+        } catch (err: any) {
+          result.errors.push(`Error updating record ${record.id}: ${err.message}`);
+        }
+      }
+
+      console.log(`[ProdTestRecordService] Note update complete: ${result.updated} records updated`);
+    } catch (err: any) {
+      result.errors.push(`Update failed: ${err.message}`);
+      console.error('[ProdTestRecordService] Note update error:', err);
+    }
+
+    return result;
+  }
+
+  /**
+   * Update notes for existing appointment records by searching all traces for matching appointment GUIDs
+   * This is useful for records created by goal tests that don't have observation_id set
+   * It searches production_traces for Call_Summaries containing Child{N}_appointmentGUID matches
+   */
+  async updateNotesFromAllTraces(appointmentGuid?: string): Promise<{ updated: number; errors: string[] }> {
+    const result = { updated: 0, errors: [] as string[] };
+
+    try {
+      // Find appointment records that have no note
+      let sql = `
+        SELECT id, appointment_guid, trace_id
+        FROM prod_test_records
+        WHERE record_type = 'appointment'
+          AND (note IS NULL OR note = '')
+          AND appointment_guid IS NOT NULL
+      `;
+      const params: any[] = [];
+
+      if (appointmentGuid) {
+        sql += ` AND UPPER(appointment_guid) = UPPER(?)`;
+        params.push(appointmentGuid);
+      }
+
+      const recordsToUpdate = this.db.prepare(sql).all(...params) as any[];
+      console.log(`[ProdTestRecordService] Found ${recordsToUpdate.length} appointment records without notes`);
+
+      // Get all traces that might contain appointment info in their output
+      const traces = this.db.prepare(`
+        SELECT trace_id, output FROM production_traces
+        WHERE output LIKE '%appointmentGUID%' OR output LIKE '%appointmentId%'
+      `).all() as any[];
+
+      console.log(`[ProdTestRecordService] Found ${traces.length} traces with appointment info`);
+
+      for (const record of recordsToUpdate) {
+        try {
+          // First try using the existing trace_id if set
+          if (record.trace_id) {
+            const childInfo = this.extractChildInfoFromCallSummary(record.trace_id, record.appointment_guid);
+            if (childInfo && childInfo.childName) {
+              const parts: string[] = [`Child: ${childInfo.childName}`];
+              if (childInfo.childDOB) parts.push(`DOB: ${childInfo.childDOB}`);
+              if (childInfo.insuranceProvider) parts.push(`Insurance: ${childInfo.insuranceProvider}`);
+              if (childInfo.groupID) parts.push(`GroupID: ${childInfo.groupID}`);
+              if (childInfo.memberID) parts.push(`MemberID: ${childInfo.memberID}`);
+              const appointmentNote = parts.join(' | ');
+
+              this.db.prepare(`
+                UPDATE prod_test_records SET note = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+              `).run(appointmentNote, record.id);
+              result.updated++;
+              console.log(`[ProdTestRecordService] Updated note for ${record.appointment_guid} from trace_id: ${appointmentNote}`);
+              continue;
+            }
+          }
+
+          // Search through all traces for one that contains this appointment GUID
+          const upperApptGuid = record.appointment_guid.toUpperCase();
+          for (const trace of traces) {
+            if (!trace.output) continue;
+
+            // Check if this trace output contains the appointment GUID
+            if (trace.output.toUpperCase().includes(upperApptGuid)) {
+              const childInfo = this.extractChildInfoFromCallSummary(trace.trace_id, record.appointment_guid);
+              if (childInfo && childInfo.childName) {
+                const parts: string[] = [`Child: ${childInfo.childName}`];
+                if (childInfo.childDOB) parts.push(`DOB: ${childInfo.childDOB}`);
+                if (childInfo.insuranceProvider) parts.push(`Insurance: ${childInfo.insuranceProvider}`);
+                if (childInfo.groupID) parts.push(`GroupID: ${childInfo.groupID}`);
+                if (childInfo.memberID) parts.push(`MemberID: ${childInfo.memberID}`);
+                const appointmentNote = parts.join(' | ');
+
+                this.db.prepare(`
+                  UPDATE prod_test_records SET note = ?, trace_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+                `).run(appointmentNote, trace.trace_id, record.id);
+                result.updated++;
+                console.log(`[ProdTestRecordService] Updated note for ${record.appointment_guid} from searched trace: ${appointmentNote}`);
+                break;
+              }
+            }
+          }
+        } catch (err: any) {
+          result.errors.push(`Error updating record ${record.id}: ${err.message}`);
+        }
+      }
+
+      console.log(`[ProdTestRecordService] Note update from all traces complete: ${result.updated} records updated`);
+    } catch (err: any) {
+      result.errors.push(`Update failed: ${err.message}`);
+      console.error('[ProdTestRecordService] Note update from all traces error:', err);
+    }
+
+    return result;
+  }
+
+  /**
+   * Import traces for a specific patient GUID
+   * Searches production_trace_observations for any traces that created/booked for this patient
+   * and imports the notes from those observations
+   * Also enriches records with full Cloud9 data (location, provider, chair names, etc.)
+   */
+  async importByPatientGuid(patientGuid: string): Promise<{
+    appointmentsImported: number;
+    appointmentsUpdated: number;
+    appointmentsEnriched: number;
+    errors: string[];
+  }> {
+    const result = { appointmentsImported: 0, appointmentsUpdated: 0, appointmentsEnriched: 0, errors: [] as string[] };
+
+    if (!patientGuid) {
+      result.errors.push('patientGuid is required');
+      return result;
+    }
+
+    try {
+      const upperPatientGuid = patientGuid.toUpperCase();
+      console.log(`[ProdTestRecordService] Importing traces for patient: ${upperPatientGuid}`);
+
+      // Find observations where the input contains this patient GUID (for book_child calls)
+      const observations = this.db.prepare(`
+        SELECT
+          pto.observation_id,
+          pto.trace_id,
+          pto.name,
+          pto.input,
+          pto.output,
+          pto.started_at,
+          pt.session_id,
+          pt.langfuse_config_id
+        FROM production_trace_observations pto
+        JOIN production_traces pt ON pto.trace_id = pt.trace_id
+        WHERE pto.name = 'schedule_appointment_ortho'
+          AND pto.output LIKE '%Appointment GUID Added%'
+          AND UPPER(pto.input) LIKE '%' || ? || '%'
+        ORDER BY pto.started_at DESC
+      `).all(upperPatientGuid) as any[];
+
+      console.log(`[ProdTestRecordService] Found ${observations.length} matching observations`);
+
+      for (const obs of observations) {
+        try {
+          const input = this.parseJson(obs.input);
+          const output = this.parseJson(obs.output);
+
+          if (!input || !output) continue;
+
+          const appointmentGuid = this.extractAppointmentGuid(output);
+          if (!appointmentGuid) continue;
+
+          // Check if this appointment already exists in prod_test_records
+          const existing = this.db.prepare(`
+            SELECT id, note FROM prod_test_records
+            WHERE UPPER(appointment_guid) = UPPER(?) AND record_type = 'appointment'
+          `).get(appointmentGuid) as any;
+
+          // Construct note from child info - first try tool input, then Call_Summary
+          let appointmentNote: string | null = null;
+          if (input.childName) {
+            const parts: string[] = [`Child: ${input.childName}`];
+            if (input.childDOB) parts.push(`DOB: ${input.childDOB}`);
+            if (input.insuranceProvider) parts.push(`Insurance: ${input.insuranceProvider}`);
+            if (input.groupID) parts.push(`GroupID: ${input.groupID}`);
+            if (input.memberID) parts.push(`MemberID: ${input.memberID}`);
+            appointmentNote = parts.join(' | ');
+          }
+
+          // If no childName in tool input, try to extract from Call_Summary
+          if (!appointmentNote && obs.trace_id) {
+            const childInfo = this.extractChildInfoFromCallSummary(obs.trace_id, appointmentGuid);
+            if (childInfo && childInfo.childName) {
+              const parts: string[] = [`Child: ${childInfo.childName}`];
+              if (childInfo.childDOB) parts.push(`DOB: ${childInfo.childDOB}`);
+              if (childInfo.insuranceProvider) parts.push(`Insurance: ${childInfo.insuranceProvider}`);
+              if (childInfo.groupID) parts.push(`GroupID: ${childInfo.groupID}`);
+              if (childInfo.memberID) parts.push(`MemberID: ${childInfo.memberID}`);
+              appointmentNote = parts.join(' | ');
+              console.log(`[ProdTestRecordService] Extracted note from Call_Summary for ${appointmentGuid}`);
+            }
+          }
+
+          if (existing) {
+            // Update existing record with note if it doesn't have one
+            if (!existing.note && appointmentNote) {
+              this.db.prepare(`
+                UPDATE prod_test_records SET note = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+              `).run(appointmentNote, existing.id);
+              result.appointmentsUpdated++;
+              console.log(`[ProdTestRecordService] Updated note for appointment ${appointmentGuid}`);
+            }
+          } else {
+            // Import new record
+            const imported = await this.importAppointmentRecord(obs, input, appointmentGuid);
+            if (imported) {
+              result.appointmentsImported++;
+              console.log(`[ProdTestRecordService] Imported appointment ${appointmentGuid}`);
+            }
+          }
+        } catch (err: any) {
+          result.errors.push(`Error processing observation ${obs.observation_id}: ${err.message}`);
+        }
+      }
+
+      // After importing traces, enrich all records for this patient with Cloud9 data
+      const enrichResult = await this.enrichAppointmentsFromCloud9(patientGuid);
+      result.appointmentsEnriched = enrichResult.enriched;
+      if (enrichResult.errors.length > 0) {
+        result.errors.push(...enrichResult.errors);
+      }
+
+      console.log(`[ProdTestRecordService] Import by patient complete: ${result.appointmentsImported} imported, ${result.appointmentsUpdated} notes updated, ${result.appointmentsEnriched} enriched from Cloud9`);
+    } catch (err: any) {
+      result.errors.push(`Import failed: ${err.message}`);
+      console.error('[ProdTestRecordService] Import by patient error:', err);
+    }
+
+    return result;
+  }
+
+  /**
+   * Enrich local appointment records with full details from Cloud9 API
+   * This fills in missing fields like location_name, provider_name, chair, appointment_type
+   */
+  async enrichAppointmentsFromCloud9(patientGuid: string): Promise<{ enriched: number; errors: string[] }> {
+    const result = { enriched: 0, errors: [] as string[] };
+
+    try {
+      console.log(`[ProdTestRecordService] Enriching appointments from Cloud9 for patient: ${patientGuid}`);
+
+      // Fetch full appointment details AND chair schedules from Cloud9 API in parallel
+      const [cloud9Response, chairSchedulesResponse] = await Promise.all([
+        this.cloud9Client.getPatientAppointments(patientGuid),
+        this.cloud9Client.getChairSchedules(),
+      ]);
+
+      if (cloud9Response.status !== 'Success') {
+        result.errors.push(`Cloud9 API error: ${cloud9Response.errorMessage || 'Unknown error'}`);
+        return result;
+      }
+
+      console.log(`[ProdTestRecordService] Got ${cloud9Response.records.length} appointments from Cloud9`);
+
+      // Build map from schedule_column_guid -> chair description
+      const scheduleColumnDescriptionMap = new Map<string, string>();
+      if (chairSchedulesResponse.status === 'Success' && chairSchedulesResponse.records) {
+        chairSchedulesResponse.records.forEach((schedule: any) => {
+          if (schedule.schdcolGUID && schedule.schdcolDescription) {
+            scheduleColumnDescriptionMap.set(schedule.schdcolGUID, schedule.schdcolDescription);
+            // Also add uppercase version for case-insensitive matching
+            scheduleColumnDescriptionMap.set(schedule.schdcolGUID.toUpperCase(), schedule.schdcolDescription);
+          }
+        });
+        console.log(`[ProdTestRecordService] Built chair schedule map with ${scheduleColumnDescriptionMap.size / 2} entries`);
+      }
+
+      // Update each local record with Cloud9 data
+      for (const appt of cloud9Response.records) {
+        try {
+          const apptGuid = appt.AppointmentGUID || appt.appointment_guid;
+          if (!apptGuid) continue;
+
+          // Find the local record (including schedule_column_guid for chair lookup)
+          const existing = this.db.prepare(`
+            SELECT id, schedule_column_guid FROM prod_test_records
+            WHERE UPPER(appointment_guid) = UPPER(?) AND record_type = 'appointment'
+          `).get(apptGuid) as any;
+
+          if (!existing) continue;
+
+          // Extract Cloud9 fields (handle different naming conventions)
+          const locationName = appt.LocationName || appt.location_name || null;
+          const locationGuid = appt.LocationGUID || appt.location_guid || null;
+          const providerName = appt.OrthodontistName || appt.orthodontist_name || appt.ProviderName || appt.provider_name || null;
+          const appointmentType = appt.AppointmentTypeDescription || appt.appointment_type_description || null;
+          const appointmentTypeGuid = appt.AppointmentTypeGUID || appt.appointment_type_guid || null;
+          const appointmentMinutes = appt.Minutes || appt.minutes || appt.AppointmentMinutes || null;
+          const appointmentDateTime = appt.AppointmentDateTime || appt.appointment_date_time || null;
+
+          // Chair lookup: GetAppointmentListByPatient doesn't return ScheduleColumnDescription directly
+          // So we look it up from the chair schedules using the schedule_column_guid stored in our local record
+          let chair: string | null = null;
+          if (existing.schedule_column_guid) {
+            chair = scheduleColumnDescriptionMap.get(existing.schedule_column_guid) ||
+                    scheduleColumnDescriptionMap.get(existing.schedule_column_guid.toUpperCase()) ||
+                    null;
+            if (chair) {
+              console.log(`[ProdTestRecordService] Found chair for ${apptGuid}: ${existing.schedule_column_guid} -> ${chair}`);
+            }
+          }
+
+          // Update local record with enriched data (preserve existing note)
+          const updateResult = this.db.prepare(`
+            UPDATE prod_test_records SET
+              location_name = COALESCE(?, location_name),
+              location_guid = COALESCE(?, location_guid),
+              provider_name = COALESCE(?, provider_name),
+              appointment_type = COALESCE(?, appointment_type),
+              appointment_type_guid = COALESCE(?, appointment_type_guid),
+              appointment_minutes = COALESCE(?, appointment_minutes),
+              appointment_datetime = COALESCE(?, appointment_datetime),
+              chair = COALESCE(?, chair),
+              updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `).run(
+            locationName,
+            locationGuid,
+            providerName,
+            appointmentType,
+            appointmentTypeGuid,
+            appointmentMinutes,
+            appointmentDateTime,
+            chair,
+            existing.id
+          );
+
+          if (updateResult.changes > 0) {
+            result.enriched++;
+            console.log(`[ProdTestRecordService] Enriched appointment ${apptGuid}: location=${locationName}, provider=${providerName}, type=${appointmentType}, chair=${chair}`);
+          }
+        } catch (err: any) {
+          result.errors.push(`Error enriching appointment: ${err.message}`);
+        }
+      }
+
+      console.log(`[ProdTestRecordService] Enrichment complete: ${result.enriched} appointments updated`);
+    } catch (err: any) {
+      result.errors.push(`Enrichment failed: ${err.message}`);
+      console.error('[ProdTestRecordService] Enrichment error:', err);
+    }
+
+    return result;
   }
 
   // ============================================================================
@@ -379,12 +982,25 @@ export class ProdTestRecordService {
   getRecords(options: {
     recordType?: 'patient' | 'appointment';
     status?: string;
+    langfuseConfigId?: number;
     limit?: number;
     offset?: number;
     fromDate?: string;
     toDate?: string;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
   } = {}): { records: ProdTestRecord[]; total: number } {
-    const { recordType, status, limit = 100, offset = 0, fromDate, toDate } = options;
+    const {
+      recordType,
+      status,
+      langfuseConfigId,
+      limit = 100,
+      offset = 0,
+      fromDate,
+      toDate,
+      sortBy = 'created_at',
+      sortOrder = 'desc',
+    } = options;
 
     let whereClauses: string[] = ['1=1'];
     const params: any[] = [];
@@ -397,6 +1013,10 @@ export class ProdTestRecordService {
       whereClauses.push('status = ?');
       params.push(status);
     }
+    if (langfuseConfigId) {
+      whereClauses.push('langfuse_config_id = ?');
+      params.push(langfuseConfigId);
+    }
     if (fromDate) {
       whereClauses.push('created_at >= ?');
       params.push(fromDate);
@@ -408,10 +1028,18 @@ export class ProdTestRecordService {
 
     const whereClause = whereClauses.join(' AND ');
 
+    // Validate sortBy to prevent SQL injection
+    const allowedSortColumns = [
+      'created_at', 'updated_at', 'cloud9_created_at', 'patient_first_name', 'patient_last_name',
+      'record_type', 'status', 'appointment_datetime', 'location_name'
+    ];
+    const safeSortBy = allowedSortColumns.includes(sortBy) ? sortBy : 'cloud9_created_at';
+    const safeSortOrder = sortOrder === 'asc' ? 'ASC' : 'DESC';
+
     const records = this.db.prepare(`
       SELECT * FROM prod_test_records
       WHERE ${whereClause}
-      ORDER BY created_at DESC
+      ORDER BY ${safeSortBy} ${safeSortOrder}
       LIMIT ? OFFSET ?
     `).all(...params, limit, offset) as ProdTestRecord[];
 
@@ -432,6 +1060,50 @@ export class ProdTestRecordService {
     return this.db.prepare(`
       SELECT * FROM prod_test_records WHERE id = ?
     `).get(id) as ProdTestRecord | null;
+  }
+
+  /**
+   * Get appointments by patient GUID from local database
+   * Returns appointments in format compatible with the frontend AppointmentCard
+   */
+  getAppointmentsByPatientGuid(patientGuid: string): any[] {
+    const records = this.db.prepare(`
+      SELECT * FROM prod_test_records
+      WHERE UPPER(patient_guid) = UPPER(?)
+        AND record_type = 'appointment'
+      ORDER BY appointment_datetime DESC
+    `).all(patientGuid) as ProdTestRecord[];
+
+    // Transform to format compatible with appointment display
+    return records.map(record => ({
+      appointment_guid: record.appointment_guid,
+      patient_guid: record.patient_guid,
+      patient_first_name: record.patient_first_name,
+      patient_last_name: record.patient_last_name,
+      patient_birth_date: record.patient_birthdate,
+      appointment_date_time: record.appointment_datetime,
+      appointment_type_guid: record.appointment_type_guid,
+      appointment_type_description: record.appointment_type,
+      appointment_minutes: record.appointment_minutes,
+      appointment_note: record.note,
+      location_guid: record.location_guid,
+      location_name: record.location_name,
+      orthodontist_name: record.provider_name,
+      schedule_view_guid: record.schedule_view_guid,
+      schedule_column_guid: record.schedule_column_guid,
+      status: record.status,
+      status_description: record.status === 'active' ? 'Scheduled' :
+                          record.status === 'cancelled' ? 'Cancelled' : record.status,
+      chair: record.chair, // From Cloud9 enrichment (ScheduleColumnDescription)
+      scheduled_at: record.cloud9_created_at || record.created_at,
+      // Include raw record fields for reference
+      _raw: {
+        id: record.id,
+        trace_id: record.trace_id,
+        session_id: record.session_id,
+        cloud9_created_at: record.cloud9_created_at,
+      }
+    }));
   }
 
   /**
@@ -588,7 +1260,7 @@ export class ProdTestRecordService {
       // Call Cloud9 API to cancel
       const response = await this.cloud9Client.cancelAppointment(record.appointment_guid);
 
-      if (response.success) {
+      if (response.status === 'Success') {
         // Update record status
         this.db.prepare(`
           UPDATE prod_test_records
@@ -607,13 +1279,13 @@ export class ProdTestRecordService {
           UPDATE prod_test_records
           SET status = 'cleanup_failed', cleanup_error = ?, updated_at = datetime('now')
           WHERE id = ?
-        `).run(response.error || 'Unknown error', id);
+        `).run(response.errorMessage || 'Unknown error', id);
 
         return {
           success: false,
           appointmentGuid: record.appointment_guid,
           message: 'Failed to cancel appointment',
-          error: response.error,
+          error: response.errorMessage,
         };
       }
     } catch (err: any) {
@@ -648,6 +1320,267 @@ export class ProdTestRecordService {
     }
 
     return results;
+  }
+
+  /**
+   * Streaming cancellation - processes appointments one at a time with rate limiting
+   * Emits progress events via the EventEmitter for real-time SSE updates
+   */
+  async streamingCancelAppointments(
+    ids: number[],
+    eventEmitter: EventEmitter,
+    operationId: string
+  ): Promise<StreamingCancellationSummary> {
+    const summary: StreamingCancellationSummary = {
+      operationId,
+      total: ids.length,
+      succeeded: 0,
+      failed: 0,
+      alreadyCancelled: 0,
+    };
+
+    // Prepare items for streaming
+    const items: StreamingCancellationItem[] = ids.map(id => {
+      const record = this.getRecord(id);
+      return {
+        id,
+        appointmentGuid: record?.appointment_guid || '',
+        patientName: record
+          ? `${record.patient_first_name || ''} ${record.patient_last_name || ''}`.trim() || 'Unknown'
+          : 'Unknown',
+        appointmentDate: record?.appointment_datetime || null,
+        status: 'pending' as const,
+      };
+    });
+
+    // Emit start event with all items
+    eventEmitter.emit('cancellation-started', {
+      operationId,
+      total: items.length,
+      items,
+    });
+
+    // Process each item
+    for (let i = 0; i < ids.length; i++) {
+      const id = ids[i];
+      const item = items[i];
+
+      // Emit processing status
+      item.status = 'processing';
+      eventEmitter.emit('cancellation-progress', {
+        operationId,
+        item: { ...item },
+        currentIndex: i,
+        total: ids.length,
+      });
+
+      const record = this.getRecord(id);
+
+      // Validate record
+      if (!record) {
+        item.status = 'failed';
+        item.error = 'Record not found';
+        summary.failed++;
+        eventEmitter.emit('cancellation-progress', {
+          operationId,
+          item: { ...item },
+          currentIndex: i,
+          total: ids.length,
+        });
+        continue;
+      }
+
+      if (record.record_type !== 'appointment') {
+        item.status = 'failed';
+        item.error = 'Record is not an appointment';
+        summary.failed++;
+        eventEmitter.emit('cancellation-progress', {
+          operationId,
+          item: { ...item },
+          currentIndex: i,
+          total: ids.length,
+        });
+        continue;
+      }
+
+      if (!record.appointment_guid) {
+        item.status = 'failed';
+        item.error = 'No appointment GUID found';
+        summary.failed++;
+        eventEmitter.emit('cancellation-progress', {
+          operationId,
+          item: { ...item },
+          currentIndex: i,
+          total: ids.length,
+        });
+        continue;
+      }
+
+      // Check if already cancelled
+      if (record.status === 'cancelled') {
+        item.status = 'already_cancelled';
+        summary.alreadyCancelled++;
+        eventEmitter.emit('cancellation-progress', {
+          operationId,
+          item: { ...item },
+          currentIndex: i,
+          total: ids.length,
+        });
+      } else {
+        // Actually cancel via Cloud9 API
+        let retryCount = 0;
+        let success = false;
+
+        while (!success && retryCount < 2) {
+          try {
+            const response = await this.cloud9Client.cancelAppointment(record.appointment_guid);
+
+            if (response.status === 'Success') {
+              // Update record status
+              this.db.prepare(`
+                UPDATE prod_test_records
+                SET status = 'cancelled', cancelled_at = datetime('now'), updated_at = datetime('now')
+                WHERE id = ?
+              `).run(id);
+
+              item.status = 'success';
+              summary.succeeded++;
+              success = true;
+            } else {
+              // Check if it's a rate limit error (429)
+              const errorMsg = response.errorMessage || 'Unknown error';
+              if (errorMsg.includes('429') || errorMsg.toLowerCase().includes('rate limit')) {
+                if (retryCount === 0) {
+                  console.log(`[StreamingCancel] Rate limited on ${record.appointment_guid}, waiting extra 5s...`);
+                  await new Promise(resolve => setTimeout(resolve, CANCELLATION_DELAY_MS));
+                  retryCount++;
+                  continue;
+                }
+              }
+
+              // Update with error
+              this.db.prepare(`
+                UPDATE prod_test_records
+                SET status = 'cleanup_failed', cleanup_error = ?, updated_at = datetime('now')
+                WHERE id = ?
+              `).run(errorMsg, id);
+
+              item.status = 'failed';
+              item.error = errorMsg;
+              summary.failed++;
+              success = true; // Exit retry loop
+            }
+          } catch (err: any) {
+            // Check for rate limit in catch block too
+            if (err.message?.includes('429') || err.message?.toLowerCase().includes('rate limit')) {
+              if (retryCount === 0) {
+                console.log(`[StreamingCancel] Rate limited (exception) on ${record.appointment_guid}, waiting extra 5s...`);
+                await new Promise(resolve => setTimeout(resolve, CANCELLATION_DELAY_MS));
+                retryCount++;
+                continue;
+              }
+            }
+
+            // Update with error
+            this.db.prepare(`
+              UPDATE prod_test_records
+              SET status = 'cleanup_failed', cleanup_error = ?, updated_at = datetime('now')
+              WHERE id = ?
+            `).run(err.message, id);
+
+            item.status = 'failed';
+            item.error = err.message;
+            summary.failed++;
+            success = true; // Exit retry loop
+          }
+        }
+
+        // Emit final status for this item
+        eventEmitter.emit('cancellation-progress', {
+          operationId,
+          item: { ...item },
+          currentIndex: i,
+          total: ids.length,
+        });
+      }
+
+      // Wait between API calls (rate limiting) - but not after the last item
+      if (i < ids.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, CANCELLATION_DELAY_MS));
+      }
+    }
+
+    // Emit completion
+    eventEmitter.emit('cancellation-completed', summary);
+
+    return summary;
+  }
+
+  // ============================================================================
+  // PATIENT NAME BACKFILL
+  // ============================================================================
+
+  /**
+   * Backfill patient names for records that have null names
+   * Looks up from Cloud9 API
+   */
+  async backfillPatientNames(): Promise<{ updated: number; failed: number; errors: string[] }> {
+    const result = { updated: 0, failed: 0, errors: [] as string[] };
+
+    // Get unique patient GUIDs that have records with null names
+    const orphanGuids = this.db.prepare(`
+      SELECT DISTINCT patient_guid
+      FROM prod_test_records
+      WHERE (patient_first_name IS NULL OR patient_first_name = '')
+        AND (patient_last_name IS NULL OR patient_last_name = '')
+        AND patient_guid IS NOT NULL
+        AND patient_guid != ''
+    `).all() as { patient_guid: string }[];
+
+    console.log(`[ProdTestRecordService] Found ${orphanGuids.length} patient GUIDs with missing names to backfill`);
+
+    for (const { patient_guid } of orphanGuids) {
+      try {
+        console.log(`[ProdTestRecordService] Looking up patient: ${patient_guid}`);
+        const cloud9Response = await this.cloud9Client.getPatientInformation(patient_guid);
+
+        if (cloud9Response.status === 'Success' && cloud9Response.records.length > 0) {
+          const patientInfo = cloud9Response.records[0];
+          const firstName = patientInfo.FirstName || patientInfo.persFirstName || null;
+          const lastName = patientInfo.LastName || patientInfo.persLastName || null;
+
+          if (firstName || lastName) {
+            // Update all records with this patient_guid
+            const updateResult = this.db.prepare(`
+              UPDATE prod_test_records
+              SET patient_first_name = ?, patient_last_name = ?, updated_at = datetime('now')
+              WHERE patient_guid = ?
+                AND (patient_first_name IS NULL OR patient_first_name = '')
+                AND (patient_last_name IS NULL OR patient_last_name = '')
+            `).run(firstName, lastName, patient_guid);
+
+            console.log(`[ProdTestRecordService] Updated ${updateResult.changes} records for ${patient_guid}: ${firstName} ${lastName}`);
+            result.updated += updateResult.changes;
+          } else {
+            console.log(`[ProdTestRecordService] No name found in Cloud9 for: ${patient_guid}`);
+            result.failed++;
+          }
+        } else {
+          console.log(`[ProdTestRecordService] Cloud9 lookup failed for: ${patient_guid}`);
+          result.failed++;
+          result.errors.push(`No data returned for patient ${patient_guid}`);
+        }
+
+        // Rate limit: wait between API calls
+        await new Promise(resolve => setTimeout(resolve, 300));
+      } catch (err: any) {
+        console.error(`[ProdTestRecordService] Error looking up ${patient_guid}:`, err.message);
+        result.failed++;
+        result.errors.push(`Error for ${patient_guid}: ${err.message}`);
+      }
+    }
+
+    return result;
   }
 
   // ============================================================================
