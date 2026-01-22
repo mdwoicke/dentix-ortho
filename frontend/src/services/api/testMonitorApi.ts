@@ -38,6 +38,12 @@ import type {
   ProductionSessionsResponse,
   ProductionSessionDetailResponse,
   TraceInsightsResponse,
+  ReplayRequest,
+  ReplayResponse,
+  ReplayEndpoints,
+  CacheHealthResponse,
+  CacheOperationResponse,
+  TierSlotsResponse,
 } from '../../types/testMonitor.types';
 
 // Base API URL
@@ -1644,6 +1650,7 @@ export interface ProdTestRecord {
   created_at: string;
   updated_at: string;
   cloud9_created_at: string | null;
+  note: string | null;
 }
 
 export interface ProdTestRecordStats {
@@ -1677,18 +1684,24 @@ export interface CancelResult {
 export async function getProdTestRecords(options?: {
   recordType?: 'patient' | 'appointment';
   status?: string;
+  langfuseConfigId?: number;
   limit?: number;
   offset?: number;
   fromDate?: string;
   toDate?: string;
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
 }): Promise<{ records: ProdTestRecord[]; total: number }> {
   const params = new URLSearchParams();
   if (options?.recordType) params.append('recordType', options.recordType);
   if (options?.status) params.append('status', options.status);
+  if (options?.langfuseConfigId) params.append('langfuseConfigId', options.langfuseConfigId.toString());
   if (options?.limit) params.append('limit', options.limit.toString());
   if (options?.offset) params.append('offset', options.offset.toString());
   if (options?.fromDate) params.append('fromDate', options.fromDate);
   if (options?.toDate) params.append('toDate', options.toDate);
+  if (options?.sortBy) params.append('sortBy', options.sortBy);
+  if (options?.sortOrder) params.append('sortOrder', options.sortOrder);
 
   const queryString = params.toString();
   const url = `/test-monitor/prod-test-records${queryString ? `?${queryString}` : ''}`;
@@ -1769,9 +1782,389 @@ export async function bulkCancelProdTestAppointments(ids: number[]): Promise<{
   return response.data;
 }
 
+// ============================================================================
+// STREAMING CANCELLATION API
+// ============================================================================
+
+/**
+ * Streaming cancellation item type
+ */
+export interface StreamingCancellationItem {
+  id: number;
+  appointmentGuid: string;
+  patientName: string;
+  appointmentDate: string | null;
+  status: 'pending' | 'processing' | 'success' | 'failed' | 'already_cancelled';
+  error?: string;
+}
+
+/**
+ * Streaming cancellation summary type
+ */
+export interface StreamingCancellationSummary {
+  operationId: string;
+  total: number;
+  succeeded: number;
+  failed: number;
+  alreadyCancelled: number;
+}
+
+/**
+ * Start streaming cancellation operation
+ * Returns an operation ID that can be used to subscribe to progress
+ */
+export async function startStreamingCancellation(ids: number[]): Promise<{
+  success: boolean;
+  operationId: string;
+  total: number;
+  estimatedTimeMs: number;
+}> {
+  const response = await post<{
+    success: boolean;
+    operationId: string;
+    total: number;
+    estimatedTimeMs: number;
+  }>('/test-monitor/prod-test-records/bulk-cancel-stream', { ids });
+  return response;
+}
+
+/**
+ * Subscribe to cancellation progress via SSE
+ * Returns an EventSource that emits events:
+ * - cancellation-started: { operationId, total, items[] }
+ * - cancellation-progress: { operationId, item, currentIndex, total }
+ * - cancellation-completed: { operationId, total, succeeded, failed, alreadyCancelled }
+ */
+export function subscribeToCancellation(
+  operationId: string,
+  callbacks: {
+    onStarted?: (data: { operationId: string; total: number; items: StreamingCancellationItem[] }) => void;
+    onProgress?: (data: { operationId: string; item: StreamingCancellationItem; currentIndex: number; total: number }) => void;
+    onCompleted?: (data: StreamingCancellationSummary) => void;
+    onError?: (error: Error) => void;
+  }
+): EventSource {
+  // Get the base URL for SSE (we need the full URL for EventSource)
+  const baseUrl = import.meta.env.VITE_API_URL || '/api';
+  const url = baseUrl.startsWith('http')
+    ? `${baseUrl}/test-monitor/prod-test-records/cancel-stream/${operationId}`
+    : `${window.location.origin}${baseUrl}/test-monitor/prod-test-records/cancel-stream/${operationId}`;
+
+  const eventSource = new EventSource(url);
+
+  eventSource.addEventListener('cancellation-started', (event) => {
+    try {
+      const data = JSON.parse((event as MessageEvent).data);
+      callbacks.onStarted?.(data);
+    } catch (err) {
+      console.error('[SSE] Failed to parse cancellation-started event:', err);
+    }
+  });
+
+  eventSource.addEventListener('cancellation-progress', (event) => {
+    try {
+      const data = JSON.parse((event as MessageEvent).data);
+      callbacks.onProgress?.(data);
+    } catch (err) {
+      console.error('[SSE] Failed to parse cancellation-progress event:', err);
+    }
+  });
+
+  eventSource.addEventListener('cancellation-completed', (event) => {
+    try {
+      const data = JSON.parse((event as MessageEvent).data);
+      callbacks.onCompleted?.(data);
+      eventSource.close();
+    } catch (err) {
+      console.error('[SSE] Failed to parse cancellation-completed event:', err);
+    }
+  });
+
+  eventSource.onerror = (error) => {
+    console.error('[SSE] EventSource error:', error);
+    callbacks.onError?.(new Error('SSE connection error'));
+    eventSource.close();
+  };
+
+  return eventSource;
+}
+
+/**
+ * Get cancellation operation status (non-streaming)
+ */
+export async function getCancellationStatus(operationId: string): Promise<{
+  success: boolean;
+  operationId: string;
+  total: number;
+  completed: boolean;
+  summary: StreamingCancellationSummary | null;
+  startedAt: string;
+}> {
+  const response = await get<{
+    success: boolean;
+    operationId: string;
+    total: number;
+    completed: boolean;
+    summary: StreamingCancellationSummary | null;
+    startedAt: string;
+  }>(`/test-monitor/prod-test-records/cancel-status/${operationId}`);
+  return response;
+}
+
 /**
  * Delete a production test record
  */
 export async function deleteProdTestRecord(id: number): Promise<void> {
   await del<TestMonitorApiResponse<void>>(`/test-monitor/prod-test-records/${id}`);
+}
+
+/**
+ * Get appointments by patient GUID from local database (fast, no Cloud9 API call)
+ * This is used for quick loading of patient appointments without waiting for Cloud9
+ */
+export async function getLocalAppointmentsByPatientGuid(patientGuid: string): Promise<{
+  appointments: any[];
+  count: number;
+  source: string;
+}> {
+  const response = await get<{
+    success: boolean;
+    data: any[];
+    count: number;
+    source: string;
+  }>(`/test-monitor/prod-test-records/patient/${patientGuid}/appointments`);
+  return {
+    appointments: response.data,
+    count: response.count,
+    source: response.source,
+  };
+}
+
+/**
+ * Import Langfuse traces for a specific patient
+ * This finds any booking traces for the patient and imports the notes to local database
+ */
+export async function importTracesByPatientGuid(patientGuid: string): Promise<{
+  appointmentsImported: number;
+  appointmentsUpdated: number;
+  errors: string[];
+}> {
+  const response = await post<{
+    success: boolean;
+    data: {
+      appointmentsImported: number;
+      appointmentsUpdated: number;
+      errors: string[];
+    };
+  }>(`/test-monitor/prod-test-records/patient/${patientGuid}/import-traces`, {});
+  return response.data;
+}
+
+// ============================================================================
+// API REPLAY
+// ============================================================================
+
+/**
+ * Execute a replay of a tool call against Node-RED endpoints
+ */
+export async function executeReplay(request: ReplayRequest): Promise<ReplayResponse> {
+  const response = await post<ReplayResponse>('/test-monitor/replay', request);
+  return response;
+}
+
+/**
+ * Get available replay endpoints
+ */
+export async function getReplayEndpoints(): Promise<ReplayEndpoints> {
+  const response = await get<TestMonitorApiResponse<ReplayEndpoints>>('/test-monitor/replay/endpoints');
+  return response.data;
+}
+
+// ============================================================================
+// QUEUE ACTIVITY API
+// ============================================================================
+
+/**
+ * Queue operation summary type
+ */
+export interface QueueOperation {
+  operationId: string;
+  patientGuid: string | null;
+  patientName: string | null;
+  appointmentDatetime: string | null;
+  finalStatus: 'completed' | 'failed' | 'pending' | 'expired';
+  totalAttempts: number;
+  maxAttempts: number;
+  appointmentGuid: string | null;
+  finalError: string | null;
+  eventCount: number;
+  startedAt: string;
+  endedAt: string | null;
+  durationMs: number | null;
+}
+
+/**
+ * Queue event detail type
+ */
+export interface QueueEvent {
+  id: number;
+  operationId: string;
+  eventType: 'queued' | 'retry_attempt' | 'completed' | 'failed' | 'expired';
+  attemptNumber: number;
+  maxAttempts: number;
+  patientGuid: string | null;
+  patientName: string | null;
+  appointmentDatetime: string | null;
+  scheduleViewGuid: string | null;
+  scheduleColumnGuid: string | null;
+  appointmentTypeGuid: string | null;
+  appointmentGuid: string | null;
+  errorMessage: string | null;
+  cloud9Response: string | null;
+  backoffMs: number | null;
+  nextRetryAt: string | null;
+  durationMs: number | null;
+  uui: string | null;
+  sessionId: string | null;
+  source: string | null;
+  eventTimestamp: string;
+  createdAt: string;
+}
+
+/**
+ * Queue statistics type
+ */
+export interface QueueStats {
+  totalOperations: number;
+  completedOperations: number;
+  failedOperations: number;
+  pendingOperations: number;
+  expiredOperations: number;
+  totalEvents: number;
+  averageAttempts: number;
+  successRate: number;
+  averageDurationMs: number | null;
+}
+
+/**
+ * Get queue activity statistics
+ */
+export async function getQueueStats(hours?: number): Promise<QueueStats> {
+  const params = new URLSearchParams();
+  if (hours) params.append('hours', hours.toString());
+
+  const queryString = params.toString();
+  const url = `/test-monitor/queue-activity/stats${queryString ? `?${queryString}` : ''}`;
+  const response = await get<TestMonitorApiResponse<QueueStats>>(url);
+  return response.data;
+}
+
+/**
+ * Get queue operations
+ */
+export async function getQueueOperations(options?: {
+  limit?: number;
+  offset?: number;
+  status?: 'completed' | 'failed' | 'pending' | 'expired';
+  hours?: number;
+  patientName?: string;
+}): Promise<{ operations: QueueOperation[]; total: number; limit: number; offset: number }> {
+  const params = new URLSearchParams();
+  if (options?.limit) params.append('limit', options.limit.toString());
+  if (options?.offset) params.append('offset', options.offset.toString());
+  if (options?.status) params.append('status', options.status);
+  if (options?.hours) params.append('hours', options.hours.toString());
+  if (options?.patientName) params.append('patientName', options.patientName);
+
+  const queryString = params.toString();
+  const url = `/test-monitor/queue-activity/operations${queryString ? `?${queryString}` : ''}`;
+  const response = await get<TestMonitorApiResponse<{
+    operations: QueueOperation[];
+    total: number;
+    limit: number;
+    offset: number;
+  }>>(url);
+  return response.data;
+}
+
+/**
+ * Get operation detail with all events
+ */
+export async function getQueueOperationDetail(operationId: string): Promise<{
+  operationId: string;
+  events: QueueEvent[];
+}> {
+  const response = await get<TestMonitorApiResponse<{
+    operationId: string;
+    events: QueueEvent[];
+  }>>(`/test-monitor/queue-activity/operations/${encodeURIComponent(operationId)}`);
+  return response.data;
+}
+
+// ============================================================================
+// REDIS SLOT CACHE HEALTH API
+// ============================================================================
+
+/**
+ * Get cache health status from Node-RED
+ * Returns overall health status, tier details, refresh history, and configuration
+ */
+export async function getCacheHealth(): Promise<CacheHealthResponse> {
+  const response = await get<TestMonitorApiResponse<CacheHealthResponse>>(
+    '/test-monitor/cache-health'
+  );
+  return response.data;
+}
+
+/**
+ * Force refresh the slot cache
+ * Bypasses business hours check and triggers immediate cache refresh
+ * @param tier - Optional tier to refresh (1, 2, 3, or 'all'). Defaults to 'all'
+ */
+export async function forceCacheRefresh(tier?: number | 'all'): Promise<CacheOperationResponse> {
+  const response = await post<TestMonitorApiResponse<CacheOperationResponse>>(
+    '/test-monitor/cache-health/refresh',
+    { tier: tier || 'all' }
+  );
+  return response.data;
+}
+
+/**
+ * Clear the slot cache
+ * Clears cache data, forcing API fallback until next refresh
+ * @param tier - Optional tier to clear (1, 2, 3, or 'all'). Defaults to 'all'
+ */
+export async function clearCache(tier?: number | 'all'): Promise<CacheOperationResponse> {
+  const params = new URLSearchParams();
+  if (tier) params.append('tier', tier.toString());
+
+  const queryString = params.toString();
+  const url = `/test-monitor/cache-health/cache${queryString ? `?${queryString}` : ''}`;
+  const response = await del<TestMonitorApiResponse<CacheOperationResponse>>(url);
+  return response.data;
+}
+
+/**
+ * Purge and refresh all cache tiers
+ * Clears all cache keys, then refreshes all tiers with fresh data
+ * This resets the cache age to 0
+ */
+export async function purgeAndRefreshCache(): Promise<CacheOperationResponse> {
+  const response = await post<TestMonitorApiResponse<CacheOperationResponse>>(
+    '/test-monitor/cache-health/purge-and-refresh',
+    {}
+  );
+  return response.data;
+}
+
+/**
+ * Get all cached slots for a specific tier
+ * Returns full slot data with filtering/sorting capabilities
+ * @param tier - Tier number (1, 2, or 3)
+ */
+export async function getTierSlots(tier: number): Promise<TierSlotsResponse> {
+  const response = await get<TierSlotsResponse>(
+    `/test-monitor/cache-health/tier/${tier}/slots`
+  );
+  return response;
 }

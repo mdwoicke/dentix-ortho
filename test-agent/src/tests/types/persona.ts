@@ -152,6 +152,8 @@ export interface DynamicChildData {
   isNewPatient: MaybeDynamic<boolean>;
   hadBracesBefore?: MaybeDynamic<boolean>;
   specialNeeds?: MaybeDynamic<string>;
+  /** When enabled, appends a random 4-digit suffix to name fields for uniqueness */
+  uniquifySuffix?: boolean;
 }
 
 /**
@@ -193,6 +195,9 @@ export interface DynamicDataInventory {
 
   // Extensible for custom data
   custom?: Record<string, unknown>;
+
+  /** When enabled, appends a random 4-digit suffix to parent name/email/phone for uniqueness */
+  parentUniquifySuffix?: boolean;
 }
 
 /**

@@ -14,6 +14,7 @@ export interface AppointmentListProps {
   showPatientName?: boolean;
   isLoading?: boolean;
   emptyMessage?: string;
+  patientComment?: string; // Optional patient comment (may contain child info)
 }
 
 export function AppointmentList({
@@ -23,6 +24,7 @@ export function AppointmentList({
   showPatientName = false,
   isLoading = false,
   emptyMessage = 'No appointments found.',
+  patientComment,
 }: AppointmentListProps) {
   if (isLoading) {
     return (
@@ -49,6 +51,7 @@ export function AppointmentList({
           onConfirm={onConfirm}
           onCancel={onCancel}
           showPatientName={showPatientName}
+          patientComment={patientComment}
         />
       ))}
     </div>

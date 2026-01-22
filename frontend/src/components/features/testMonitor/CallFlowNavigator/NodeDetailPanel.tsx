@@ -5,6 +5,7 @@
 
 import { useState } from 'react';
 import { cn } from '../../../../utils/cn';
+import { copyToClipboard } from '../../../../utils/clipboard';
 import type { NodeDetailPanelProps, FlowNodeType } from './types';
 import { formatDuration, formatCost } from './flowTransformers';
 
@@ -133,8 +134,12 @@ function CollapsibleSection({ title, icon, defaultOpen = true, children, onCopy 
 export function NodeDetailPanel({ node, onClose, langfuseHost, traceId }: NodeDetailPanelProps) {
   if (!node) return null;
 
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
+  const handleCopy = async (text: string) => {
+    try {
+      await copyToClipboard(text);
+    } catch (err) {
+      console.error('Failed to copy:', err);
+    }
   };
 
   const langfuseUrl = langfuseHost && traceId && node.data.observationId
@@ -261,7 +266,7 @@ export function NodeDetailPanel({ node, onClose, langfuseHost, traceId }: NodeDe
               </svg>
             }
             defaultOpen={true}
-            onCopy={() => copyToClipboard(node.data.content || '')}
+            onCopy={() => handleCopy(node.data.content || '')}
           >
             <div className="max-h-48 overflow-y-auto p-2 bg-gray-50 dark:bg-gray-800 rounded text-sm text-gray-800 dark:text-gray-200 whitespace-pre-wrap">
               {node.data.content}
@@ -279,7 +284,7 @@ export function NodeDetailPanel({ node, onClose, langfuseHost, traceId }: NodeDe
               </svg>
             }
             defaultOpen={false}
-            onCopy={() => copyToClipboard(JSON.stringify(node.data.input, null, 2))}
+            onCopy={() => handleCopy(JSON.stringify(node.data.input, null, 2))}
           >
             <pre className="max-h-48 overflow-auto p-2 bg-amber-50 dark:bg-amber-900/20 rounded text-xs font-mono text-gray-800 dark:text-gray-200 whitespace-pre-wrap">
               {JSON.stringify(node.data.input, null, 2)}
@@ -297,7 +302,7 @@ export function NodeDetailPanel({ node, onClose, langfuseHost, traceId }: NodeDe
               </svg>
             }
             defaultOpen={false}
-            onCopy={() => copyToClipboard(JSON.stringify(node.data.output, null, 2))}
+            onCopy={() => handleCopy(JSON.stringify(node.data.output, null, 2))}
           >
             <pre className="max-h-48 overflow-auto p-2 bg-green-50 dark:bg-green-900/20 rounded text-xs font-mono text-gray-800 dark:text-gray-200 whitespace-pre-wrap">
               {JSON.stringify(node.data.output, null, 2)}

@@ -21,6 +21,29 @@ export interface AppointmentCardProps {
   onCancel?: (appointment: Appointment) => void;
   showPatientName?: boolean;
   isLoading?: boolean;
+  patientComment?: string; // Optional patient comment (may contain child info for parent-as-patient model)
+}
+
+/**
+ * Parse child info from note or comment string
+ * Expected format: "Child: Jake Davis | DOB: 01/10/2012 | Parent: ... | Insurance: ..."
+ */
+function parseChildInfo(text?: string): { childName?: string; childDob?: string; insurance?: string } | null {
+  if (!text) return null;
+
+  // Check if it contains child info
+  const childMatch = text.match(/Child:\s*([^|]+)/i);
+  if (!childMatch) return null;
+
+  const childName = childMatch[1].trim();
+  const dobMatch = text.match(/DOB:\s*([^|]+)/i);
+  const insuranceMatch = text.match(/Insurance:\s*([^|]+)/i);
+
+  return {
+    childName,
+    childDob: dobMatch ? dobMatch[1].trim() : undefined,
+    insurance: insuranceMatch ? insuranceMatch[1].trim() : undefined,
+  };
 }
 
 export function AppointmentCard({
@@ -29,7 +52,11 @@ export function AppointmentCard({
   onCancel,
   showPatientName = false,
   isLoading = false,
+  patientComment,
 }: AppointmentCardProps) {
+  // Try to parse child info from appointment note or patient comment
+  const childInfo = parseChildInfo(appointment.appointment_note) || parseChildInfo(patientComment);
+
   // Build patient full name
   const patientFullName = [
     appointment.patient_title,
@@ -109,6 +136,40 @@ export function AppointmentCard({
                 {appointment.patient_gender && (
                   <span className="text-xs bg-white px-2 py-1 rounded-full shadow-sm">
                     {appointment.patient_gender}
+                  </span>
+                )}
+              </div>
+            )}
+            {/* Child Info (for parent-as-patient model) */}
+            {childInfo && (
+              <div className="mt-2 flex items-center gap-2 text-sm flex-wrap">
+                <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-gradient-to-r from-pink-500 to-rose-500 shadow-sm text-xs font-semibold text-white">
+                  👶
+                </span>
+                <span className="font-bold text-pink-700">Child: {childInfo.childName}</span>
+                {childInfo.childDob && (
+                  <span className="text-xs bg-pink-100 text-pink-700 px-2 py-1 rounded-full">
+                    DOB: {childInfo.childDob}
+                  </span>
+                )}
+                {childInfo.insurance && (
+                  <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full">
+                    {childInfo.insurance}
+                  </span>
+                )}
+                {/* Info icon with tooltip showing full note */}
+                {appointment.appointment_note && (
+                  <span
+                    className="relative group cursor-help"
+                    title={appointment.appointment_note}
+                  >
+                    <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-gray-200 hover:bg-gray-300 text-gray-600 text-xs transition-colors">
+                      ℹ️
+                    </span>
+                    <span className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 whitespace-pre-wrap max-w-xs z-50 shadow-lg">
+                      {appointment.appointment_note}
+                      <span className="absolute left-1/2 -translate-x-1/2 top-full border-4 border-transparent border-t-gray-900"></span>
+                    </span>
                   </span>
                 )}
               </div>

@@ -138,6 +138,7 @@ export const getPatient = asyncHandler(async (req: Request, res: Response) => {
     provider_guid: undefined,
     location_guid: undefined,
     environment,
+    comment: patientData.PatientComment || patientData.PatComment || patientData.Comment || undefined,
   };
 
   res.json({

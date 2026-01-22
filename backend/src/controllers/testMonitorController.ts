@@ -19,6 +19,7 @@ import * as comparisonService from '../services/comparisonService';
 import { aiEnhancementService } from '../services/aiEnhancementService';
 import * as documentParserService from '../services/documentParserService';
 import { LangfuseTraceService } from '../services/langfuseTraceService';
+import { QueueActivityService } from '../services/queueActivityService';
 import { getLLMProvider } from '../../../shared/services/llm-provider';
 
 // Path to test-agent database (main database with all test run data)
@@ -9674,6 +9675,7 @@ export async function getProductionSession(
         traces: traces.map(transformTraceRow),
         transcript: combinedTranscript,
         apiCalls: allApiCalls,
+        observations: filteredObservations.map(transformObservationRow),
       },
     });
   } catch (error) {
@@ -9906,5 +9908,812 @@ export async function getTraceInsights(
     next(error);
   } finally {
     if (db) db.close();
+  }
+}
+
+// ============================================================================
+// NODE-RED DEPLOYMENT ROUTES
+// ============================================================================
+
+import * as noderedDeployService from '../services/noderedDeployService';
+import * as replayService from '../services/replayService';
+
+/**
+ * GET /api/test-monitor/nodered/status
+ * Get Node-RED connection status and current flow info
+ */
+export async function getNoderedStatus(
+  _req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const status = await noderedDeployService.getStatus();
+    res.json({
+      success: true,
+      data: status,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * POST /api/test-monitor/nodered/deploy
+ * Deploy flows from V1 source file to Node-RED
+ *
+ * Body params:
+ * - backup: boolean (default: true) - Create backup before deploying
+ * - dryRun: boolean (default: false) - Validate without deploying
+ */
+export async function deployToNodered(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const { backup = true, dryRun = false } = req.body;
+
+    console.log(`[NodeRED Deploy] Starting deploy - backup: ${backup}, dryRun: ${dryRun}`);
+
+    const result = await noderedDeployService.deployFromV1File({
+      backup,
+      dryRun,
+    });
+
+    if (result.success) {
+      res.json({
+        success: true,
+        data: {
+          message: dryRun
+            ? 'Dry run successful - validation passed'
+            : 'Successfully deployed flows to Node-RED',
+          rev: result.rev,
+          previousRev: result.previousRev,
+          flowCount: result.flowCount,
+          backupPath: result.backupPath,
+          dryRun: result.dryRun,
+        },
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        error: result.error || 'Unknown error during deployment',
+      });
+    }
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * GET /api/test-monitor/nodered/flows
+ * List all flow tabs from Node-RED
+ */
+export async function listNoderedFlows(
+  _req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const tabs = await noderedDeployService.listFlowTabs();
+    res.json({
+      success: true,
+      data: {
+        flows: tabs.map((tab) => ({
+          id: tab.id,
+          label: tab.label,
+          disabled: tab.disabled,
+          info: tab.info,
+          envCount: tab.env?.length || 0,
+        })),
+        count: tabs.length,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * GET /api/test-monitor/nodered/flows/:flowId
+ * Get a specific flow by ID or label with its nodes
+ */
+export async function getNoderedFlow(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const { flowId } = req.params;
+
+    if (!flowId) {
+      res.status(400).json({ success: false, error: 'flowId parameter is required' });
+      return;
+    }
+
+    const flow = await noderedDeployService.getFlowByIdOrLabel(flowId);
+
+    if (!flow) {
+      res.status(404).json({ success: false, error: `Flow not found: ${flowId}` });
+      return;
+    }
+
+    res.json({
+      success: true,
+      data: {
+        tab: {
+          id: flow.tab.id,
+          label: flow.tab.label,
+          disabled: flow.tab.disabled,
+          info: flow.tab.info,
+          env: flow.tab.env,
+        },
+        nodes: flow.nodes,
+        nodeCount: flow.nodes.length,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * POST /api/test-monitor/nodered/copy-flow
+ * Copy an existing flow to a new flow with a new name
+ *
+ * Body params:
+ * - sourceFlowId: string (optional) - ID of the source flow
+ * - sourceFlowLabel: string (optional) - Label of the source flow
+ * - newLabel: string (required) - Label for the new flow
+ * - disabled: boolean (default: false) - Whether the new flow should be disabled
+ * - backup: boolean (default: true) - Create backup before copying
+ * - dryRun: boolean (default: false) - Validate without deploying
+ */
+export async function copyNoderedFlow(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const {
+      sourceFlowId,
+      sourceFlowLabel,
+      newLabel,
+      disabled = false,
+      backup = true,
+      dryRun = false,
+    } = req.body;
+
+    console.log(`[NodeRED Copy] Request - source: ${sourceFlowId || sourceFlowLabel}, newLabel: ${newLabel}, dryRun: ${dryRun}`);
+
+    const result = await noderedDeployService.copyFlow({
+      sourceFlowId,
+      sourceFlowLabel,
+      newLabel,
+      disabled,
+      backup,
+      dryRun,
+    });
+
+    if (result.success) {
+      res.json({
+        success: true,
+        data: {
+          message: dryRun
+            ? `Dry run successful - would create flow "${newLabel}" with ${result.nodesCopied} nodes`
+            : `Successfully created flow "${newLabel}"`,
+          newFlowId: result.newFlowId,
+          newFlowLabel: result.newFlowLabel,
+          nodesCopied: result.nodesCopied,
+          rev: result.rev,
+          previousRev: result.previousRev,
+          backupPath: result.backupPath,
+          dryRun: result.dryRun,
+        },
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        error: result.error || 'Unknown error during copy',
+      });
+    }
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ============================================================================
+// API REPLAY
+// ============================================================================
+
+/**
+ * POST /api/test-monitor/replay
+ * Execute a replay of a tool call against Node-RED endpoints
+ *
+ * Body params:
+ * - toolName: string - Tool name (e.g., 'chord_ortho_patient')
+ * - action: string - Action name (e.g., 'lookup')
+ * - input: object - Input data to send to the endpoint
+ * - originalObservationId: string (optional) - Original observation ID for reference
+ */
+export async function executeReplay(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const { toolName, action, input, originalObservationId } = req.body;
+
+    // Validate required fields
+    if (!toolName || typeof toolName !== 'string') {
+      res.status(400).json({
+        success: false,
+        error: 'Missing or invalid toolName',
+      });
+      return;
+    }
+
+    if (!action || typeof action !== 'string') {
+      res.status(400).json({
+        success: false,
+        error: 'Missing or invalid action',
+      });
+      return;
+    }
+
+    if (!input || typeof input !== 'object') {
+      res.status(400).json({
+        success: false,
+        error: 'Missing or invalid input object',
+      });
+      return;
+    }
+
+    console.log(`[Replay] Executing replay - tool: ${toolName}, action: ${action}, observationId: ${originalObservationId || 'N/A'}`);
+
+    const result = await replayService.executeReplay({
+      toolName,
+      action,
+      input,
+      originalObservationId,
+    });
+
+    if (result.success) {
+      res.json(result);
+    } else {
+      res.status(400).json(result);
+    }
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * GET /api/test-monitor/replay/endpoints
+ * Get available replay endpoints for the UI
+ */
+export async function getReplayEndpoints(
+  _req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const endpoints = replayService.getAvailableEndpoints();
+    res.json({
+      success: true,
+      data: endpoints,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ============================================================================
+// QUEUE ACTIVITY
+// ============================================================================
+
+/**
+ * GET /api/test-monitor/queue-activity/stats
+ * Get overall queue activity statistics
+ *
+ * Query params:
+ * - hours: number (optional) - Filter to last N hours
+ */
+export async function getQueueStats(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  let db: BetterSqlite3.Database | null = null;
+
+  try {
+    const hours = req.query.hours ? parseInt(req.query.hours as string, 10) : undefined;
+
+    db = getTestAgentDbWritable();
+    const queueService = new QueueActivityService(db);
+
+    const stats = queueService.getStats(hours);
+
+    res.json({
+      success: true,
+      data: stats,
+    });
+  } catch (error) {
+    next(error);
+  } finally {
+    db?.close();
+  }
+}
+
+/**
+ * GET /api/test-monitor/queue-activity/operations
+ * Get queue operations grouped by operation_id
+ *
+ * Query params:
+ * - limit: number (default 50)
+ * - offset: number (default 0)
+ * - status: 'completed' | 'failed' | 'pending' | 'expired'
+ * - hours: number - Filter to last N hours
+ * - patientName: string - Filter by patient name (partial match)
+ */
+export async function getQueueOperations(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  let db: BetterSqlite3.Database | null = null;
+
+  try {
+    const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 50;
+    const offset = req.query.offset ? parseInt(req.query.offset as string, 10) : 0;
+    const status = req.query.status as 'completed' | 'failed' | 'pending' | 'expired' | undefined;
+    const hours = req.query.hours ? parseInt(req.query.hours as string, 10) : undefined;
+    const patientName = req.query.patientName as string | undefined;
+
+    db = getTestAgentDbWritable();
+    const queueService = new QueueActivityService(db);
+
+    const result = queueService.getOperations({ limit, offset, status, hours, patientName });
+
+    res.json({
+      success: true,
+      data: {
+        operations: result.operations,
+        total: result.total,
+        limit,
+        offset,
+      },
+    });
+  } catch (error) {
+    next(error);
+  } finally {
+    db?.close();
+  }
+}
+
+/**
+ * GET /api/test-monitor/queue-activity/operations/:operationId
+ * Get all events for a single operation
+ */
+export async function getQueueOperationDetail(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  let db: BetterSqlite3.Database | null = null;
+
+  try {
+    const { operationId } = req.params;
+
+    if (!operationId) {
+      res.status(400).json({ success: false, error: 'Operation ID is required' });
+      return;
+    }
+
+    db = getTestAgentDbWritable();
+    const queueService = new QueueActivityService(db);
+
+    const events = queueService.getOperationEvents(operationId);
+
+    if (events.length === 0) {
+      res.status(404).json({
+        success: false,
+        error: `Operation ${operationId} not found`,
+      });
+      return;
+    }
+
+    res.json({
+      success: true,
+      data: {
+        operationId,
+        events,
+      },
+    });
+  } catch (error) {
+    next(error);
+  } finally {
+    db?.close();
+  }
+}
+
+// ============================================================================
+// REDIS SLOT CACHE HEALTH (Proxy to Node-RED)
+// ============================================================================
+
+// Node-RED cache health endpoint base URL
+const NODERED_CACHE_BASE_URL = 'https://c1-aicoe-nodered-lb.prod.c1conversations.io/FabricWorkflow/api/chord/ortho-prd';
+const NODERED_AUTH = 'Basic ' + Buffer.from('workflowapi:e^@V95&6sAJReTsb5!iq39mIC4HYIV').toString('base64');
+
+/**
+ * GET /api/test-monitor/cache-health
+ * Get cache health status from Node-RED
+ */
+export async function getCacheHealth(
+  _req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const response = await fetch(`${NODERED_CACHE_BASE_URL}/cache-health`, {
+      method: 'GET',
+      headers: {
+        'Authorization': NODERED_AUTH,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    // Always try to parse response body - Node-RED returns valid JSON even on 503 (unhealthy)
+    const responseText = await response.text();
+    let data;
+    try {
+      data = JSON.parse(responseText);
+    } catch {
+      // If we can't parse JSON, return error
+      res.status(response.status).json({
+        success: false,
+        error: `Node-RED cache-health endpoint returned ${response.status}: ${responseText}`,
+      });
+      return;
+    }
+
+    // If we got valid cache health data (has tiers array), return it as success
+    // Node-RED returns 503 when cache is unhealthy but data is still valid
+    if (data && Array.isArray(data.tiers)) {
+      res.json({
+        success: true,
+        data,
+      });
+      return;
+    }
+
+    // If response is not ok and doesn't have valid cache data, return error
+    if (!response.ok) {
+      res.status(response.status).json({
+        success: false,
+        error: `Node-RED cache-health endpoint returned ${response.status}: ${responseText}`,
+      });
+      return;
+    }
+
+    res.json({
+      success: true,
+      data,
+    });
+  } catch (error) {
+    console.error('[Cache Health] Error fetching cache health:', error);
+    next(error);
+  }
+}
+
+/**
+ * POST /api/test-monitor/cache-health/refresh
+ * Force cache refresh (bypasses business hours)
+ */
+export async function forceCacheRefresh(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const { tier } = req.body || {};
+
+    const response = await fetch(`${NODERED_CACHE_BASE_URL}/cache/refresh`, {
+      method: 'POST',
+      headers: {
+        'Authorization': NODERED_AUTH,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ tier: tier || 'all' }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      res.status(response.status).json({
+        success: false,
+        error: `Node-RED cache/refresh endpoint returned ${response.status}: ${errorText}`,
+      });
+      return;
+    }
+
+    const data = await response.json();
+    res.json({
+      success: true,
+      data,
+    });
+  } catch (error) {
+    console.error('[Cache Health] Error forcing cache refresh:', error);
+    next(error);
+  }
+}
+
+/**
+ * DELETE /api/test-monitor/cache-health/cache
+ * Clear cache (forces API fallback)
+ */
+export async function clearCache(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const tier = req.query.tier as string | undefined;
+
+    let url = `${NODERED_CACHE_BASE_URL}/cache`;
+    if (tier) {
+      url += `?tier=${tier}`;
+    }
+
+    const response = await fetch(url, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': NODERED_AUTH,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      res.status(response.status).json({
+        success: false,
+        error: `Node-RED cache endpoint returned ${response.status}: ${errorText}`,
+      });
+      return;
+    }
+
+    const data = await response.json();
+    res.json({
+      success: true,
+      data,
+    });
+  } catch (error) {
+    console.error('[Cache Health] Error clearing cache:', error);
+    next(error);
+  }
+}
+
+// Location GUID for the cache (CDH Allegheny 202)
+const LOCATION_GUID = '1fef9297-7c8b-426b-b0d1-f2275136e48b';
+
+/**
+ * GET /api/test-monitor/cache-health/tier/:tier/slots
+ * Get all cached slots for a specific tier
+ */
+export async function getTierSlots(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const tier = parseInt(req.params.tier, 10);
+
+    if (![1, 2, 3].includes(tier)) {
+      res.status(400).json({
+        success: false,
+        error: 'Invalid tier. Must be 1, 2, or 3.',
+      });
+      return;
+    }
+
+    const key = `SlotCache-${LOCATION_GUID}-Tier${tier}`;
+    const url = `${NODERED_CACHE_BASE_URL.replace('/chord/ortho-prd', '')}/chord/ortho-prd/redisGet?key=${encodeURIComponent(key)}`;
+
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Authorization': NODERED_AUTH,
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      res.status(response.status).json({
+        success: false,
+        error: `Node-RED redisGet endpoint returned ${response.status}: ${errorText}`,
+      });
+      return;
+    }
+
+    const text = await response.text();
+
+    if (!text || text === 'null' || text === '') {
+      res.json({
+        success: true,
+        tier,
+        slots: [],
+        slotCount: 0,
+        cacheStatus: 'empty',
+        message: 'Cache key not found or empty',
+      });
+      return;
+    }
+
+    const cacheData = JSON.parse(text);
+
+    // Flatten the slots - handle both flat and grouped-by-date formats
+    const flatSlots: Array<Record<string, any>> = [];
+    if (cacheData.slots && Array.isArray(cacheData.slots)) {
+      for (const item of cacheData.slots) {
+        // Check if this is a date group (has nested slots array) or a flat slot
+        if (item.slots && Array.isArray(item.slots)) {
+          // Grouped format: { date: "...", slots: [...], slotCount: N }
+          for (const slot of item.slots) {
+            flatSlots.push({
+              ...slot,
+              _date: item.date,
+            });
+          }
+        } else if (item.StartTime || item.startTime) {
+          // Flat format: direct slot object { StartTime, EndTime, ... }
+          // Extract date from StartTime
+          const startTime = item.StartTime || item.startTime || '';
+          const datePart = startTime.split(' ')[0] || '';
+          flatSlots.push({
+            ...item,
+            _date: datePart,
+          });
+        }
+      }
+    }
+
+    // Calculate cache age
+    const cacheAge = cacheData.fetchedAt
+      ? Math.round((Date.now() - new Date(cacheData.fetchedAt).getTime()) / 1000)
+      : null;
+
+    res.json({
+      success: true,
+      tier,
+      tierDays: cacheData.tierDays,
+      slots: flatSlots,
+      slotCount: flatSlots.length,
+      fetchedAt: cacheData.fetchedAt,
+      cacheAgeSeconds: cacheAge,
+      dateRange: cacheData.dateRange,
+      cacheStatus: cacheAge && cacheAge > 600 ? 'stale' : 'fresh',
+    });
+  } catch (error) {
+    console.error('[Cache Health] Error fetching tier slots:', error);
+    next(error);
+  }
+}
+
+/**
+ * POST /api/test-monitor/cache-health/purge-and-refresh
+ * Purge all cache keys and then refresh all tiers
+ * This resets the cache age to 0
+ */
+export async function purgeAndRefreshCache(
+  _req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const results: {
+      purge: { tier: number; key: string; success: boolean; error?: string }[];
+      refresh: { success: boolean; totalSlots?: number; error?: string };
+    } = {
+      purge: [],
+      refresh: { success: false },
+    };
+
+    // Step 1: Purge all cache keys (main + PreGrouped)
+    console.log('[Cache Health] Starting purge and refresh...');
+
+    for (const tier of [1, 2, 3]) {
+      const keysToDelete = [
+        `SlotCache-${LOCATION_GUID}-Tier${tier}`,
+        `SlotCache-${LOCATION_GUID}-Tier${tier}-PreGrouped`,
+      ];
+
+      for (const key of keysToDelete) {
+        try {
+          // Set to null with 1 second TTL to effectively delete (requires POST)
+          const purgeUrl = `${NODERED_CACHE_BASE_URL}/redisSet`;
+          const purgeResponse = await fetch(purgeUrl, {
+            method: 'POST',
+            headers: {
+              'Authorization': NODERED_AUTH,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ key, value: 'null', ttl: 1 }),
+          });
+
+          results.purge.push({
+            tier,
+            key: key.replace(LOCATION_GUID, '...'),
+            success: purgeResponse.ok,
+            error: purgeResponse.ok ? undefined : `Status ${purgeResponse.status}`,
+          });
+        } catch (err: any) {
+          results.purge.push({
+            tier,
+            key: key.replace(LOCATION_GUID, '...'),
+            success: false,
+            error: err.message,
+          });
+        }
+      }
+    }
+
+    // Wait for TTL to expire
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
+    // Step 2: Refresh all tiers using the trigger endpoint (has v2 retry logic)
+    console.log('[Cache Health] Purge complete, starting refresh via trigger endpoint...');
+
+    try {
+      // Use the trigger endpoint that has the v2 retry logic built in
+      const triggerUrl = 'https://c1-aicoe-nodered-lb.prod.c1conversations.io/FabricWorkflow/api/test/redis-slot-cache/trigger';
+      const refreshResponse = await fetch(triggerUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': NODERED_AUTH,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({}),
+      });
+
+      if (refreshResponse.ok) {
+        const data = await refreshResponse.json();
+        results.refresh = {
+          success: true,
+          totalSlots: data.totalSlotsCached || 0,
+        };
+      } else {
+        const errorText = await refreshResponse.text();
+        results.refresh = {
+          success: false,
+          error: `Status ${refreshResponse.status}: ${errorText.substring(0, 100)}`,
+        };
+      }
+    } catch (err: any) {
+      results.refresh = {
+        success: false,
+        error: err.message,
+      };
+    }
+
+    // Calculate summary
+    const purgeSuccess = results.purge.filter(p => p.success).length;
+    const totalSlots = results.refresh.totalSlots || 0;
+
+    console.log(`[Cache Health] Purge and refresh complete: ${purgeSuccess}/6 purged, refresh=${results.refresh.success}, ${totalSlots} total slots`);
+
+    res.json({
+      success: results.refresh.success,
+      message: `Purged ${purgeSuccess}/6 keys, refresh ${results.refresh.success ? 'succeeded' : 'failed'} with ${totalSlots} total slots`,
+      results,
+      summary: {
+        purgeSuccess,
+        purgeTotal: 6,
+        refreshSuccess: results.refresh.success ? 1 : 0,
+        totalSlots,
+      },
+    });
+  } catch (error) {
+    console.error('[Cache Health] Error in purge and refresh:', error);
+    next(error);
   }
 }

@@ -80,9 +80,14 @@ export function useAppointments() {
 
   const handleCancelAppointment = async (cancelData: CancelAppointmentRequest) => {
     try {
-      const appointment = await dispatch(cancelAppointment(cancelData)).unwrap();
-      toast.showSuccess('Appointment cancelled successfully');
-      return appointment;
+      const response = await dispatch(cancelAppointment(cancelData)).unwrap();
+      // Show different message based on whether it was already cancelled
+      if (response.alreadyCancelled) {
+        toast.showInfo('Appointment was already cancelled - status updated');
+      } else {
+        toast.showSuccess('Appointment cancelled successfully');
+      }
+      return response;
     } catch (err) {
       toast.showError(err as string);
       throw err;

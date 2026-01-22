@@ -1,19 +1,97 @@
 /**
  * ============================================================================
  * CHORD DSO PATIENT - Unified Patient & Clinic Tool (Node Red Version)
- * Version: v4 | Updated: 2026-01-12
+ * Version: v9 | Updated: 2026-01-18
  * ============================================================================
  * Consolidates: lookup, get, create, appointments, clinic_info, edit_insurance, confirm_appointment
- * 
+ *
  * This version calls Node Red endpoints instead of Cloud9 directly.
  * All Cloud9 XML/SOAP logic is handled by Node Red.
- * 
- * v3: Fixed clinic_info to use DEFAULT_LOCATION_GUID - prevents returning all locations
+ *
+ * v9: BOOKING AUTHORIZATION TOKEN
+ *     - Returns bookingAuthToken on successful patient creation
+ *     - Token MUST be passed to book_child to prevent parallel tool call collisions
+ *     - Token validates that the patientGUID matches what was just created
+ *     - Prevents LLM from using stale/hallucinated GUIDs in sibling booking
+ *
+ * v8: PARENT-AS-PATIENT MODEL
+ *     - Parent/guardian is the patient record (NOT each child)
+ *     - Use PARENT's firstName, lastName, phone, email
+ *     - birthdayDateTime is now OPTIONAL (parent's DOB if available)
+ *     - ONE patientGUID per family - REUSE for all children's appointments
+ *     - Child info (name, DOB) goes in the NOTE field of each appointment
+ *     - Removed children array rejection (deprecated sibling-per-child approach)
+ *
+ * v7: SIBLING BOOKING FIX (DEPRECATED - see v8)
+ * v6: Updated field descriptions in schema to clarify CHILD's info, not parent
+ * v5: API CALL TRACING - Add _debug_calls array to track all HTTP calls
+ * v4: General improvements
+ * v3: Fixed clinic_info to use DEFAULT_LOCATION_GUID
  * v2: Added default locationGUID and providerGUID with GUID validation
  * ============================================================================
  */
 
 const fetch = require('node-fetch');
+
+const TOOL_VERSION = 'v9';
+
+// v5: API Call Tracking for debugging - enables Call Flow Navigator visualization
+const _debug_calls = [];
+
+/**
+ * Tracked fetch wrapper that records all HTTP calls for debugging
+ * Captures: endpoint, method, request body, response, timing, status
+ */
+async function trackedFetch(url, options = {}) {
+    const startTime = Date.now();
+    const callId = _debug_calls.length + 1;
+    const callInfo = {
+        id: callId,
+        layer: url.includes('cloud9') || url.includes('GetData.ashx') ? 'L1_Cloud9' : 'L2_NodeRED',
+        endpoint: url,
+        method: options.method || 'GET',
+        requestBody: options.body ? (() => { try { return JSON.parse(options.body); } catch(e) { return options.body; } })() : null,
+        startTime: new Date().toISOString(),
+        durationMs: null,
+        status: null,
+        response: null,
+        error: null
+    };
+
+    try {
+        const response = await fetch(url, options);
+        const responseText = await response.text();
+        let responseData;
+        try { responseData = JSON.parse(responseText); } catch (e) { responseData = responseText; }
+
+        callInfo.durationMs = Date.now() - startTime;
+        callInfo.status = response.status;
+        // v8 FIX: Store deep copy to prevent circular JSON reference
+        // (responseData._debug_calls would point back to responseData otherwise)
+        callInfo.response = JSON.parse(JSON.stringify(responseData));
+        callInfo.success = response.ok;
+
+        _debug_calls.push(callInfo);
+        console.log('[v7 TRACE] Call #' + callId + ' to ' + callInfo.layer + ': ' + url + ' -> ' + response.status + ' (' + callInfo.durationMs + 'ms)');
+
+        // Return a mock response object that mimics fetch response
+        return {
+            ok: response.ok,
+            status: response.status,
+            statusText: response.statusText,
+            headers: response.headers,
+            text: async () => responseText,
+            json: async () => responseData
+        };
+    } catch (error) {
+        callInfo.durationMs = Date.now() - startTime;
+        callInfo.error = error.message;
+        callInfo.success = false;
+        _debug_calls.push(callInfo);
+        console.log('[v7 TRACE] Call #' + callId + ' FAILED: ' + error.message);
+        throw error;
+    }
+}
 
 // ============================================================================
 // 🔧 DEFAULT GUIDS - Production values for CDH Allegheny
@@ -79,8 +157,11 @@ const ACTIONS = {
             locationGUID: isValidGUID(params.locationGUID) ? params.locationGUID : DEFAULT_LOCATION_GUID
         }),
         validate: (params) => {
-            if (!params.patientFirstName) throw new Error("patientFirstName is required for 'create' action");
-            if (!params.patientLastName) throw new Error("patientLastName is required for 'create' action");
+            // v8: PARENT-AS-PATIENT MODEL - parent is the patient, child info in appointment note
+            // birthdayDateTime is now OPTIONAL (parent's DOB if available)
+            if (!params.patientFirstName) throw new Error("patientFirstName (PARENT's first name) is required for 'create' action");
+            if (!params.patientLastName) throw new Error("patientLastName (PARENT's last name) is required for 'create' action");
+            // Note: birthdayDateTime is now OPTIONAL - child DOB goes in appointment note
         },
         successLog: 'Patient created successfully'
     },
@@ -166,12 +247,12 @@ function getAuthHeader() {
 
 function checkForError(data) {
     if (!data || typeof data !== 'object') return null;
-    
+
     // Pattern 1: { success: false, error: "..." }
     if (data.success === false) {
         return data.error || data.message || 'Operation failed';
     }
-    
+
     // Pattern 2: { code: false, error: [...] }
     if (data.code === false) {
         if (Array.isArray(data.error)) {
@@ -179,7 +260,7 @@ function checkForError(data) {
         }
         return data.error || data.message || 'API returned error';
     }
-    
+
     // Pattern 3: { error: "..." } without success/code field
     if (data.error && !data.data && !data.patient && !data.patients && !data.appointments && !data.location && !data.locations) {
         if (Array.isArray(data.error)) {
@@ -187,7 +268,7 @@ function checkForError(data) {
         }
         return data.error;
     }
-    
+
     return null;
 }
 
@@ -198,8 +279,8 @@ function checkForError(data) {
 function cleanParams(params) {
     const cleaned = {};
     for (const [key, value] of Object.entries(params)) {
-        if (value !== null && value !== undefined && value !== '' && 
-            value !== 'NULL' && value !== 'null' && value !== 'None' && 
+        if (value !== null && value !== undefined && value !== '' &&
+            value !== 'NULL' && value !== 'null' && value !== 'None' &&
             value !== 'none' && value !== 'N/A' && value !== 'n/a') {
             cleaned[key] = value;
         }
@@ -215,17 +296,17 @@ async function executeRequest() {
     const toolName = 'chord_ortho_patient';
     const action = $action;
     const timeout = 60000; // 60 seconds for phone lookups which may check many patients
-    
+
     console.log(`[${toolName}] Action: ${action}`);
-    
+
     // Validate action
     if (!action || !ACTIONS[action]) {
         const validActions = Object.keys(ACTIONS).join(', ');
         throw new Error(`Invalid action '${action}'. Valid actions: ${validActions}`);
     }
-    
+
     const config = ACTIONS[action];
-    
+
     // Get UUI with fallback
     let uui;
     if (!$vars || !$vars.c1mg_uui || $vars.c1mg_uui === 'c1mg_uui' || (typeof $vars.c1mg_uui === 'string' && $vars.c1mg_uui.trim() === '')) {
@@ -233,8 +314,9 @@ async function executeRequest() {
     } else {
         uui = $vars.c1mg_uui;
     }
-    
+
     // Build params object from Flowise variables
+    // v7: Added children capture to detect invalid sibling booking pattern
     const rawParams = {
         phoneNumber: typeof $phoneNumber !== 'undefined' ? $phoneNumber : null,
         filter: typeof $filter !== 'undefined' ? $filter : null,
@@ -249,33 +331,34 @@ async function executeRequest() {
         insuranceProvider: typeof $insuranceProvider !== 'undefined' ? $insuranceProvider : null,
         insuranceGroupId: typeof $insuranceGroupId !== 'undefined' ? $insuranceGroupId : null,
         insuranceMemberId: typeof $insuranceMemberId !== 'undefined' ? $insuranceMemberId : null,
-        appointmentId: typeof $appointmentId !== 'undefined' ? $appointmentId : null
+        appointmentId: typeof $appointmentId !== 'undefined' ? $appointmentId : null,
+        children: typeof $children !== 'undefined' ? $children : null
     };
     const params = cleanParams(rawParams);
-    
+
     try {
         // Validate required params for this action
         config.validate(params);
-        
+
         const body = config.buildBody(params, uui);
         console.log(`[${toolName}] Endpoint: ${config.method} ${config.endpoint}`);
         console.log(`[${toolName}] Request Body:`, JSON.stringify(body, null, 2));
-        
+
         const headers = {
             'Content-Type': 'application/json'
         };
-        
+
         const authHeader = getAuthHeader();
         if (authHeader) {
             headers['Authorization'] = authHeader;
         }
-        
+
         const options = {
             method: config.method,
             headers: headers,
             body: JSON.stringify(body)
         };
-        
+
         // Add timeout
         let timeoutId;
         if (typeof AbortController !== 'undefined') {
@@ -283,14 +366,14 @@ async function executeRequest() {
             timeoutId = setTimeout(() => controller.abort(), timeout);
             options.signal = controller.signal;
         }
-        
+
         console.log(`[${toolName}] Making request to Node Red...`);
-        const response = await fetch(config.endpoint, options);
-        
+        const response = await trackedFetch(config.endpoint, options);
+
         if (timeoutId) clearTimeout(timeoutId);
-        
+
         console.log(`[${toolName}] Response Status: ${response.status} ${response.statusText}`);
-        
+
         let data;
         const contentType = response.headers.get('content-type');
         if (contentType && contentType.includes('application/json')) {
@@ -298,7 +381,7 @@ async function executeRequest() {
         } else {
             data = await response.text();
         }
-        
+
         // Check HTTP status
         if (!response.ok) {
             console.error(`[${toolName}] HTTP Error ${response.status}:`, data);
@@ -309,49 +392,65 @@ async function executeRequest() {
             }
             throw new Error(errorMsg);
         }
-        
+
         // Parse response if string
         let responseData = data;
         if (typeof data === 'string') {
             try { responseData = JSON.parse(data); } catch (e) { responseData = data; }
         }
-        
+
         // Check for error patterns in successful HTTP response
         const errorMessage = checkForError(responseData);
         if (errorMessage) {
             console.error(`[${toolName}] API Error:`, responseData);
             throw new Error(errorMessage);
         }
-        
-        // Add LLM guidance for patient create success
+
+        // v9: PARENT-AS-PATIENT MODEL + BOOKING AUTHORIZATION TOKEN
         if (action === 'create' && responseData.success && responseData.patientGUID) {
             responseData.llm_guidance = {
-                current_state: "EXECUTE_BOOKING",
-                next_action: "call_book_child_immediately",
-                critical_instruction: "Patient created successfully. You MUST now IMMEDIATELY call schedule_appointment_ortho with action=book_child using this patientGUID. Do NOT say 'Let me check' or 'One moment'. Do NOT respond to caller until booking is complete.",
+                model: "PARENT_AS_PATIENT",
+                current_state: "PATIENT_CREATED",
+                next_action: "call_book_child_for_each_child",
+                critical_instruction: "Patient (parent) created successfully. Now call schedule_appointment_ortho action=book_child for EACH child using BOTH patientGUID AND bookingAuthToken from this response. Include childName and childDOB in each book_child call.",
                 patientGUID_for_booking: responseData.patientGUID,
-                prohibited_responses: ["Let me check on that", "One moment while I look into this", "I'm verifying", "Let me confirm"],
-                booking_sequence: "After patient create -> IMMEDIATELY call book_child -> THEN confirm to caller"
+                bookingAuthToken_for_booking: responseData.bookingAuthToken,
+                MUST_INCLUDE_IN_BOOK_CHILD: {
+                    patientGUID: responseData.patientGUID,
+                    bookingAuthToken: responseData.bookingAuthToken
+                },
+                sibling_note: "For SIBLINGS: REUSE this same patientGUID AND bookingAuthToken for all children. Do NOT create separate patients. Child info goes in the appointment note via childName and childDOB parameters.",
+                note_format: "Child: [name] | DOB: [date] | Insurance: [provider] | GroupID: [id] | MemberID: [id]",
+                booking_sequence: "create PARENT once -> book child1 (with patientGUID+bookingAuthToken+childName/DOB) -> book child2 (with same patientGUID+bookingAuthToken+childName/DOB) -> confirm to caller",
+                CRITICAL: "You MUST pass bookingAuthToken to book_child. Without it, the booking will be REJECTED if the patientGUID does not match the one from this create response."
             };
         }
-        
+
+        // v5: Add debug info to response for Call Flow Navigator
+        responseData._toolVersion = TOOL_VERSION;
+        responseData._debug_calls = _debug_calls;
+
         console.log(`[${toolName}] ${config.successLog}`);
         return JSON.stringify(responseData);
-        
+
     } catch (error) {
         console.error(`[${toolName}] Error:`, error.message);
-        
+
         if (error.name === 'AbortError') {
             error.message = `Request timeout after ${timeout}ms`;
         }
-        
+
         const errorResponse = {
+            success: false,
             error: `Failed to execute ${action}`,
             message: error.message,
             action: action,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
+            _toolVersion: TOOL_VERSION,
+            _debug_error: error.message,
+            _debug_calls: _debug_calls
         };
-        
+
         throw new Error(JSON.stringify(errorResponse, null, 2));
     }
 }

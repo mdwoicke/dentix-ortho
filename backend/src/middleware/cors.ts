@@ -8,6 +8,8 @@ import cors from 'cors';
 const allowedOrigins = [
   'http://localhost:5173', // Vite dev server default
   'http://localhost:5174', // Alternate Vite port
+  'http://localhost:5175', // Alternate Vite port
+  'http://localhost:5176', // Alternate Vite port
   'http://localhost:3000', // Alternate frontend port
   process.env.FRONTEND_URL || '', // Production frontend URL
 ].filter(Boolean);

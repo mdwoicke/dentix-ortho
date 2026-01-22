@@ -7,6 +7,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { cn } from '../../../../utils/cn';
+import { copyToClipboard } from '../../../../utils/clipboard';
 import type { FlowNode } from './types';
 import { LAYER_CONFIG, NODE_TYPE_CONFIG } from './types';
 import { formatDuration } from './flowTransformers';
@@ -97,6 +98,8 @@ interface PipelineNodeProps {
   onClick: () => void;
   showIO?: boolean;
   compact?: boolean;
+  isSearchMatch?: boolean;
+  isFocusedSearchMatch?: boolean;
 }
 
 // ============================================================================
@@ -143,6 +146,125 @@ function getNodeTypeLabel(node: FlowNode): string {
 }
 
 // ============================================================================
+// JSON PANEL POPOUT MODAL
+// ============================================================================
+
+interface JSONPanelPopoutProps {
+  isOpen: boolean;
+  onClose: () => void;
+  title: string;
+  data: string;
+  highlightedData: string;
+  variant: 'input' | 'output';
+}
+
+function JSONPanelPopout({ isOpen, onClose, title, data, highlightedData, variant }: JSONPanelPopoutProps) {
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    if (isOpen) {
+      document.addEventListener('keydown', handleEscape);
+    }
+    return () => {
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [isOpen, onClose]);
+
+  const handleCopy = async () => {
+    try {
+      await copyToClipboard(data);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy:', err);
+    }
+  };
+
+  if (!isOpen) return null;
+
+  const isInput = variant === 'input';
+  const colorClasses = isInput
+    ? {
+        border: 'border-blue-400 dark:border-blue-600',
+        headerBg: 'bg-blue-100 dark:bg-blue-900/50',
+        headerBorder: 'border-blue-200 dark:border-blue-800',
+        text: 'text-blue-700 dark:text-blue-300',
+        textLight: 'text-blue-500 dark:text-blue-400',
+        buttonBg: 'bg-blue-200 dark:bg-blue-800/50 hover:bg-blue-300 dark:hover:bg-blue-700/50',
+      }
+    : {
+        border: 'border-green-400 dark:border-green-600',
+        headerBg: 'bg-green-100 dark:bg-green-900/50',
+        headerBorder: 'border-green-200 dark:border-green-800',
+        text: 'text-green-700 dark:text-green-300',
+        textLight: 'text-green-500 dark:text-green-400',
+        buttonBg: 'bg-green-200 dark:bg-green-800/50 hover:bg-green-300 dark:hover:bg-green-700/50',
+      };
+
+  return createPortal(
+    <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4">
+      {/* Backdrop */}
+      <div
+        className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+        onClick={onClose}
+      />
+
+      {/* Modal - Full width for better JSON viewing */}
+      <div className={cn(
+        'relative w-full max-w-6xl h-[85vh] flex flex-col rounded-xl shadow-2xl border-2',
+        'bg-gray-50 dark:bg-gray-900',
+        colorClasses.border
+      )}>
+        {/* Header */}
+        <div className={cn(
+          'flex items-center justify-between px-5 py-3 border-b rounded-t-xl',
+          colorClasses.headerBg,
+          colorClasses.headerBorder
+        )}>
+          <div className="flex items-center gap-3">
+            <span className={cn('text-lg font-bold uppercase', colorClasses.text)}>
+              {title}
+            </span>
+            <span className={cn('text-sm font-mono', colorClasses.textLight)}>
+              {(data.length / 1024).toFixed(1)} KB
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleCopy}
+              className={cn(
+                'flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium transition-colors',
+                colorClasses.buttonBg,
+                colorClasses.text
+              )}
+            >
+              {copied ? <Icons.Check /> : <Icons.Copy />}
+              {copied ? 'Copied!' : 'Copy All'}
+            </button>
+            <button
+              onClick={onClose}
+              className="p-1.5 rounded-lg text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+            >
+              <Icons.Close />
+            </button>
+          </div>
+        </div>
+
+        {/* Content */}
+        <pre
+          className="flex-1 p-6 text-sm font-mono overflow-auto bg-white dark:bg-gray-950 text-gray-800 dark:text-gray-200 leading-relaxed"
+          dangerouslySetInnerHTML={{ __html: highlightedData }}
+        />
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+// ============================================================================
 // NODE POPOUT MODAL
 // ============================================================================
 
@@ -155,6 +277,7 @@ interface NodePopoutModalProps {
 function NodePopoutModal({ isOpen, onClose, node }: NodePopoutModalProps) {
   const [copiedInput, setCopiedInput] = useState(false);
   const [copiedOutput, setCopiedOutput] = useState(false);
+  const [expandedPanel, setExpandedPanel] = useState<'input' | 'output' | null>(null);
 
   // Handle escape key
   useEffect(() => {
@@ -193,19 +316,27 @@ function NodePopoutModal({ isOpen, onClose, node }: NodePopoutModalProps) {
   const inputHighlighted = useMemo(() => inputData ? syntaxHighlight(inputData) : '', [inputData]);
   const outputHighlighted = useMemo(() => outputData ? syntaxHighlight(outputData) : '', [outputData]);
 
-  const handleCopyInput = () => {
+  const handleCopyInput = async () => {
     if (inputData) {
-      navigator.clipboard.writeText(inputData);
-      setCopiedInput(true);
-      setTimeout(() => setCopiedInput(false), 2000);
+      try {
+        await copyToClipboard(inputData);
+        setCopiedInput(true);
+        setTimeout(() => setCopiedInput(false), 2000);
+      } catch (err) {
+        console.error('Failed to copy:', err);
+      }
     }
   };
 
-  const handleCopyOutput = () => {
+  const handleCopyOutput = async () => {
     if (outputData) {
-      navigator.clipboard.writeText(outputData);
-      setCopiedOutput(true);
-      setTimeout(() => setCopiedOutput(false), 2000);
+      try {
+        await copyToClipboard(outputData);
+        setCopiedOutput(true);
+        setTimeout(() => setCopiedOutput(false), 2000);
+      } catch (err) {
+        console.error('Failed to copy:', err);
+      }
     }
   };
 
@@ -317,13 +448,22 @@ function NodePopoutModal({ isOpen, onClose, node }: NodePopoutModalProps) {
                       {getDataSize(node.data.input)}
                     </span>
                   </div>
-                  <button
-                    onClick={handleCopyInput}
-                    className="flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium bg-blue-200 dark:bg-blue-800/50 text-blue-700 dark:text-blue-300 hover:bg-blue-300 dark:hover:bg-blue-700/50 transition-colors"
-                  >
-                    {copiedInput ? <Icons.Check /> : <Icons.Copy />}
-                    {copiedInput ? 'Copied!' : 'Copy'}
-                  </button>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => setExpandedPanel('input')}
+                      className="p-1.5 rounded text-blue-600 dark:text-blue-400 hover:bg-blue-200 dark:hover:bg-blue-800/50 transition-colors"
+                      title="Expand to full view"
+                    >
+                      <Icons.Expand />
+                    </button>
+                    <button
+                      onClick={handleCopyInput}
+                      className="flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium bg-blue-200 dark:bg-blue-800/50 text-blue-700 dark:text-blue-300 hover:bg-blue-300 dark:hover:bg-blue-700/50 transition-colors"
+                    >
+                      {copiedInput ? <Icons.Check /> : <Icons.Copy />}
+                      {copiedInput ? 'Copied!' : 'Copy'}
+                    </button>
+                  </div>
                 </div>
                 <pre
                   className="flex-1 p-4 text-sm font-mono overflow-auto bg-white dark:bg-gray-950 text-gray-800 dark:text-gray-200"
@@ -342,13 +482,22 @@ function NodePopoutModal({ isOpen, onClose, node }: NodePopoutModalProps) {
                       {getDataSize(node.data.output)}
                     </span>
                   </div>
-                  <button
-                    onClick={handleCopyOutput}
-                    className="flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium bg-green-200 dark:bg-green-800/50 text-green-700 dark:text-green-300 hover:bg-green-300 dark:hover:bg-green-700/50 transition-colors"
-                  >
-                    {copiedOutput ? <Icons.Check /> : <Icons.Copy />}
-                    {copiedOutput ? 'Copied!' : 'Copy'}
-                  </button>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => setExpandedPanel('output')}
+                      className="p-1.5 rounded text-green-600 dark:text-green-400 hover:bg-green-200 dark:hover:bg-green-800/50 transition-colors"
+                      title="Expand to full view"
+                    >
+                      <Icons.Expand />
+                    </button>
+                    <button
+                      onClick={handleCopyOutput}
+                      className="flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium bg-green-200 dark:bg-green-800/50 text-green-700 dark:text-green-300 hover:bg-green-300 dark:hover:bg-green-700/50 transition-colors"
+                    >
+                      {copiedOutput ? <Icons.Check /> : <Icons.Copy />}
+                      {copiedOutput ? 'Copied!' : 'Copy'}
+                    </button>
+                  </div>
                 </div>
                 <pre
                   className="flex-1 p-4 text-sm font-mono overflow-auto bg-white dark:bg-gray-950 text-gray-800 dark:text-gray-200"
@@ -365,6 +514,28 @@ function NodePopoutModal({ isOpen, onClose, node }: NodePopoutModalProps) {
             )}
           </div>
         </div>
+
+        {/* JSON Panel Popouts */}
+        {inputData && (
+          <JSONPanelPopout
+            isOpen={expandedPanel === 'input'}
+            onClose={() => setExpandedPanel(null)}
+            title="Input"
+            data={inputData}
+            highlightedData={inputHighlighted}
+            variant="input"
+          />
+        )}
+        {outputData && (
+          <JSONPanelPopout
+            isOpen={expandedPanel === 'output'}
+            onClose={() => setExpandedPanel(null)}
+            title="Output"
+            data={outputData}
+            highlightedData={outputHighlighted}
+            variant="output"
+          />
+        )}
       </div>
     </div>,
     document.body
@@ -382,6 +553,8 @@ export function PipelineNode({
   onClick,
   showIO = true,
   compact = false,
+  isSearchMatch = false,
+  isFocusedSearchMatch = false,
 }: PipelineNodeProps) {
   const [isPopoutOpen, setIsPopoutOpen] = useState(false);
 
@@ -410,6 +583,18 @@ export function PipelineNode({
         data-node-id={node.id}
         className={cn(
           'relative w-full transition-all duration-300 cursor-pointer group',
+          // Focused search match state - orange highlight with scale (highest priority)
+          isFocusedSearchMatch && !isActive && [
+            'scale-[1.01] z-10',
+            'ring-2 ring-offset-2 ring-orange-500 dark:ring-orange-400 dark:ring-offset-gray-900',
+            'bg-orange-50/70 dark:bg-orange-900/30',
+            'shadow-lg shadow-orange-500/20',
+          ],
+          // Search match state - yellow highlight (lower priority than focused)
+          isSearchMatch && !isFocusedSearchMatch && !isActive && [
+            'ring-2 ring-offset-2 ring-yellow-400 dark:ring-yellow-500 dark:ring-offset-gray-900',
+            'bg-yellow-50/50 dark:bg-yellow-900/20',
+          ],
           // Active state - prominent glow
           isActive && [
             'scale-[1.02] z-10',
@@ -417,7 +602,7 @@ export function PipelineNode({
             !isError && 'ring-2 ring-offset-2 ring-blue-500 dark:ring-offset-gray-900',
           ],
           // Pending state
-          !isCompleted && !isActive && 'opacity-50',
+          !isCompleted && !isActive && !isSearchMatch && !isFocusedSearchMatch && 'opacity-50',
         )}
       >
         {/* Main Card */}

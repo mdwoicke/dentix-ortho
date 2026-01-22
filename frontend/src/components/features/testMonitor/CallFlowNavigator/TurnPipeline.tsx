@@ -157,6 +157,8 @@ interface TurnPipelineProps {
   completedNodeIds: Set<string>;
   onNodeClick: (node: FlowNode) => void;
   showFullIO?: boolean;
+  searchMatchingNodeIds?: Set<string>;
+  focusedSearchNodeId?: string | null;
 }
 
 // ============================================================================
@@ -169,6 +171,8 @@ export function TurnPipeline({
   completedNodeIds,
   onNodeClick,
   showFullIO = true,
+  searchMatchingNodeIds = new Set(),
+  focusedSearchNodeId = null,
 }: TurnPipelineProps) {
   const hasFlowise = turn.layerNodes.flowise.length > 0;
   const hasTools = turn.layerNodes.tools.length > 0;
@@ -299,6 +303,8 @@ export function TurnPipeline({
                 isCompleted={completedNodeIds.has(node.id)}
                 onClick={() => onNodeClick(node)}
                 showIO={showFullIO}
+                isSearchMatch={searchMatchingNodeIds.has(node.id)}
+                isFocusedSearchMatch={focusedSearchNodeId === node.id}
               />
             ))}
           </LayerSection>
@@ -327,6 +333,8 @@ export function TurnPipeline({
                 isCompleted={completedNodeIds.has(node.id)}
                 onClick={() => onNodeClick(node)}
                 showIO={showFullIO}
+                isSearchMatch={searchMatchingNodeIds.has(node.id)}
+                isFocusedSearchMatch={focusedSearchNodeId === node.id}
               />
             ))}
           </LayerSection>
@@ -355,6 +363,8 @@ export function TurnPipeline({
                 isCompleted={completedNodeIds.has(node.id)}
                 onClick={() => onNodeClick(node)}
                 showIO={showFullIO}
+                isSearchMatch={searchMatchingNodeIds.has(node.id)}
+                isFocusedSearchMatch={focusedSearchNodeId === node.id}
               />
             ))}
           </LayerSection>
@@ -383,6 +393,8 @@ export function TurnPipeline({
                 isCompleted={completedNodeIds.has(node.id)}
                 onClick={() => onNodeClick(node)}
                 showIO={showFullIO}
+                isSearchMatch={searchMatchingNodeIds.has(node.id)}
+                isFocusedSearchMatch={focusedSearchNodeId === node.id}
               />
             ))}
           </LayerSection>

@@ -3,7 +3,7 @@
  * Track patients and appointments created in Production for cleanup
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import {
   getProdTestRecords,
@@ -15,7 +15,9 @@ import {
   type ProdTestRecord,
   type ProdTestRecordStats,
   type ProdTestRecordImportResult,
+  type StreamingCancellationSummary,
 } from '../../../services/api/testMonitorApi';
+import { CancellationProgressModal } from '../../../components/features/testMonitor';
 import { getLangfuseConfigs, type LangfuseConfigProfile as LangfuseConfigResponse } from '../../../services/api/appSettingsApi';
 import { Card, Button, Input, Select, Badge, Spinner, Modal } from '../../../components/ui';
 import { useToast } from '../../../hooks/useToast';
@@ -33,11 +35,39 @@ export function ProdTestTrackerPage() {
   const [importing, setImporting] = useState(false);
   const [cancelling, setCancelling] = useState<number | null>(null);
 
+  // Cancellation modal state
+  const [showCancellationModal, setShowCancellationModal] = useState(false);
+  const [cancellationRecords, setCancellationRecords] = useState<ProdTestRecord[]>([]);
+
   // Filters
   const [recordType, setRecordType] = useState<'patient' | 'appointment' | ''>('');
   const [status, setStatus] = useState<string>('');
+  const [langfuseConfigId, setLangfuseConfigId] = useState<number | null>(null);
+  const [sortBy, setSortBy] = useState<string>('cloud9_created_at');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [page, setPage] = useState(1);
   const pageSize = 50;
+
+  // Group by patient view
+  const [groupByPatient, setGroupByPatient] = useState(true);
+  const [expandedPatients, setExpandedPatients] = useState<Set<string>>(new Set());
+
+  // Timezone for display (default to CST)
+  const [timezone, setTimezone] = useState<string>('America/Chicago');
+  const US_TIMEZONES = [
+    { value: 'America/New_York', label: 'Eastern (EST/EDT)' },
+    { value: 'America/Chicago', label: 'Central (CST/CDT)' },
+    { value: 'America/Denver', label: 'Mountain (MST/MDT)' },
+    { value: 'America/Los_Angeles', label: 'Pacific (PST/PDT)' },
+  ];
+
+  // Helper to format date in selected timezone
+  const formatInTimezone = (dateStr: string) => {
+    if (!dateStr) return '-';
+    // Append 'Z' to mark as UTC if no timezone indicator present
+    const utcDate = dateStr.includes('Z') || dateStr.includes('+') ? dateStr : dateStr + 'Z';
+    return new Date(utcDate).toLocaleString('en-US', { timeZone: timezone });
+  };
 
   // Import modal state
   const [showImportModal, setShowImportModal] = useState(false);
@@ -53,15 +83,23 @@ export function ProdTestTrackerPage() {
   const toast = useToast();
 
   // Load data
+  // When groupByPatient is enabled, fetch all records to ensure proper grouping
   const loadData = useCallback(async () => {
     try {
       setLoading(true);
+      // When grouping, fetch all records (up to 2000) to ensure appointments are grouped with their patients
+      const effectiveLimit = groupByPatient ? 2000 : pageSize;
+      const effectiveOffset = groupByPatient ? 0 : (page - 1) * pageSize;
+
       const [recordsRes, statsRes] = await Promise.all([
         getProdTestRecords({
           recordType: recordType || undefined,
           status: status || undefined,
-          limit: pageSize,
-          offset: (page - 1) * pageSize,
+          langfuseConfigId: langfuseConfigId || undefined,
+          limit: effectiveLimit,
+          offset: effectiveOffset,
+          sortBy,
+          sortOrder,
         }),
         getProdTestRecordStats(),
       ]);
@@ -73,7 +111,7 @@ export function ProdTestTrackerPage() {
     } finally {
       setLoading(false);
     }
-  }, [recordType, status, page]);
+  }, [recordType, status, langfuseConfigId, page, sortBy, sortOrder, groupByPatient]);
 
   // Get date 7 days ago in YYYY-MM-DD format (for date input)
   const getDateDaysAgo = (days: number): string => {
@@ -167,30 +205,44 @@ export function ProdTestTrackerPage() {
     }
   };
 
-  // Handle bulk cancel
-  const handleBulkCancel = async () => {
+  // Handle bulk cancel - opens the cancellation modal
+  const handleBulkCancel = () => {
     const ids = Array.from(selectedIds);
-    const appointmentIds = ids.filter(id => {
-      const record = records.find(r => r.id === id);
-      return record?.record_type === 'appointment' && record?.status === 'active';
-    });
+    const appointmentRecords = ids
+      .map(id => records.find(r => r.id === id))
+      .filter((r): r is ProdTestRecord =>
+        r !== undefined && r.record_type === 'appointment' && r.status === 'active'
+      );
 
-    if (appointmentIds.length === 0) {
+    if (appointmentRecords.length === 0) {
       toast.showError('No active appointments selected');
       return;
     }
 
-    try {
-      setImporting(true);
-      const result = await bulkCancelProdTestAppointments(appointmentIds);
-      toast.showSuccess(`Cancelled ${result.summary.succeeded} of ${result.summary.total} appointments`);
-      setSelectedIds(new Set());
-      loadData();
-    } catch (err: any) {
-      toast.showError('Bulk cancel failed: ' + err.message);
-    } finally {
-      setImporting(false);
-    }
+    // Open the cancellation modal with the selected records
+    setCancellationRecords(appointmentRecords);
+    setShowCancellationModal(true);
+  };
+
+  // Handle cancellation modal completion
+  const handleCancellationComplete = (summary: StreamingCancellationSummary) => {
+    toast.showSuccess(`Cancelled ${summary.succeeded} of ${summary.total} appointments`);
+    setSelectedIds(new Set());
+    loadData();
+  };
+
+  // Handle cancellation modal close
+  const handleCancellationModalClose = () => {
+    setShowCancellationModal(false);
+    setCancellationRecords([]);
+    // Refresh data in case operation completed in background
+    loadData();
+  };
+
+  // Handle single appointment cancel via modal
+  const handleSingleCancelWithModal = (record: ProdTestRecord) => {
+    setCancellationRecords([record]);
+    setShowCancellationModal(true);
   };
 
   // Handle mark as deleted
@@ -240,6 +292,195 @@ export function ProdTestTrackerPage() {
     }
   };
 
+  // Chair display helper - maps known GUIDs to friendly names
+  const CHAIR_MAP: Record<string, string> = {
+    '07687884-7e37-49aa-8028-d43b751c9034': 'Chair 8',
+  };
+  const getChairDisplay = (scheduleColumnGuid: string | null): string => {
+    if (!scheduleColumnGuid) return '-';
+    return CHAIR_MAP[scheduleColumnGuid.toLowerCase()] || scheduleColumnGuid.substring(0, 8) + '...';
+  };
+
+  // Parse child name from note field (format: "Child: TestJake, DOB: 01/10/2012")
+  const parseChildNameFromNote = (note: string | null | undefined): string | null => {
+    if (!note) return null;
+    const match = note.match(/Child:\s*([^,]+)/i);
+    return match ? match[1].trim() : null;
+  };
+
+  // Get Call Trace URL for a record (links to Analysis page which supports trace ID)
+  const getTraceUrl = (record: ProdTestRecord): string | null => {
+    if (!record.trace_id) return null;
+    // Link to internal Analysis page with configId for proper lookup
+    const configParam = record.langfuse_config_id ? `&configId=${record.langfuse_config_id}` : '';
+    return `${ROUTES.TEST_MONITOR_ANALYSIS}?traceId=${record.trace_id}${configParam}`;
+  };
+
+  // Group records by FAMILY (last name) with children nested underneath
+  // This groups siblings together under the same family
+  interface ChildRecord {
+    firstName: string;
+    patientGuid: string;
+    patientRecord: ProdTestRecord | null;
+    appointments: ProdTestRecord[];
+  }
+
+  interface FamilyGroup {
+    familyKey: string; // Unique key for grouping (last name or guid:xxx)
+    familyName: string; // Display name (last name or 'Unknown')
+    children: ChildRecord[]; // Individual children in this family
+    patientGuids: string[]; // All GUIDs for this family
+    totalPatients: number;
+    totalAppointments: number;
+    latestCreatedAt: string;
+    parentCreatedAt: string; // First patient record's created date (for sorting by created)
+  }
+
+  const groupedRecords = useMemo(() => {
+    if (!groupByPatient) return null;
+
+    const families = new Map<string, FamilyGroup>();
+
+    // Helper to get family key
+    // When last name is present, use it to group siblings together
+    // When last name is missing, fall back to patient_guid to keep records separate
+    const getFamilyKey = (record: ProdTestRecord): string => {
+      const lastName = (record.patient_last_name || '').trim().toLowerCase();
+      if (lastName) {
+        return lastName;
+      }
+      // Fall back to patient_guid when no last name - ensures different patients don't get lumped together
+      return `guid:${record.patient_guid}`;
+    };
+
+    // Helper to get child key (first name + patient_guid for uniqueness)
+    const getChildKey = (record: ProdTestRecord): string => {
+      const firstName = (record.patient_first_name || '').trim().toLowerCase();
+      // Use patient_guid as part of key to ensure appointments for different patients
+      // with same/missing first names don't get merged
+      return `${firstName}:${record.patient_guid}`;
+    };
+
+    // First pass: organize records by family (last name), then by child (first name + guid)
+    for (const record of records) {
+      const familyKey = getFamilyKey(record);
+      const childKey = getChildKey(record);
+
+      if (!families.has(familyKey)) {
+        // For GUID-based keys (no last name), use a shorter display name
+        const isGuidKey = familyKey.startsWith('guid:');
+        families.set(familyKey, {
+          familyKey, // Store the unique key for expansion tracking
+          familyName: isGuidKey ? 'Unknown' : (record.patient_last_name || 'Unknown'),
+          children: [],
+          patientGuids: [],
+          totalPatients: 0,
+          totalAppointments: 0,
+          latestCreatedAt: record.cloud9_created_at || record.created_at,
+          parentCreatedAt: '', // Will be set to earliest patient record's date
+        });
+      }
+
+      const family = families.get(familyKey)!;
+
+      // Find or create child record (by childKey which includes patient_guid)
+      let child = family.children.find(c => `${c.firstName.toLowerCase()}:${c.patientGuid}` === childKey);
+      if (!child) {
+        child = {
+          firstName: record.patient_first_name || 'Unknown',
+          patientGuid: record.patient_guid,
+          patientRecord: null,
+          appointments: [],
+        };
+        family.children.push(child);
+      }
+
+      // Track unique patient GUIDs for the family
+      if (!family.patientGuids.includes(record.patient_guid)) {
+        family.patientGuids.push(record.patient_guid);
+      }
+
+      if (record.record_type === 'patient') {
+        child.patientRecord = record;
+        family.totalPatients++;
+        // Track earliest patient record's created date for sorting
+        const patientDate = record.cloud9_created_at || record.created_at;
+        if (!family.parentCreatedAt || patientDate < family.parentCreatedAt) {
+          family.parentCreatedAt = patientDate;
+        }
+      } else {
+        child.appointments.push(record);
+        family.totalAppointments++;
+      }
+
+      // Track latest cloud9_created_at for sorting
+      const recordDate = record.cloud9_created_at || record.created_at;
+      if (recordDate > family.latestCreatedAt) {
+        family.latestCreatedAt = recordDate;
+      }
+    }
+
+    // Convert to array and sort families
+    // When sorting by created date, use the parent/earliest patient record's date
+    // Fall back to latestCreatedAt for families with only appointments
+    const sortedFamilies = Array.from(families.values()).sort((a, b) => {
+      let dateA: string;
+      let dateB: string;
+
+      if (sortBy === 'cloud9_created_at') {
+        // Use parent record's created date (earliest patient), fall back to latestCreatedAt
+        dateA = a.parentCreatedAt || a.latestCreatedAt;
+        dateB = b.parentCreatedAt || b.latestCreatedAt;
+      } else {
+        // For other sort fields, use latestCreatedAt as default
+        dateA = a.latestCreatedAt;
+        dateB = b.latestCreatedAt;
+      }
+
+      const comparison = dateB.localeCompare(dateA);
+      return sortOrder === 'desc' ? comparison : -comparison;
+    });
+
+    // Sort children and appointments within each family
+    for (const family of sortedFamilies) {
+      // Sort children by first name
+      family.children.sort((a, b) => a.firstName.localeCompare(b.firstName));
+      // Sort appointments within each child (newest first by cloud9_created_at)
+      for (const child of family.children) {
+        child.appointments.sort((a, b) => {
+          const dateA = a.cloud9_created_at || a.created_at;
+          const dateB = b.cloud9_created_at || b.created_at;
+          const comparison = dateB.localeCompare(dateA);
+          return sortOrder === 'desc' ? comparison : -comparison;
+        });
+      }
+    }
+
+    return sortedFamilies;
+  }, [records, groupByPatient, sortBy, sortOrder]);
+
+  // Toggle patient group expansion (using familyKey for uniqueness)
+  const togglePatientExpand = (familyKey: string) => {
+    const newExpanded = new Set(expandedPatients);
+    if (newExpanded.has(familyKey)) {
+      newExpanded.delete(familyKey);
+    } else {
+      newExpanded.add(familyKey);
+    }
+    setExpandedPatients(newExpanded);
+  };
+
+  // Expand/collapse all
+  const expandAll = () => {
+    if (groupedRecords) {
+      setExpandedPatients(new Set(groupedRecords.map(g => g.familyKey)));
+    }
+  };
+
+  const collapseAll = () => {
+    setExpandedPatients(new Set());
+  };
+
   return (
     <div className="p-6 space-y-6">
       {/* Header */}
@@ -257,27 +498,87 @@ export function ProdTestTrackerPage() {
       {/* Stats Cards */}
       {stats && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <Card className="p-4">
+          <Card
+            className={`p-4 cursor-pointer transition-all hover:ring-2 hover:ring-blue-500 ${
+              recordType === 'patient' && status === 'active' ? 'ring-2 ring-blue-500 bg-blue-50 dark:bg-blue-900/20' : ''
+            }`}
+            onClick={() => {
+              if (recordType === 'patient' && status === 'active') {
+                // Clear filter if already active
+                setRecordType('');
+                setStatus('');
+              } else {
+                setRecordType('patient');
+                setStatus('active');
+              }
+              setPage(1);
+            }}
+          >
             <div className="text-sm text-gray-500 dark:text-gray-400">Total Patients</div>
             <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">
               {stats.totalPatients}
             </div>
             <div className="text-xs text-green-600">{stats.activePatients} active</div>
           </Card>
-          <Card className="p-4">
+          <Card
+            className={`p-4 cursor-pointer transition-all hover:ring-2 hover:ring-blue-500 ${
+              recordType === 'appointment' && status === 'active' ? 'ring-2 ring-blue-500 bg-blue-50 dark:bg-blue-900/20' : ''
+            }`}
+            onClick={() => {
+              if (recordType === 'appointment' && status === 'active') {
+                // Clear filter if already active
+                setRecordType('');
+                setStatus('');
+              } else {
+                setRecordType('appointment');
+                setStatus('active');
+              }
+              setPage(1);
+            }}
+          >
             <div className="text-sm text-gray-500 dark:text-gray-400">Total Appointments</div>
             <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">
               {stats.totalAppointments}
             </div>
             <div className="text-xs text-green-600">{stats.activeAppointments} active</div>
           </Card>
-          <Card className="p-4">
+          <Card
+            className={`p-4 cursor-pointer transition-all hover:ring-2 hover:ring-yellow-500 ${
+              recordType === 'appointment' && status === 'cancelled' ? 'ring-2 ring-yellow-500 bg-yellow-50 dark:bg-yellow-900/20' : ''
+            }`}
+            onClick={() => {
+              if (recordType === 'appointment' && status === 'cancelled') {
+                // Clear filter if already active
+                setRecordType('');
+                setStatus('');
+              } else {
+                setRecordType('appointment');
+                setStatus('cancelled');
+              }
+              setPage(1);
+            }}
+          >
             <div className="text-sm text-gray-500 dark:text-gray-400">Cancelled</div>
             <div className="text-2xl font-bold text-yellow-600">
               {stats.cancelledAppointments}
             </div>
           </Card>
-          <Card className="p-4">
+          <Card
+            className={`p-4 cursor-pointer transition-all hover:ring-2 hover:ring-gray-500 ${
+              status === 'deleted' ? 'ring-2 ring-gray-500 bg-gray-100 dark:bg-gray-700' : ''
+            }`}
+            onClick={() => {
+              if (status === 'deleted') {
+                // Clear filter if already active
+                setRecordType('');
+                setStatus('');
+              } else {
+                setRecordType('');
+                setStatus('deleted');
+              }
+              setPage(1);
+            }}
+          >
             <div className="text-sm text-gray-500 dark:text-gray-400">Cleaned Up</div>
             <div className="text-2xl font-bold text-gray-500">
               {stats.deletedRecords}
@@ -349,6 +650,20 @@ export function ProdTestTrackerPage() {
       {/* Filters and Bulk Actions */}
       <Card className="p-4">
         <div className="flex flex-wrap gap-4 items-center">
+          {/* Group Filter (Langfuse Instance) */}
+          <div className="flex-1 min-w-[200px]">
+            <Select
+              value={langfuseConfigId?.toString() || ''}
+              onChange={(value) => { setLangfuseConfigId(value ? parseInt(value, 10) : null); setPage(1); }}
+              options={[
+                { value: '', label: 'All Instances' },
+                ...langfuseConfigs.map(cfg => ({
+                  value: cfg.id.toString(),
+                  label: cfg.name + (cfg.isDefault ? ' (Prod)' : cfg.isSandbox ? ' (Sandbox)' : ''),
+                })),
+              ]}
+            />
+          </div>
           <div className="flex-1 min-w-[150px]">
             <Select
               value={recordType}
@@ -371,6 +686,56 @@ export function ProdTestTrackerPage() {
                 { value: 'deleted', label: 'Deleted' },
                 { value: 'cleanup_failed', label: 'Cleanup Failed' },
               ]}
+            />
+          </div>
+          {/* Sort By */}
+          <div className="flex-1 min-w-[160px]">
+            <Select
+              value={sortBy}
+              onChange={(value) => { setSortBy(value); setPage(1); }}
+              options={[
+                { value: 'cloud9_created_at', label: 'Sort: Created' },
+                { value: 'patient_last_name', label: 'Sort: Last Name' },
+                { value: 'patient_first_name', label: 'Sort: First Name' },
+                { value: 'appointment_datetime', label: 'Sort: Appt Date' },
+                { value: 'status', label: 'Sort: Status' },
+                { value: 'location_name', label: 'Sort: Location' },
+              ]}
+            />
+          </div>
+          {/* Sort Order Toggle */}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setSortOrder(sortOrder === 'desc' ? 'asc' : 'desc')}
+            title={sortOrder === 'desc' ? 'Newest first' : 'Oldest first'}
+          >
+            {sortOrder === 'desc' ? '↓ Desc' : '↑ Asc'}
+          </Button>
+          {/* Group by Family Toggle */}
+          <Button
+            variant={groupByPatient ? 'primary' : 'ghost'}
+            size="sm"
+            onClick={() => setGroupByPatient(!groupByPatient)}
+            title="Group records by family (last name) with children and appointments nested"
+          >
+            {groupByPatient ? '👨‍👩‍👧‍👦 By Family' : '📋 Flat'}
+          </Button>
+          {groupByPatient && (
+            <div className="flex gap-1">
+              <Button variant="ghost" size="sm" onClick={expandAll} title="Expand all">
+                ⊕
+              </Button>
+              <Button variant="ghost" size="sm" onClick={collapseAll} title="Collapse all">
+                ⊖
+              </Button>
+            </div>
+          )}
+          <div className="flex-1 min-w-[180px]">
+            <Select
+              value={timezone}
+              onChange={(value) => setTimezone(value)}
+              options={US_TIMEZONES}
             />
           </div>
           {selectedIds.size > 0 && (
@@ -424,6 +789,9 @@ export function ProdTestTrackerPage() {
                     Location
                   </th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                    Chair
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
                     Status
                   </th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
@@ -435,99 +803,348 @@ export function ProdTestTrackerPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200 dark:divide-gray-600">
-                {records.map((record) => (
-                  <tr key={record.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
-                    <td className="px-4 py-3">
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.has(record.id)}
-                        onChange={() => toggleSelect(record.id)}
-                        className="rounded"
-                      />
-                    </td>
-                    <td className="px-4 py-3">
-                      <Badge variant={record.record_type === 'patient' ? 'info' : 'success'}>
-                        {record.record_type}
-                      </Badge>
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                        {record.patient_first_name} {record.patient_last_name}
-                      </div>
-                      <div className="text-xs text-gray-500 font-mono">
-                        {record.patient_guid}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      {record.record_type === 'appointment' && (
-                        <>
-                          <div className="text-sm text-gray-900 dark:text-gray-100">
-                            {record.appointment_datetime
-                              ? new Date(record.appointment_datetime).toLocaleString()
-                              : '-'}
-                          </div>
-                          <div className="text-xs text-gray-500">
-                            {record.appointment_type || '-'}
-                          </div>
-                        </>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-sm text-gray-500">
-                      {record.location_name || '-'}
-                    </td>
-                    <td className="px-4 py-3">
-                      {getStatusBadge(record.status)}
-                    </td>
-                    <td className="px-4 py-3 text-sm text-gray-500">
-                      {new Date(record.created_at).toLocaleDateString()}
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex gap-2">
-                        <Link
-                          to={`${ROUTES.PATIENTS}/${record.patient_guid.toLowerCase()}`}
-                          className="text-blue-600 hover:text-blue-800 text-sm"
+                {groupByPatient && groupedRecords ? (
+                  // Grouped view: families with children and their appointments
+                  groupedRecords.map((family) => {
+                    const isExpanded = expandedPatients.has(family.familyKey);
+                    // Get all record IDs for this family (for bulk selection)
+                    const allFamilyIds: number[] = [];
+                    family.children.forEach(child => {
+                      if (child.patientRecord) allFamilyIds.push(child.patientRecord.id);
+                      child.appointments.forEach(a => allFamilyIds.push(a.id));
+                    });
+
+                    return (
+                      <React.Fragment key={family.familyKey}>
+                        {/* Family Header Row */}
+                        <tr
+                          className="bg-purple-50 dark:bg-purple-900/20 hover:bg-purple-100 dark:hover:bg-purple-900/30 cursor-pointer"
+                          onClick={() => togglePatientExpand(family.familyKey)}
                         >
-                          View Patient
-                        </Link>
-                        {record.record_type === 'appointment' && record.status === 'active' && (
-                          <Button
-                            size="sm"
-                            variant="warning"
-                            onClick={() => handleCancelAppointment(record.id)}
-                            disabled={cancelling === record.id}
-                          >
-                            {cancelling === record.id ? 'Cancelling...' : 'Cancel'}
-                          </Button>
+                          <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                            <input
+                              type="checkbox"
+                              checked={allFamilyIds.length > 0 && allFamilyIds.every(id => selectedIds.has(id))}
+                              onChange={() => {
+                                const allSelected = allFamilyIds.every(id => selectedIds.has(id));
+                                const newSelected = new Set(selectedIds);
+                                if (allSelected) {
+                                  allFamilyIds.forEach(id => newSelected.delete(id));
+                                } else {
+                                  allFamilyIds.forEach(id => newSelected.add(id));
+                                }
+                                setSelectedIds(newSelected);
+                              }}
+                              className="rounded"
+                            />
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className="text-lg">{isExpanded ? '▼' : '▶'}</span>
+                          </td>
+                          <td className="px-4 py-3" colSpan={2}>
+                            <div className="flex items-center gap-2">
+                              <Badge variant="default">Family</Badge>
+                              <span className="text-sm font-bold text-gray-900 dark:text-gray-100">
+                                {family.familyName || 'Unknown'}
+                              </span>
+                              <span className="text-xs text-gray-500">
+                                ({family.children.length} child{family.children.length !== 1 ? 'ren' : ''}, {family.totalAppointments} appt{family.totalAppointments !== 1 ? 's' : ''})
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-sm text-gray-500">-</td>
+                          <td className="px-4 py-3 text-sm text-gray-500">-</td>
+                          <td className="px-4 py-3">-</td>
+                          <td className="px-4 py-3 text-sm text-gray-500">
+                            {formatInTimezone(family.latestCreatedAt)}
+                          </td>
+                          <td className="px-4 py-3">-</td>
+                        </tr>
+                        {/* Nested Child Rows */}
+                        {isExpanded && family.children.map((child) => (
+                          <React.Fragment key={child.patientGuid}>
+                            {/* Parent (Patient) Row - Parent-as-Patient model */}
+                            <tr className="bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/30">
+                              <td className="px-4 py-2 pl-8">
+                                {child.patientRecord && (
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedIds.has(child.patientRecord.id)}
+                                    onChange={() => toggleSelect(child.patientRecord!.id)}
+                                    className="rounded"
+                                  />
+                                )}
+                              </td>
+                              <td className="px-4 py-2 pl-8">
+                                <span className="text-gray-400">├</span>
+                              </td>
+                              <td className="px-4 py-2" colSpan={2}>
+                                <div className="flex items-center gap-2">
+                                  <Badge variant="info">Parent</Badge>
+                                  <span className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                                    {child.firstName} {family.familyName}
+                                  </span>
+                                  <span className="text-xs text-gray-500">
+                                    ({child.appointments.length} appt{child.appointments.length !== 1 ? 's' : ''})
+                                  </span>
+                                </div>
+                                <div className="text-xs text-gray-500 font-mono mt-1 flex items-center gap-2">
+                                  <span>{child.patientGuid}</span>
+                                  {child.patientRecord?.note && (
+                                    <span className="relative group cursor-help">
+                                      <svg className="w-4 h-4 text-gray-400 hover:text-blue-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                      </svg>
+                                      <span className="absolute left-0 bottom-full mb-2 px-4 py-3 bg-gray-800 text-gray-100 text-xs rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 w-80 z-50 shadow-xl border border-gray-700">
+                                        <span className="block font-semibold text-blue-400 mb-2">Note</span>
+                                        <span className="block leading-relaxed">{child.patientRecord.note.split('|').map((part: string, i: number) => <span key={i} className="block">{part.trim()}</span>)}</span>
+                                        <span className="absolute left-4 top-full border-4 border-transparent border-t-gray-800"></span>
+                                      </span>
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="px-4 py-2 text-sm text-gray-500">
+                                {child.patientRecord?.location_name || child.appointments[0]?.location_name || '-'}
+                              </td>
+                              <td className="px-4 py-2 text-sm text-gray-500">
+                                {child.appointments[0]?.schedule_column_guid
+                                  ? getChairDisplay(child.appointments[0].schedule_column_guid)
+                                  : '-'}
+                              </td>
+                              <td className="px-4 py-2">
+                                {child.patientRecord && getStatusBadge(child.patientRecord.status)}
+                              </td>
+                              <td className="px-4 py-2 text-sm text-gray-500">
+                                {child.patientRecord ? formatInTimezone(child.patientRecord.cloud9_created_at || child.patientRecord.created_at) : '-'}
+                              </td>
+                              <td className="px-4 py-2">
+                                <div className="flex gap-2">
+                                  <Link
+                                    to={`${ROUTES.PATIENTS}/${child.patientGuid}?environment=production`}
+                                    className="text-blue-600 hover:text-blue-800 text-sm"
+                                  >
+                                    View
+                                  </Link>
+                                  {child.patientRecord && getTraceUrl(child.patientRecord) && (
+                                    <Link
+                                      to={getTraceUrl(child.patientRecord)!}
+                                      className="text-blue-500 hover:text-blue-700 text-sm"
+                                      title="View call trace"
+                                    >
+                                      Trace
+                                    </Link>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                            {/* Nested Appointment Rows for this child */}
+                            {child.appointments.map((appt) => {
+                              const childName = parseChildNameFromNote(appt.note);
+                              return (
+                              <tr key={appt.id} className="bg-gray-50 dark:bg-gray-800/50 hover:bg-gray-100 dark:hover:bg-gray-700/50">
+                                <td className="px-4 py-2 pl-12">
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedIds.has(appt.id)}
+                                    onChange={() => toggleSelect(appt.id)}
+                                    className="rounded"
+                                  />
+                                </td>
+                                <td className="px-4 py-2 pl-12">
+                                  <span className="text-gray-400">└</span>
+                                </td>
+                                <td className="px-4 py-2" colSpan={2}>
+                                  <div className="flex items-center gap-2">
+                                    <Badge variant="success">Appt</Badge>
+                                    {childName && (
+                                      <span className="text-sm font-medium text-purple-600 dark:text-purple-400">
+                                        {childName}
+                                      </span>
+                                    )}
+                                    <span className="text-sm text-gray-900 dark:text-gray-100">
+                                      {appt.appointment_datetime
+                                        ? new Date(appt.appointment_datetime).toLocaleString()
+                                        : '-'}
+                                    </span>
+                                  </div>
+                                  <div className="text-xs text-gray-500 mt-1 flex items-center gap-2">
+                                    <span>{appt.appointment_type || '-'}</span>
+                                    {appt.note && (
+                                      <span className="relative group cursor-help">
+                                        <svg className="w-4 h-4 text-gray-400 hover:text-blue-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                        </svg>
+                                        <span className="absolute left-0 bottom-full mb-2 px-4 py-3 bg-gray-800 text-gray-100 text-xs rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 w-80 z-50 shadow-xl border border-gray-700">
+                                          <span className="block font-semibold text-blue-400 mb-2">Note</span>
+                                          <span className="block leading-relaxed">{appt.note.split('|').map((part, i) => <span key={i} className="block">{part.trim()}</span>)}</span>
+                                          <span className="absolute left-4 top-full border-4 border-transparent border-t-gray-800"></span>
+                                        </span>
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="px-4 py-2 text-sm text-gray-500">
+                                  {appt.location_name || '-'}
+                                </td>
+                                <td className="px-4 py-2 text-sm text-gray-500">
+                                  {getChairDisplay(appt.schedule_column_guid)}
+                                </td>
+                                <td className="px-4 py-2">
+                                  {getStatusBadge(appt.status)}
+                                </td>
+                                <td className="px-4 py-2 text-sm text-gray-500">
+                                  {formatInTimezone(appt.cloud9_created_at || appt.created_at)}
+                                </td>
+                                <td className="px-4 py-2">
+                                  <div className="flex gap-2">
+                                    {appt.status === 'active' && (
+                                      <Button
+                                        size="sm"
+                                        variant="warning"
+                                        onClick={() => handleSingleCancelWithModal(appt)}
+                                      >
+                                        Cancel
+                                      </Button>
+                                    )}
+                                    {appt.status === 'active' && (
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        onClick={() => handleMarkDeleted(appt.id)}
+                                      >
+                                        Delete
+                                      </Button>
+                                    )}
+                                    {getTraceUrl(appt) && (
+                                      <Link
+                                        to={getTraceUrl(appt)!}
+                                        className="text-blue-500 hover:text-blue-700 text-sm"
+                                        title="View call trace"
+                                      >
+                                        Trace
+                                      </Link>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                              );
+                            })}
+                          </React.Fragment>
+                        ))}
+                      </React.Fragment>
+                    );
+                  })
+                ) : (
+                  // Flat view: all records in one list
+                  records.map((record) => (
+                    <tr key={record.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                      <td className="px-4 py-3">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(record.id)}
+                          onChange={() => toggleSelect(record.id)}
+                          className="rounded"
+                        />
+                      </td>
+                      <td className="px-4 py-3">
+                        <Badge variant={record.record_type === 'patient' ? 'info' : 'success'}>
+                          {record.record_type}
+                        </Badge>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                          {record.patient_first_name} {record.patient_last_name}
+                        </div>
+                        <div className="text-xs text-gray-500 font-mono flex items-center gap-2">
+                          <span>{record.patient_guid}</span>
+                          {record.note && (
+                            <span className="relative group cursor-help">
+                              <svg className="w-4 h-4 text-gray-400 hover:text-blue-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                              </svg>
+                              <span className="absolute left-0 bottom-full mb-2 px-4 py-3 bg-gray-800 text-gray-100 text-xs rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 w-80 z-50 shadow-xl border border-gray-700">
+                                <span className="block font-semibold text-blue-400 mb-2">Note</span>
+                                <span className="block leading-relaxed">{record.note.split('|').map((part: string, i: number) => <span key={i} className="block">{part.trim()}</span>)}</span>
+                                <span className="absolute left-4 top-full border-4 border-transparent border-t-gray-800"></span>
+                              </span>
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        {record.record_type === 'appointment' && (
+                          <>
+                            <div className="text-sm text-gray-900 dark:text-gray-100">
+                              {record.appointment_datetime
+                                ? new Date(record.appointment_datetime).toLocaleString()
+                                : '-'}
+                            </div>
+                            <div className="text-xs text-gray-500">
+                              {record.appointment_type || '-'}
+                            </div>
+                          </>
                         )}
-                        {record.status === 'active' && (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => handleMarkDeleted(record.id)}
+                      </td>
+                      <td className="px-4 py-3 text-sm text-gray-500">
+                        {record.location_name || '-'}
+                      </td>
+                      <td className="px-4 py-3 text-sm text-gray-500">
+                        {record.record_type === 'appointment' ? getChairDisplay(record.schedule_column_guid) : '-'}
+                      </td>
+                      <td className="px-4 py-3">
+                        {getStatusBadge(record.status)}
+                      </td>
+                      <td className="px-4 py-3 text-sm text-gray-500">
+                        {formatInTimezone(record.cloud9_created_at || record.created_at)}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex gap-2">
+                          <Link
+                            to={`${ROUTES.PATIENTS}/${record.patient_guid}?environment=production`}
+                            className="text-blue-600 hover:text-blue-800 text-sm"
                           >
-                            Mark Deleted
-                          </Button>
-                        )}
-                        {record.trace_id && (
-                          <button
-                            onClick={() => navigator.clipboard.writeText(record.trace_id!)}
-                            className="text-gray-400 hover:text-gray-600 text-xs"
-                            title="Copy Trace ID"
-                          >
-                            Copy Trace
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                            View Patient
+                          </Link>
+                          {record.record_type === 'appointment' && record.status === 'active' && (
+                            <Button
+                              size="sm"
+                              variant="warning"
+                              onClick={() => handleSingleCancelWithModal(record)}
+                            >
+                              Cancel
+                            </Button>
+                          )}
+                          {record.status === 'active' && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => handleMarkDeleted(record.id)}
+                            >
+                              Mark Deleted
+                            </Button>
+                          )}
+                          {getTraceUrl(record) && (
+                            <Link
+                              to={getTraceUrl(record)!}
+                              className="text-blue-500 hover:text-blue-700 text-sm"
+                              title="View call trace"
+                            >
+                              Trace
+                            </Link>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
         )}
 
-        {/* Pagination */}
-        {total > pageSize && (
+        {/* Pagination - hidden when grouping is enabled since all records are loaded */}
+        {!groupByPatient && total > pageSize && (
           <div className="px-4 py-3 border-t border-gray-200 dark:border-gray-600 flex justify-between items-center">
             <div className="text-sm text-gray-500">
               Showing {(page - 1) * pageSize + 1} to {Math.min(page * pageSize, total)} of {total}
@@ -550,6 +1167,13 @@ export function ProdTestTrackerPage() {
                 Next
               </Button>
             </div>
+          </div>
+        )}
+
+        {/* Record count when grouping is enabled */}
+        {groupByPatient && (
+          <div className="px-4 py-3 border-t border-gray-200 dark:border-gray-600 text-sm text-gray-500">
+            Showing all {records.length} records ({groupedRecords?.length || 0} families)
           </div>
         )}
       </Card>
@@ -692,6 +1316,20 @@ export function ProdTestTrackerPage() {
           </div>
         </div>
       </Modal>
+
+      {/* Cancellation Progress Modal */}
+      <CancellationProgressModal
+        isOpen={showCancellationModal}
+        onClose={handleCancellationModalClose}
+        records={cancellationRecords.map(r => ({
+          id: r.id,
+          appointmentGuid: r.appointment_guid,
+          patientFirstName: r.patient_first_name,
+          patientLastName: r.patient_last_name,
+          appointmentDatetime: r.appointment_datetime,
+        }))}
+        onComplete={handleCancellationComplete}
+      />
     </div>
   );
 }

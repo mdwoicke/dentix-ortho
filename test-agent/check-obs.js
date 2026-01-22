@@ -1,55 +1,26 @@
-const Database = require('better-sqlite3');
-const db = new Database('./data/test-results.db');
+const BetterSqlite3 = require('better-sqlite3');
+const db = new BetterSqlite3('./data/test-results.db');
 
-// Check all distinct observation names
-const allNames = db.prepare(`
-  SELECT DISTINCT name, type, COUNT(*) as cnt
+const sessionId = 'conv_2_+19546824812_1768598936933';
+
+const obs = db.prepare(`
+  SELECT observation_id, name, type, level, output
   FROM production_trace_observations
-  GROUP BY name, type
-  ORDER BY cnt DESC
-`).all();
+  WHERE trace_id IN (SELECT trace_id FROM production_traces WHERE session_id = ?)
+  AND name LIKE '%schedule%'
+`).all(sessionId);
 
-console.log('All observation names:');
-allNames.forEach(r => console.log(`  ${r.cnt} - ${r.name} (${r.type})`));
-
-// Check names that would match tool/api filter
-const toolApiNames = db.prepare(`
-  SELECT DISTINCT name
-  FROM production_trace_observations
-  WHERE LOWER(name) LIKE '%tool%' OR LOWER(name) LIKE '%api%'
-`).all();
-
-console.log('\nNames matching tool/api filter:');
-toolApiNames.forEach(r => console.log(`  ${r.name}`));
-
-// Count errors with old vs new logic
-const oldLogicCount = db.prepare(`
-  SELECT COUNT(*) as cnt
-  FROM production_trace_observations
-  WHERE (
-    level = 'ERROR'
-    OR (output LIKE '%"success"%' AND output LIKE '%false%')
-    OR output LIKE '%_debug_error%'
-    OR output LIKE '%"error":%'
-    OR status_message LIKE '%error%'
-  )
-`).get();
-
-const newLogicCount = db.prepare(`
-  SELECT COUNT(*) as cnt
-  FROM production_trace_observations
-  WHERE (
-    level = 'ERROR'
-    OR output LIKE '%"success":false%'
-    OR output LIKE '%"success": false%'
-    OR output LIKE '%_debug_error%'
-  )
-  AND (
-    LOWER(name) LIKE '%tool%'
-    OR LOWER(name) LIKE '%api%'
-  )
-`).get();
-
-console.log('\nError counts:');
-console.log(`  Old logic (broad): ${oldLogicCount.cnt}`);
-console.log(`  New logic (strict): ${newLogicCount.cnt}`);
+console.log('Found', obs.length, 'schedule observations for session', sessionId);
+obs.forEach(o => {
+  const output = o.output ? (typeof o.output === 'string' ? o.output : JSON.stringify(o.output)).substring(0, 500) : 'null';
+  console.log('---');
+  console.log('Name:', o.name);
+  console.log('Type:', o.type);
+  console.log('Level:', o.level || 'DEFAULT');
+  console.log('Output has _debug_error:', output.includes('_debug_error'));
+  console.log('Output has success:false:', output.includes('"success":false') || output.includes('"success": false'));
+  if (output.includes('_debug_error') || output.includes('"success":false')) {
+    console.log('OUTPUT SNIPPET:', output);
+  }
+});
+db.close();

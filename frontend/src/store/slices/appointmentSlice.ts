@@ -136,8 +136,9 @@ export const cancelAppointment = createAsyncThunk(
   'appointments/cancel',
   async (cancelData: CancelAppointmentRequest, { rejectWithValue }) => {
     try {
-      const appointment = await appointmentApi.cancelAppointment(cancelData);
-      return appointment;
+      const response = await appointmentApi.cancelAppointment(cancelData);
+      // Return full response including message and alreadyCancelled flag
+      return response;
     } catch (error) {
       logError(error, 'cancelAppointment');
       const formattedError = handleError(error, 'Failed to cancel appointment');

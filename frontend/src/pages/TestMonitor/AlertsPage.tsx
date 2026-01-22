@@ -7,6 +7,41 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { API_CONFIG } from '../../utils/constants';
 
 // ============================================================================
+// TIMEZONE CONSTANTS
+// ============================================================================
+
+interface TimezoneOption {
+  value: string;
+  label: string;
+  abbrev: string;
+}
+
+const US_TIMEZONES: TimezoneOption[] = [
+  { value: 'America/Chicago', label: 'Central Time', abbrev: 'CT' },
+  { value: 'America/New_York', label: 'Eastern Time', abbrev: 'ET' },
+  { value: 'America/Denver', label: 'Mountain Time', abbrev: 'MT' },
+  { value: 'America/Los_Angeles', label: 'Pacific Time', abbrev: 'PT' },
+  { value: 'America/Anchorage', label: 'Alaska Time', abbrev: 'AKT' },
+  { value: 'America/Honolulu', label: 'Hawaii Time', abbrev: 'HT' },
+  { value: 'UTC', label: 'UTC', abbrev: 'UTC' },
+];
+
+const ALERTS_TIMEZONE_STORAGE_KEY = 'alerts_timezone';
+
+function getStoredTimezone(): string {
+  try {
+    const stored = localStorage.getItem(ALERTS_TIMEZONE_STORAGE_KEY);
+    if (stored && US_TIMEZONES.some(tz => tz.value === stored)) {
+      return stored;
+    }
+  } catch {
+    // Ignore localStorage errors
+  }
+  // Default to Central Time
+  return 'America/Chicago';
+}
+
+// ============================================================================
 // TYPE DEFINITIONS
 // ============================================================================
 
@@ -80,6 +115,9 @@ export function AlertsPage() {
   const [metrics, setMetrics] = useState<MetricInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Timezone state
+  const [timezone, setTimezone] = useState<string>(getStoredTimezone);
 
   // Alert form state
   const [showAlertForm, setShowAlertForm] = useState(false);
@@ -279,9 +317,28 @@ export function AlertsPage() {
     }
   };
 
-  const formatTime = (iso: string) => {
-    return new Date(iso).toLocaleString();
+  // Handle timezone change
+  const handleTimezoneChange = (newTimezone: string) => {
+    setTimezone(newTimezone);
+    try {
+      localStorage.setItem(ALERTS_TIMEZONE_STORAGE_KEY, newTimezone);
+    } catch {
+      // Ignore localStorage errors
+    }
   };
+
+  const formatTime = (iso: string) => {
+    return new Date(iso).toLocaleString('en-US', {
+      timeZone: timezone,
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
+  // Get current timezone info
+  const currentTimezoneInfo = US_TIMEZONES.find(tz => tz.value === timezone) || US_TIMEZONES[0];
 
   // ============================================================================
   // RENDER
@@ -329,6 +386,24 @@ export function AlertsPage() {
           >
             Run Now
           </button>
+
+          {/* Timezone Selector */}
+          <div className="flex items-center space-x-2 ml-4 pl-4 border-l border-gray-200 dark:border-gray-700">
+            <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <select
+              value={timezone}
+              onChange={(e) => handleTimezoneChange(e.target.value)}
+              className="block px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+            >
+              {US_TIMEZONES.map(tz => (
+                <option key={tz.value} value={tz.value}>
+                  {tz.label} ({tz.abbrev})
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
       </div>
 

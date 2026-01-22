@@ -40,6 +40,7 @@ export interface UsePlaybackAnimationResult {
   jumpToEnd: () => void;
   jumpToTime: (timeMs: number) => void;
   jumpToStep: (stepIndex: number) => void;
+  jumpToProgress: (percent: number) => void;
   setSpeed: (speed: PlaybackSpeed) => void;
   canStepForward: boolean;
   canStepBackward: boolean;
@@ -328,6 +329,19 @@ export function usePlaybackAnimation({
     setStepProgress(0);
   }, [totalSteps]);
 
+  const jumpToProgress = useCallback((percent: number) => {
+    // Clamp percent to 0-1 range
+    const clampedPercent = Math.max(0, Math.min(1, percent));
+    // Calculate target step and progress within that step
+    const totalProgress = clampedPercent * totalSteps;
+    const targetStep = Math.floor(totalProgress);
+    const targetProgress = totalProgress - targetStep;
+
+    setIsPlaying(false);
+    setCurrentStepIndex(Math.max(0, Math.min(totalSteps - 1, targetStep)));
+    setStepProgress(targetStep >= totalSteps - 1 ? clampedPercent === 1 ? 1 : targetProgress : targetProgress);
+  }, [totalSteps]);
+
   // Create playback state object
   const playbackState: PlaybackState = {
     isPlaying,
@@ -352,6 +366,7 @@ export function usePlaybackAnimation({
     jumpToEnd,
     jumpToTime,
     jumpToStep,
+    jumpToProgress,
     setSpeed,
     canStepForward,
     canStepBackward,

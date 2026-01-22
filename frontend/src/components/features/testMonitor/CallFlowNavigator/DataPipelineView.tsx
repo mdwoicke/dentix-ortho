@@ -49,6 +49,26 @@ const Icons = {
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
     </svg>
   ),
+  ChevronLeft: () => (
+    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+    </svg>
+  ),
+  ChevronRight: () => (
+    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+    </svg>
+  ),
+  Search: () => (
+    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+    </svg>
+  ),
+  X: () => (
+    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+    </svg>
+  ),
 };
 
 // ============================================================================
@@ -78,6 +98,9 @@ interface DataPipelineViewProps {
   events?: TimelineEvent[];
   onJumpToStep?: (stepIndex: number) => void;
   flowDebug?: FlowDebugInfo;
+  // Search props (managed by parent FlowViewPopout)
+  searchMatchingNodeIds?: Set<string>;
+  focusedSearchNodeId?: string | null;
 }
 
 // ============================================================================
@@ -94,11 +117,14 @@ export function DataPipelineView({
   events = [],
   onJumpToStep,
   flowDebug,
+  searchMatchingNodeIds = new Set<string>(),
+  focusedSearchNodeId = null,
 }: DataPipelineViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [showFullIO, setShowFullIO] = useState(true);
   const [showDebug, setShowDebug] = useState(false);
   const [currentErrorIndex, setCurrentErrorIndex] = useState(0);
+  const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
 
   // Get all error nodes for navigation, sorted by start time
   const errorNodes = useMemo(() => {
@@ -114,43 +140,50 @@ export function DataPipelineView({
 
     const errorNode = errorNodes[wrappedIndex];
     if (scrollRef.current && errorNode) {
-      // Find which turn contains this error node (by time range)
-      const errorTurnIndex = pipelineTurns.findIndex(turn => {
-        // Check if error node's startMs falls within this turn's time range
+      // Find which turn contains this error node
+      const errorTurn = pipelineTurns.find(turn => {
         return errorNode.startMs >= turn.startMs && errorNode.startMs < turn.endMs;
       });
 
-      // First scroll to the turn
-      if (errorTurnIndex >= 0) {
-        const turnElement = scrollRef.current.querySelector(`[data-turn="pipeline-turn-${errorTurnIndex}"]`);
+      // First, scroll the turn into view (instant scroll)
+      if (errorTurn) {
+        const turnElement = scrollRef.current.querySelector(`[data-turn="${errorTurn.id}"]`);
         if (turnElement) {
-          turnElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          turnElement.scrollIntoView({ behavior: 'auto', block: 'start' });
         }
       }
 
-      // Then find and highlight the specific node element
-      setTimeout(() => {
+      // Then find and scroll to the specific node with highlighting
+      // Use requestAnimationFrame to ensure DOM has updated
+      requestAnimationFrame(() => {
         const nodeElement = scrollRef.current?.querySelector(`[data-node-id="${errorNode.id}"]`);
         if (nodeElement) {
-          // Scroll to the node within the turn
           nodeElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          // Highlight the node briefly
+          // Highlight the node
           nodeElement.classList.add('ring-2', 'ring-red-500', 'ring-offset-2');
           setTimeout(() => {
             nodeElement.classList.remove('ring-2', 'ring-red-500', 'ring-offset-2');
           }, 2000);
         }
-      }, 300); // Small delay to let the turn scroll complete first
+      });
 
       // Also trigger the node click to show details
       onNodeClick(errorNode);
     }
   };
 
+  // Jump to previous error
+  const jumpToPreviousError = () => {
+    if (errorNodes.length === 0) return;
+    const newIndex = (currentErrorIndex - 1 + errorNodes.length) % errorNodes.length;
+    jumpToError(newIndex);
+  };
+
   // Jump to next error (for cycling through errors)
   const jumpToNextError = () => {
     jumpToError(currentErrorIndex + 1);
   };
+
 
   // Debug: Analyze all nodes by layer and type
   const debugInfo = useMemo(() => {
@@ -223,24 +256,79 @@ export function DataPipelineView({
     });
   }, [pipelineTurns, activeNodeIds]);
 
-  // Auto-scroll to active turn
+  // Auto-scroll to active turn (when enabled)
   useEffect(() => {
-    if (activeTurnIndex >= 0 && scrollRef.current) {
+    if (autoScrollEnabled && activeTurnIndex >= 0 && scrollRef.current) {
       const turnElement = scrollRef.current.querySelector(`[data-turn="pipeline-turn-${activeTurnIndex}"]`);
       turnElement?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
-  }, [activeTurnIndex]);
+  }, [activeTurnIndex, autoScrollEnabled]);
+
+  // Auto-scroll to focused search node when it changes
+  useEffect(() => {
+    if (!focusedSearchNodeId || !scrollRef.current) return;
+
+    // Find the node in the nodes array to get its timing
+    const focusedNode = nodes.find(n => n.id === focusedSearchNodeId);
+    if (!focusedNode) return;
+
+    // Find which turn contains this node
+    const turn = pipelineTurns.find(t => {
+      return focusedNode.startMs >= t.startMs && focusedNode.startMs < t.endMs;
+    });
+
+    // First, scroll the turn into view (instant scroll)
+    if (turn) {
+      const turnElement = scrollRef.current.querySelector(`[data-turn="${turn.id}"]`);
+      if (turnElement) {
+        turnElement.scrollIntoView({ behavior: 'auto', block: 'start' });
+      }
+    }
+
+    // Then find and scroll to the specific node with highlighting
+    requestAnimationFrame(() => {
+      const nodeElement = scrollRef.current?.querySelector(`[data-node-id="${focusedSearchNodeId}"]`);
+      if (nodeElement) {
+        nodeElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        // Add temporary highlight effect
+        nodeElement.classList.add('ring-2', 'ring-orange-500', 'ring-offset-2', 'animate-pulse');
+        setTimeout(() => {
+          nodeElement.classList.remove('ring-2', 'ring-orange-500', 'ring-offset-2', 'animate-pulse');
+        }, 1500);
+      }
+    });
+  }, [focusedSearchNodeId, nodes, pipelineTurns]);
 
   // Handle turn navigation click
   const handleTurnClick = (turnIndex: number) => {
-    if (scrollRef.current) {
-      const turnElement = scrollRef.current.querySelector(`[data-turn="pipeline-turn-${turnIndex}"]`);
-      turnElement?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const turn = pipelineTurns[turnIndex];
+    if (!turn || !scrollRef.current) return;
+
+    // First, scroll the turn into view (instant scroll)
+    const turnElement = scrollRef.current.querySelector(`[data-turn="${turn.id}"]`);
+    if (turnElement) {
+      turnElement.scrollIntoView({ behavior: 'auto', block: 'start' });
+    }
+
+    // If this turn has an error, scroll to and highlight the error node
+    if (turn.hasError && turn.errorNode) {
+      requestAnimationFrame(() => {
+        const nodeElement = scrollRef.current?.querySelector(`[data-node-id="${turn.errorNode!.id}"]`);
+        if (nodeElement) {
+          nodeElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          // Highlight the node
+          nodeElement.classList.add('ring-2', 'ring-red-500', 'ring-offset-2');
+          setTimeout(() => {
+            nodeElement.classList.remove('ring-2', 'ring-red-500', 'ring-offset-2');
+          }, 2000);
+        }
+      });
+      // Show the error node details
+      onNodeClick(turn.errorNode);
     }
 
     // If onJumpToStep is provided, find the corresponding event index
-    if (onJumpToStep && pipelineTurns[turnIndex]) {
-      const turn = pipelineTurns[turnIndex];
+    if (onJumpToStep) {
       const firstNode = turn.userInput ||
         turn.layerNodes.flowise[0] ||
         turn.layerNodes.tools[0] ||
@@ -284,6 +372,45 @@ export function DataPipelineView({
 
   return (
     <div className="h-full flex flex-col">
+      {/* Sticky Error Banner - Always visible when errors exist */}
+      {errorCount > 0 && (
+        <div className="flex-shrink-0 flex items-center justify-between px-4 py-2 bg-gradient-to-r from-red-500 to-red-600 text-white">
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              <Icons.XCircle />
+              <span className="font-semibold">
+                {errorCount} Error{errorCount > 1 ? 's' : ''} Found
+              </span>
+            </div>
+            <span className="text-red-100 text-sm">
+              ({currentErrorIndex + 1} of {errorCount})
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={jumpToPreviousError}
+              className="p-1.5 hover:bg-red-400/30 rounded-lg transition-colors"
+              title="Previous error"
+            >
+              <Icons.ChevronLeft />
+            </button>
+            <button
+              onClick={() => jumpToError(currentErrorIndex)}
+              className="px-3 py-1 bg-white/20 hover:bg-white/30 rounded-lg text-sm font-medium transition-colors"
+            >
+              Jump to Error
+            </button>
+            <button
+              onClick={jumpToNextError}
+              className="p-1.5 hover:bg-red-400/30 rounded-lg transition-colors"
+              title="Next error"
+            >
+              <Icons.ChevronRight />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Compact Header - Single row with all controls */}
       <div className="flex-shrink-0 flex items-center justify-between gap-4 px-3 py-1.5 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900">
         {/* Left: Turn Navigation (compact) */}
@@ -339,23 +466,39 @@ export function DataPipelineView({
 
         {/* Right: Status & Controls */}
         <div className="flex items-center gap-2">
-          {errorCount > 0 && (
-            <button
-              onClick={jumpToNextError}
-              className="flex items-center gap-1 px-2 py-0.5 rounded bg-red-100 dark:bg-red-900/30 hover:bg-red-200 dark:hover:bg-red-800/40 transition-colors cursor-pointer border border-red-300 dark:border-red-700"
-              title={`Jump to error (${currentErrorIndex + 1}/${errorCount})`}
-            >
-              <Icons.XCircle />
-              <span className="text-[10px] font-bold text-red-700 dark:text-red-300">{errorCount} Error{errorCount > 1 ? 's' : ''}</span>
-              <span className="text-[9px] text-red-500 dark:text-red-400 ml-1">→ Jump</span>
-            </button>
+          {/* Search indicator (shows when search is active) */}
+          {searchMatchingNodeIds.size > 0 && (
+            <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-yellow-100 dark:bg-yellow-900/30">
+              <Icons.Search />
+              <span className="text-[10px] font-bold text-yellow-700 dark:text-yellow-300">
+                {searchMatchingNodeIds.size}
+              </span>
+            </div>
           )}
+
+          {/* Bottleneck indicator */}
           {bottleneckCount > 0 && (
             <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-orange-100 dark:bg-orange-900/30">
               <Icons.Flame />
               <span className="text-[10px] font-bold text-orange-700 dark:text-orange-300">{bottleneckCount}</span>
             </div>
           )}
+
+          {/* Auto-scroll toggle */}
+          <button
+            onClick={() => setAutoScrollEnabled(!autoScrollEnabled)}
+            className={cn(
+              'px-2 py-1 rounded text-[10px] font-medium transition-colors',
+              autoScrollEnabled
+                ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300'
+                : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400',
+            )}
+            title={autoScrollEnabled ? 'Auto-scroll enabled' : 'Auto-scroll disabled'}
+          >
+            Auto
+          </button>
+
+          {/* I/O toggle */}
           <button
             onClick={() => setShowFullIO(!showFullIO)}
             className={cn(
@@ -365,8 +508,10 @@ export function DataPipelineView({
                 : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400',
             )}
           >
-            {showFullIO ? 'I/O' : 'I/O'}
+            I/O
           </button>
+
+          {/* Debug toggle */}
           <button
             onClick={() => setShowDebug(!showDebug)}
             className={cn(
@@ -634,6 +779,8 @@ export function DataPipelineView({
                   completedNodeIds={completedNodeIds}
                   onNodeClick={onNodeClick}
                   showFullIO={showFullIO}
+                  searchMatchingNodeIds={searchMatchingNodeIds}
+                  focusedSearchNodeId={focusedSearchNodeId}
                 />
 
                 {/* Connector between turns */}

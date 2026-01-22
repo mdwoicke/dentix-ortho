@@ -4,7 +4,7 @@
  */
 
 import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from 'react-resizable-panels';
 import { useAppDispatch, useAppSelector } from '../../hooks';
 import { PageHeader } from '../../components/layout';
@@ -86,6 +86,7 @@ import type { TestEnvironmentPresetWithNames } from '../../types/appSettings.typ
 
 export function TestRunDetail() {
   const dispatch = useAppDispatch();
+  const navigate = useNavigate();
   const { runId } = useParams<{ runId: string }>();
 
   const runs = useAppSelector(selectTestRuns);
@@ -362,13 +363,39 @@ export function TestRunDetail() {
     return () => clearInterval(intervalId);
   }, [dispatch, runs, selectedRun?.runId, selectedRun?.status, isStreaming]);
 
+  // Track if this is the initial mount to force refetch
+  const initialMountRef = useRef(true);
+
   // Auto-select run from URL parameter
   // Also handles navigation between different runs (when selectedRun is already set but for a different runId)
+  // IMPORTANT: Always refetch on mount to ensure we have fresh data when navigating back to this page
   useEffect(() => {
-    if (runId && (!selectedRun || selectedRun.runId !== runId)) {
-      handleSelectRun(runId);
+    if (runId) {
+      // Always refetch on initial mount (handles navigation back to page)
+      // or when switching to a different run
+      if (initialMountRef.current || !selectedRun || selectedRun.runId !== runId) {
+        console.log('[TestRunDetail] Auto-selecting run from URL:', runId,
+          initialMountRef.current ? '(initial mount)' : '(run changed)');
+        handleSelectRun(runId);
+        initialMountRef.current = false;
+      }
     }
   }, [runId, selectedRun?.runId]);
+
+  // Auto-fetch transcript when selectedTest exists but transcript is empty
+  // This handles the case where selectedTest persists in Redux but transcript doesn't
+  // (e.g., page reload, navigation back to this page)
+  useEffect(() => {
+    if (selectedTest && transcript.length === 0 && !transcriptLoading) {
+      // Only fetch if this test belongs to the current run
+      const currentRunId = runId || selectedRun?.runId;
+      if (selectedTest.runId === currentRunId) {
+        console.log('[TestRunDetail] Auto-fetching transcript for persisted selectedTest:', selectedTest.testId);
+        dispatch(fetchTranscript({ testId: selectedTest.testId, runId: selectedTest.runId }));
+        dispatch(fetchApiCalls({ testId: selectedTest.testId, runId: selectedTest.runId }));
+      }
+    }
+  }, [selectedTest?.testId, selectedTest?.runId, transcript.length, transcriptLoading, runId, selectedRun?.runId, dispatch]);
 
   // Subscribe to real-time updates when viewing a running test run
   useEffect(() => {
@@ -452,10 +479,15 @@ export function TestRunDetail() {
   }, [runId, selectedRun?.runId, selectedRun?.status, handleExecutionStreamEvent]);
 
   // Handle selecting a test run
-  const handleSelectRun = (runId: string) => {
-    dispatch(fetchTestRun(runId));
-    dispatch(fetchFindings(runId));
-    dispatch(fetchFixes(runId));
+  const handleSelectRun = (selectedRunId: string) => {
+    // Navigate to the new run URL if different from current URL
+    // This ensures the URL stays in sync with the selection
+    if (selectedRunId !== runId) {
+      navigate(`/test-monitor/run/${selectedRunId}`);
+    }
+    dispatch(fetchTestRun(selectedRunId));
+    dispatch(fetchFindings(selectedRunId));
+    dispatch(fetchFixes(selectedRunId));
   };
 
   // Handle updating fix status
@@ -818,6 +850,8 @@ export function TestRunDetail() {
               selectedTestId={selectedTest?.testId}
               onSelectTest={handleSelectTest}
               loading={loading && !selectedRun}
+              runStatus={selectedRun?.status}
+              runningTestCount={Object.keys(runningTests).length}
             />
           </ExpandablePanel>
         </Panel>

@@ -300,7 +300,9 @@ class SSHService {
       session,
       client,
       emitter,
-      isLocal: false
+      isLocal: false,
+      outputBuffer: [],
+      isComplete: false
     };
 
     this.activeSessions.set(sessionId, activeSession);

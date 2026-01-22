@@ -18,6 +18,8 @@ import {
   getPatientDetailUrl,
   type ExtractedPatient,
 } from '../../../utils/patientLinkHelper';
+import { copyToClipboard } from '../../../utils/clipboard';
+import { ReplayPanel } from './CallFlowNavigator/ReplayPanel';
 
 interface TranscriptViewerProps {
   transcript: ConversationTurn[];
@@ -259,6 +261,62 @@ function JsonWithPatientLinks({
   );
 }
 
+// Node-RED base URL for endpoint display
+const NODERED_BASE_URL = 'https://c1-aicoe-nodered-lb.prod.c1conversations.io/FabricWorkflow/api/chord';
+
+// Endpoint mappings for display purposes
+const TOOL_ENDPOINTS: Record<string, Record<string, string>> = {
+  chord_ortho_patient: {
+    lookup: `${NODERED_BASE_URL}/ortho-prd/getPatientByFilter`,
+    get: `${NODERED_BASE_URL}/ortho-prd/getPatient`,
+    create: `${NODERED_BASE_URL}/ortho-prd/createPatient`,
+    appointments: `${NODERED_BASE_URL}/ortho-prd/getPatientAppts`,
+    clinic_info: `${NODERED_BASE_URL}/ortho-prd/getLocation`,
+    edit_insurance: `${NODERED_BASE_URL}/ortho-prd/editInsurance`,
+    confirm_appointment: `${NODERED_BASE_URL}/ortho-prd/confirmAppt`,
+  },
+  schedule_appointment_ortho: {
+    slots: `${NODERED_BASE_URL}/ortho-prd/getApptSlots`,
+    grouped_slots: `${NODERED_BASE_URL}/ortho-prd/getGroupedApptSlots`,
+    book_child: `${NODERED_BASE_URL}/ortho-prd/createAppt`,
+    cancel: `${NODERED_BASE_URL}/ortho-prd/cancelAppt`,
+  },
+};
+
+/**
+ * Extract tool name and action from an API call for replay
+ */
+function extractToolInfoFromApiCall(call: ApiCall): { toolName: string; action: string; endpoint: string; input: Record<string, unknown> } | null {
+  // Skip flowise_payload and other non-tool calls
+  if (!call.toolName || call.toolName === 'flowise_payload') {
+    return null;
+  }
+
+  // Supported tools for replay
+  const SUPPORTED_TOOLS = ['chord_ortho_patient', 'schedule_appointment_ortho'];
+  if (!SUPPORTED_TOOLS.includes(call.toolName)) {
+    return null;
+  }
+
+  // Extract action from request payload
+  const requestPayload = call.requestPayload || {};
+  const action = (requestPayload.action as string) || '';
+
+  if (!action) {
+    return null;
+  }
+
+  // Determine endpoint for display
+  const endpoint = TOOL_ENDPOINTS[call.toolName]?.[action] || `${NODERED_BASE_URL}/ortho-prd/${action}`;
+
+  return {
+    toolName: call.toolName,
+    action,
+    endpoint,
+    input: requestPayload as Record<string, unknown>,
+  };
+}
+
 /**
  * Pretty format JSON with syntax highlighting
  */
@@ -304,9 +362,15 @@ function ApiCallModal({
   call: ApiCall;
   onClose: () => void;
 }) {
+  const [showReplayPanel, setShowReplayPanel] = useState(false);
+
   const patients = extractPatientsFromApiCall(call);
   const displayName = getToolDisplayName(call);
   const errorInfo = hasApiCallError(call);
+
+  // Extract tool info for replay functionality
+  const toolInfo = extractToolInfoFromApiCall(call);
+  const canReplay = toolInfo !== null;
 
   // Handle escape key
   useEffect(() => {
@@ -456,7 +520,22 @@ function ApiCallModal({
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 flex justify-end">
+        <div className="px-6 py-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 flex justify-between items-center">
+          <div className="flex items-center gap-2">
+            {/* Replay button - only show for supported tools */}
+            {canReplay && toolInfo && (
+              <button
+                onClick={() => setShowReplayPanel(true)}
+                className="inline-flex items-center gap-2 px-3 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-colors text-sm font-medium"
+                title="Re-execute this API call with editable input"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                Replay
+              </button>
+            )}
+          </div>
           <button
             onClick={onClose}
             className="px-4 py-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 rounded-lg transition-colors"
@@ -465,6 +544,18 @@ function ApiCallModal({
           </button>
         </div>
       </div>
+
+      {/* Replay Panel Modal */}
+      {toolInfo && (
+        <ReplayPanel
+          isOpen={showReplayPanel}
+          onClose={() => setShowReplayPanel(false)}
+          toolName={toolInfo.toolName}
+          action={toolInfo.action}
+          endpoint={toolInfo.endpoint}
+          initialInput={toolInfo.input}
+        />
+      )}
     </div>,
     document.body
   );
@@ -891,10 +982,10 @@ export function TranscriptViewer({
     }
   }, [isLive, transcript.length, apiCalls.length]);
 
-  // Copy to clipboard helper
-  const copyToClipboard = useCallback(async (text: string, field: string) => {
+  // Copy to clipboard helper (uses utility with fallback for non-secure contexts)
+  const handleCopyToClipboard = useCallback(async (text: string, field: string) => {
     try {
-      await navigator.clipboard.writeText(text);
+      await copyToClipboard(text);
       setCopiedField(field);
       setTimeout(() => setCopiedField(null), 2000);
     } catch (err) {
@@ -977,7 +1068,7 @@ export function TranscriptViewer({
             </svg>
           </a>
           <button
-            onClick={() => copyToClipboard(flowiseSessionId || runId || '', 'langfuseSessionId')}
+            onClick={() => handleCopyToClipboard(flowiseSessionId || runId || '', 'langfuseSessionId')}
             className="p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
             title="Copy session ID"
           >
@@ -1005,7 +1096,7 @@ export function TranscriptViewer({
           </span>
           {dbId !== undefined && (
             <button
-              onClick={() => copyToClipboard(String(dbId), 'dbId')}
+              onClick={() => handleCopyToClipboard(String(dbId), 'dbId')}
               className="inline-flex items-center gap-1 px-2 py-0.5 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded font-mono text-gray-600 dark:text-gray-300 transition-colors"
               title="Click to copy DB ID"
             >
@@ -1017,7 +1108,7 @@ export function TranscriptViewer({
           )}
           {runId && (
             <button
-              onClick={() => copyToClipboard(runId, 'runId')}
+              onClick={() => handleCopyToClipboard(runId, 'runId')}
               className="inline-flex items-center gap-1 px-2 py-0.5 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded font-mono text-gray-600 dark:text-gray-300 transition-colors truncate max-w-[200px]"
               title={`Click to copy Run ID: ${runId}`}
             >
@@ -1029,7 +1120,7 @@ export function TranscriptViewer({
           )}
           {testId && (
             <button
-              onClick={() => copyToClipboard(testId, 'testId')}
+              onClick={() => handleCopyToClipboard(testId, 'testId')}
               className="inline-flex items-center gap-1 px-2 py-0.5 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded font-mono text-gray-600 dark:text-gray-300 transition-colors"
               title={`Click to copy Test ID: ${testId}`}
             >

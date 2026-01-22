@@ -16,7 +16,9 @@ const tabs = [
   { name: 'Call Tracing', path: ROUTES.TEST_MONITOR_CALL_TRACE },
   { name: 'Skills Runner', path: ROUTES.TEST_MONITOR_SKILLS_RUNNER },
   { name: 'Prod Tracker', path: ROUTES.TEST_MONITOR_PROD_TRACKER },
+  { name: 'Queue Activity', path: ROUTES.TEST_MONITOR_QUEUE_ACTIVITY },
   { name: 'Alerts', path: ROUTES.TEST_MONITOR_ALERTS },
+  { name: 'Cache Health', path: ROUTES.TEST_MONITOR_CACHE_HEALTH },
   // Legacy tabs (deprecated - routes still work for backwards compatibility)
   // { name: 'Goal Tests', path: ROUTES.TEST_MONITOR_GOAL_CASES },
   // { name: 'Goal Test Generator', path: ROUTES.TEST_MONITOR_CREATE },
@@ -92,3 +94,5 @@ export { default as CallTracePage } from './CallTracePage';
 export { SkillsRunnerPage } from './SkillsRunnerPage';
 export { ProdTestTrackerPage } from './ProdTestTracker';
 export { AlertsPage } from './AlertsPage';
+export { QueueActivityPage } from './QueueActivityPage';
+export { CacheHealthPage } from './CacheHealthPage';

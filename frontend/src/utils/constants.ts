@@ -39,6 +39,8 @@ export const ROUTES = {
   TEST_MONITOR_SKILLS_RUNNER: '/test-monitor/skills-runner',
   TEST_MONITOR_PROD_TRACKER: '/test-monitor/prod-tracker',
   TEST_MONITOR_ALERTS: '/test-monitor/alerts',
+  TEST_MONITOR_QUEUE_ACTIVITY: '/test-monitor/queue-activity',
+  TEST_MONITOR_CACHE_HEALTH: '/test-monitor/cache-health',
 } as const;
 
 /**

@@ -14,6 +14,8 @@ interface TestResultsTableProps {
   selectedTestId?: string;
   onSelectTest: (test: TestResult) => void;
   loading?: boolean;
+  runStatus?: 'running' | 'completed' | 'failed' | 'aborted';
+  runningTestCount?: number;
 }
 
 const statusIcons: Record<string, { icon: string; color: string }> = {
@@ -119,6 +121,8 @@ export const TestResultsTable = memo(function TestResultsTable({
   selectedTestId,
   onSelectTest,
   loading,
+  runStatus,
+  runningTestCount = 0,
 }: TestResultsTableProps) {
   if (loading) {
     return (
@@ -129,6 +133,25 @@ export const TestResultsTable = memo(function TestResultsTable({
   }
 
   if (results.length === 0) {
+    // Show different messages based on run status
+    if (runStatus === 'running') {
+      return (
+        <div className="flex flex-col items-center justify-center py-8 text-gray-500 dark:text-gray-400">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="relative flex h-3 w-3">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-3 w-3 bg-blue-500"></span>
+            </span>
+            <span>Test run in progress</span>
+          </div>
+          <div className="text-sm">
+            {runningTestCount > 0
+              ? `${runningTestCount} test${runningTestCount > 1 ? 's' : ''} executing...`
+              : 'Connecting to test execution...'}
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="text-center py-8 text-gray-500 dark:text-gray-400">
         No test results. Select a test run to view results.

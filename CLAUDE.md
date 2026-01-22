@@ -21,6 +21,118 @@ The hook at `.claude/hooks/sync-v1-to-langfuse.js` may auto-sync, but ALWAYS ver
 
 ---
 
+## ⚠️ Node-RED Safety Rules
+
+**DO NOT perform any Node-RED delete operations until further notice:**
+
+| Allowed | NOT Allowed |
+|---------|-------------|
+| `GET /flows` - Read current flows | `DELETE` endpoints - Never use |
+| `POST /flows` - Deploy/replace flows | Remove individual nodes/flows |
+| Backup before deploy | Delete tabs or subflows |
+
+**Why:**
+- The deploy service uses **replace-only** operations
+- It replaces the entire flow configuration with the source file contents
+- Never deletes individual flows, tabs, or nodes
+- Always create a backup before deploying new flows
+
+**Node-RED Deployment Endpoints:**
+- `GET /api/test-monitor/nodered/status` - Check connection status
+- `GET /api/test-monitor/nodered/flows` - List all flow tabs
+- `GET /api/test-monitor/nodered/flows/:flowId` - Get specific flow with nodes
+- `POST /api/test-monitor/nodered/deploy` - Deploy flows from V1 source file
+- `POST /api/test-monitor/nodered/copy-flow` - Copy an existing flow to a new name
+
+**Deploy Options:**
+```json
+{
+  "backup": true,     // Create backup before deploy (default: true)
+  "dryRun": false     // Validate only, no changes (default: false)
+}
+```
+
+**Copy Flow Options:**
+```json
+{
+  "sourceFlowId": "cloud9-ortho-tab",    // ID of source flow (or use sourceFlowLabel)
+  "sourceFlowLabel": "Chord-Cloud9-Ortho-Prd",  // Label of source flow
+  "newLabel": "Chord-Cloud9-Ortho-Dev",  // Label for the new flow
+  "disabled": false,   // Create new flow as disabled (default: false)
+  "backup": true,      // Create backup before copy (default: true)
+  "dryRun": false      // Validate only, no changes (default: false)
+}
+```
+
+**CLI Scripts:**
+```bash
+# Deploy - dry run
+cd test-agent && node scripts/deploy-nodered.js --dry-run
+
+# Deploy - full deploy with backup
+cd test-agent && node scripts/deploy-nodered.js --backup
+
+# Copy - list available flows
+cd test-agent && node scripts/copy-nodered-flow.js --list
+
+# Copy - dry run
+cd test-agent && node scripts/copy-nodered-flow.js --source "Chord-Cloud9-Ortho-Prd" --name "Test-Flow" --dry-run
+
+# Copy - create a new flow (starts disabled)
+cd test-agent && node scripts/copy-nodered-flow.js --source "Chord-Cloud9-Ortho-Prd" --name "Chord-Cloud9-Ortho-Dev" --disabled
+```
+
+**Backups are saved to:** `nodered/bk_up/flow-backup-{timestamp}.json`
+
+---
+
+## ⚠️ CRITICAL - Test Environment Must Match Node-RED Environment
+
+**When running tests, the Flowise config MUST match the environment your Node-RED code is pointing to.**
+
+| Node-RED Flow | Points To | Required Flowise Config |
+|---------------|-----------|------------------------|
+| `Chord-Cloud9-Ortho-Prd` | Production Cloud9 API | **Production (ID 1, Default)** |
+| `Chord-Cloud9-Ortho-Sandbox` | Sandbox Cloud9 API | Sandbox config |
+
+**Current Setup:** Node-RED `ortho-prd` endpoints point to **Production**, so tests MUST use the **Production Flowise config (ID 1)**.
+
+**Why This Matters:**
+- Using the wrong Flowise config (e.g., `Ortho-Test-JL-UAT` instead of `Production`) can cause tests to fail
+- Different Flowise chatflows may have different tools configured (e.g., missing `CurrentDateTime` tool)
+- The system prompt and tool configurations must be consistent across Flowise and Node-RED
+
+**Flowise Configs in Database (`flowise_configs` table):**
+| ID | Name | Use For |
+|----|------|---------|
+| 1 | Production (Default) | ✅ Use for all Prd Node-RED testing |
+| 2 | Ortho-Test-JL-UAT | ⚠️ May have different/outdated config |
+| 3 | A/B Sandbox A | Sandbox A testing only |
+| 4 | A/B Sandbox B | Sandbox B testing only |
+
+**To verify which config a test used:**
+```sql
+SELECT g.run_id, t.flowise_config_id, t.flowise_config_name
+FROM goal_test_results g
+LEFT JOIN test_runs t ON g.run_id = t.run_id
+ORDER BY g.started_at DESC LIMIT 5;
+```
+
+**Environment Presets (check these match!):**
+```sql
+SELECT id, name, flowise_config_id FROM environment_presets;
+```
+
+| Preset | flowise_config_id | Notes |
+|--------|-------------------|-------|
+| Prod | **1** (Production) | Must match Node-RED prd endpoints |
+| Sandbox A | 3 | For sandbox testing |
+| Sandbox B | 4 | For sandbox testing |
+
+**Fix applied 2026-01-18:** The "Prod" preset was incorrectly pointing to `flowise_config_id=2` (Ortho-Test-JL-UAT) instead of `flowise_config_id=1` (Production). This caused tests to use a chatflow without the `CurrentDateTime` tool, leading to age calculation failures.
+
+---
+
 ## Project Overview
 
 This repository contains API integration specifications for Cloud 9 Ortho (Dentrix Orthodontic practice management system). The primary artifact is a Postman collection that documents and tests the Cloud 9 Partner API endpoints.
@@ -247,6 +359,41 @@ This is a Postman Collection v2.1.0 format file containing:
 - The XML namespace is `http://schemas.practica.ws/cloud9/partners/`
 - All XML requests should include proper XML declaration and encoding
 
+## Development Server Configuration (IMPORTANT)
+
+**Network Access Requirements**: The frontend must be accessible from any IP (not just localhost) for development on multiple devices.
+
+**Required Configuration:**
+
+1. **`frontend/.env`** - API URL must be relative (uses Vite proxy):
+   ```
+   VITE_API_URL=/api
+   ```
+   **DO NOT** use `http://localhost:3002/api` - this breaks network access.
+
+2. **`frontend/vite.config.ts`** - Must include the `/api` proxy:
+   ```typescript
+   proxy: {
+     '/api': {
+       target: 'http://localhost:3002',
+       changeOrigin: true,
+     },
+     // ... other proxies
+   }
+   ```
+
+**Why This Matters:**
+- When accessing via network IP (e.g., `http://192.168.1.247:5174`), `localhost` resolves to the client machine, not the dev server
+- The Vite proxy routes `/api` requests through the dev server to the backend
+- This allows the same frontend to work from `localhost:5174` AND network IPs
+
+**If login fails with `ERR_CONNECTION_REFUSED`:**
+1. Check `frontend/.env` has `VITE_API_URL=/api` (not `http://localhost:...`)
+2. Verify `vite.config.ts` has the `/api` proxy configured
+3. Restart the frontend dev server after changes
+
+---
+
 ## Development Workflow
 
 When working with Cloud 9 API integrations:
@@ -265,6 +412,10 @@ The collection contains two sets of credentials:
 
 Note: Credentials are embedded in the Postman collection and should be secured appropriately in production implementations.
 
+**App UI Login:**
+- Username: `mwoicke@intelepeer.ai`
+- Password: `Cyclones`
+
 ---
 
 ## Cloud 9 API Reference
@@ -277,7 +428,7 @@ Note: Credentials are embedded in the Postman collection and should be secured a
 | Environment | Endpoint URL | Availability | Notes |
 | :--- | :--- | :--- | :--- |
 | **Testing** | `https://us-ea1-partnertest.cloud9ortho.com/GetData.ashx` | 24/7 (except maintenance) | Sandbox deactivated after 6 months of inactivity |
-| **Production** | `https://us-ea1-partner.cloud9ortho.com/GetData.ashx` | 12:00 AM - 11:00 AM UTC | **Strictly Enforced.** Access outside these hours requires approval |
+| **Production** | `https://us-ea1-partner.cloud9ortho.com/GetData.ashx` | 24/7 | Approved for extended hours access |
 
 ### Request Format
 

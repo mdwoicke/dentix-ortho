@@ -373,6 +373,48 @@ router.put('/references/:documentId', testMonitorController.updateReferenceDocum
 router.delete('/references/:documentId', testMonitorController.deleteReferenceDocument);
 
 // ============================================================================
+// NODE-RED DEPLOYMENT ROUTES
+// ============================================================================
+
+// GET /api/test-monitor/nodered/status - Get Node-RED connection status
+router.get('/nodered/status', testMonitorController.getNoderedStatus);
+
+// GET /api/test-monitor/nodered/flows - List all flow tabs
+router.get('/nodered/flows', testMonitorController.listNoderedFlows);
+
+// GET /api/test-monitor/nodered/flows/:flowId - Get specific flow by ID or label
+router.get('/nodered/flows/:flowId', testMonitorController.getNoderedFlow);
+
+// POST /api/test-monitor/nodered/deploy - Deploy flows to Node-RED
+router.post('/nodered/deploy', testMonitorController.deployToNodered);
+
+// POST /api/test-monitor/nodered/copy-flow - Copy an existing flow to a new name
+router.post('/nodered/copy-flow', testMonitorController.copyNoderedFlow);
+
+// ============================================================================
+// API REPLAY ROUTES
+// ============================================================================
+
+// POST /api/test-monitor/replay - Execute a replay of a tool call
+router.post('/replay', testMonitorController.executeReplay);
+
+// GET /api/test-monitor/replay/endpoints - Get available replay endpoints
+router.get('/replay/endpoints', testMonitorController.getReplayEndpoints);
+
+// ============================================================================
+// QUEUE ACTIVITY ROUTES
+// ============================================================================
+
+// GET /api/test-monitor/queue-activity/stats - Get queue activity statistics
+router.get('/queue-activity/stats', testMonitorController.getQueueStats);
+
+// GET /api/test-monitor/queue-activity/operations - Get queue operations
+router.get('/queue-activity/operations', testMonitorController.getQueueOperations);
+
+// GET /api/test-monitor/queue-activity/operations/:operationId - Get operation detail
+router.get('/queue-activity/operations/:operationId', testMonitorController.getQueueOperationDetail);
+
+// ============================================================================
 // V1 FILE MANAGEMENT ROUTES
 // ============================================================================
 
@@ -553,11 +595,32 @@ router.get('/prod-test-records/export', prodTestRecordController.exportCsv);
 // POST /api/test-monitor/prod-test-records/import - Import from Langfuse traces
 router.post('/prod-test-records/import', prodTestRecordController.importFromLangfuse);
 
+// POST /api/test-monitor/prod-test-records/update-notes - Update notes from observation data
+router.post('/prod-test-records/update-notes', prodTestRecordController.updateNotesFromObservations);
+
+// GET /api/test-monitor/prod-test-records/patient/:patientGuid/appointments - Get appointments from local DB
+router.get('/prod-test-records/patient/:patientGuid/appointments', prodTestRecordController.getAppointmentsByPatientGuid);
+
+// POST /api/test-monitor/prod-test-records/patient/:patientGuid/import-traces - Import Langfuse traces for patient
+router.post('/prod-test-records/patient/:patientGuid/import-traces', prodTestRecordController.importTracesByPatientGuid);
+
 // POST /api/test-monitor/prod-test-records/manual - Manually add a record
 router.post('/prod-test-records/manual', prodTestRecordController.addRecord);
 
 // POST /api/test-monitor/prod-test-records/bulk-cancel - Cancel multiple appointments
 router.post('/prod-test-records/bulk-cancel', prodTestRecordController.bulkCancelAppointments);
+
+// POST /api/test-monitor/prod-test-records/bulk-cancel-stream - Start streaming cancellation
+router.post('/prod-test-records/bulk-cancel-stream', prodTestRecordController.startStreamingCancellation);
+
+// GET /api/test-monitor/prod-test-records/cancel-stream/:operationId - SSE stream for cancellation progress
+router.get('/prod-test-records/cancel-stream/:operationId', prodTestRecordController.streamCancellation);
+
+// GET /api/test-monitor/prod-test-records/cancel-status/:operationId - Get cancellation status
+router.get('/prod-test-records/cancel-status/:operationId', prodTestRecordController.getCancellationStatus);
+
+// POST /api/test-monitor/prod-test-records/backfill-names - Backfill patient names from Cloud9
+router.post('/prod-test-records/backfill-names', prodTestRecordController.backfillPatientNames);
 
 // GET /api/test-monitor/prod-test-records/:id - Get single record
 router.get('/prod-test-records/:id', prodTestRecordController.getRecord);
@@ -570,5 +633,24 @@ router.post('/prod-test-records/:id/cancel', prodTestRecordController.cancelAppo
 
 // DELETE /api/test-monitor/prod-test-records/:id - Hard delete record
 router.delete('/prod-test-records/:id', prodTestRecordController.deleteRecord);
+
+// ============================================================================
+// REDIS SLOT CACHE HEALTH ROUTES (Proxy to Node-RED)
+// ============================================================================
+
+// GET /api/test-monitor/cache-health - Get cache health status
+router.get('/cache-health', testMonitorController.getCacheHealth);
+
+// GET /api/test-monitor/cache-health/tier/:tier/slots - Get all cached slots for a tier
+router.get('/cache-health/tier/:tier/slots', testMonitorController.getTierSlots);
+
+// POST /api/test-monitor/cache-health/refresh - Force cache refresh
+router.post('/cache-health/refresh', testMonitorController.forceCacheRefresh);
+
+// DELETE /api/test-monitor/cache-health/cache - Clear cache
+router.delete('/cache-health/cache', testMonitorController.clearCache);
+
+// POST /api/test-monitor/cache-health/purge-and-refresh - Purge all cache and refresh all tiers
+router.post('/cache-health/purge-and-refresh', testMonitorController.purgeAndRefreshCache);
 
 export default router;

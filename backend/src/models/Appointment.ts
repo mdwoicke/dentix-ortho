@@ -1,5 +1,10 @@
 import { getDatabase } from '../config/database';
 import { loggers } from '../utils/logger';
+import BetterSqlite3 from 'better-sqlite3';
+import path from 'path';
+
+// Path to test-agent database (for prod_test_records)
+const TEST_AGENT_DB_PATH = path.resolve(__dirname, '../../../test-agent/data/test-results.db');
 
 /**
  * Appointment Model
@@ -249,6 +254,51 @@ export class AppointmentModel {
           error instanceof Error ? error.message : String(error)
         }`
       );
+    }
+  }
+
+  /**
+   * Get schedule_column_guid and notes from prod_test_records for appointments created via Flowise/Node-RED
+   * This is a fallback for appointments that aren't in the local appointments table
+   */
+  static getProdTestRecordsByAppointmentGuids(appointmentGuids: string[]): Array<{
+    appointment_guid: string;
+    schedule_column_guid: string | null;
+    schedule_view_guid: string | null;
+    note: string | null;
+  }> {
+    if (appointmentGuids.length === 0) return [];
+
+    try {
+      const db = new BetterSqlite3(TEST_AGENT_DB_PATH, { readonly: true });
+
+      // Normalize GUIDs to uppercase for case-insensitive comparison
+      const upperGuids = appointmentGuids.map(g => g.toUpperCase());
+      const placeholders = upperGuids.map(() => '?').join(',');
+
+      const stmt = db.prepare(`
+        SELECT appointment_guid, schedule_column_guid, schedule_view_guid, note
+        FROM prod_test_records
+        WHERE UPPER(appointment_guid) IN (${placeholders})
+          AND record_type = 'appointment'
+      `);
+
+      const records = stmt.all(...upperGuids) as Array<{
+        appointment_guid: string;
+        schedule_column_guid: string | null;
+        schedule_view_guid: string | null;
+        note: string | null;
+      }>;
+
+      db.close();
+
+      loggers.dbOperation('SELECT', 'prod_test_records', { count: records.length });
+
+      return records;
+    } catch (error) {
+      // If test-agent DB doesn't exist or other error, return empty array
+      loggers.dbOperation('SELECT', 'prod_test_records', { error: error instanceof Error ? error.message : String(error) });
+      return [];
     }
   }
 }

@@ -89,16 +89,72 @@ export class DataGeneratorService {
   }
 
   /**
+   * Generate a random 4-digit suffix for uniquification
+   */
+  private generateUniqueSuffix(): string {
+    return String(faker.number.int({ min: 1000, max: 9999 }));
+  }
+
+  /**
+   * Apply unique suffix to name field: "FirstName" -> "FirstName-XXXX"
+   */
+  private applyNameSuffix(name: string, suffix: string): string {
+    return `${name}-${suffix}`;
+  }
+
+  /**
+   * Apply unique suffix to email field: "email@domain.com" -> "emailXXXX@domain.com"
+   */
+  private applyEmailSuffix(email: string, suffix: string): string {
+    const atIndex = email.indexOf('@');
+    if (atIndex === -1) return email + suffix;
+    return email.slice(0, atIndex) + suffix + email.slice(atIndex);
+  }
+
+  /**
+   * Apply unique suffix to phone field: replace last 4 digits with suffix
+   * "2155551234" -> "2155XXXX"
+   */
+  private applyPhoneSuffix(phone: string, suffix: string): string {
+    // Remove any non-digit characters for processing
+    const digitsOnly = phone.replace(/\D/g, '');
+    if (digitsOnly.length < 4) return phone + suffix;
+    // Replace last 4 digits with suffix
+    return digitsOnly.slice(0, -4) + suffix;
+  }
+
+  /**
    * Resolve a dynamic inventory to concrete values
    */
   resolveInventory(inventory: DynamicDataInventory): DataInventory {
+    // Generate parent suffix if uniquification is enabled
+    const parentSuffix = inventory.parentUniquifySuffix ? this.generateUniqueSuffix() : null;
+
+    // Resolve parent fields
+    let parentFirstName = this.resolveField(inventory.parentFirstName, 'firstName', 'parentFirstName');
+    let parentLastName = this.resolveField(inventory.parentLastName, 'lastName', 'parentLastName');
+    let parentPhone = this.resolveField(inventory.parentPhone, 'phone', 'parentPhone');
+    let parentEmail = inventory.parentEmail !== undefined
+      ? this.resolveField(inventory.parentEmail, 'email', 'parentEmail')
+      : undefined;
+
+    // Apply suffix if enabled
+    if (parentSuffix) {
+      parentFirstName = this.applyNameSuffix(parentFirstName, parentSuffix);
+      parentLastName = this.applyNameSuffix(parentLastName, parentSuffix);
+      parentPhone = this.applyPhoneSuffix(parentPhone, parentSuffix);
+      if (parentEmail) {
+        parentEmail = this.applyEmailSuffix(parentEmail, parentSuffix);
+      }
+      // Track that parent was uniquified
+      this.resolvedFields.push('parentUniquifySuffix');
+    }
+
     return {
-      parentFirstName: this.resolveField(inventory.parentFirstName, 'firstName', 'parentFirstName'),
-      parentLastName: this.resolveField(inventory.parentLastName, 'lastName', 'parentLastName'),
-      parentPhone: this.resolveField(inventory.parentPhone, 'phone', 'parentPhone'),
-      parentEmail: inventory.parentEmail !== undefined
-        ? this.resolveField(inventory.parentEmail, 'email', 'parentEmail')
-        : undefined,
+      parentFirstName,
+      parentLastName,
+      parentPhone,
+      parentEmail,
 
       children: inventory.children.map((child, index) => this.resolveChild(child, index)),
 
@@ -137,9 +193,25 @@ export class DataGeneratorService {
    */
   private resolveChild(child: DynamicChildData, index: number): ChildData {
     const prefix = `children[${index}]`;
+
+    // Generate child suffix if uniquification is enabled
+    const childSuffix = child.uniquifySuffix ? this.generateUniqueSuffix() : null;
+
+    // Resolve child name fields
+    let firstName = this.resolveField(child.firstName, 'firstName', `${prefix}.firstName`);
+    let lastName = this.resolveField(child.lastName, 'lastName', `${prefix}.lastName`);
+
+    // Apply suffix if enabled
+    if (childSuffix) {
+      firstName = this.applyNameSuffix(firstName, childSuffix);
+      lastName = this.applyNameSuffix(lastName, childSuffix);
+      // Track that child was uniquified
+      this.resolvedFields.push(`${prefix}.uniquifySuffix`);
+    }
+
     return {
-      firstName: this.resolveField(child.firstName, 'firstName', `${prefix}.firstName`),
-      lastName: this.resolveField(child.lastName, 'lastName', `${prefix}.lastName`),
+      firstName,
+      lastName,
       dateOfBirth: this.resolveField(child.dateOfBirth, 'dateOfBirth', `${prefix}.dateOfBirth`),
       isNewPatient: this.resolveField(child.isNewPatient, 'boolean', `${prefix}.isNewPatient`),
       hadBracesBefore: child.hadBracesBefore !== undefined
@@ -415,10 +487,16 @@ export function resolvePersona(
 }
 
 /**
- * Check if a persona has any dynamic fields
+ * Check if a persona has any dynamic fields OR uniquify suffix flags
  */
 export function personaHasDynamicFields(persona: DynamicUserPersona): boolean {
   const inventory = persona.inventory;
+
+  // Check uniquify suffix flags - these require resolution even if fields are static
+  if (inventory.parentUniquifySuffix) return true;
+  for (const child of inventory.children) {
+    if (child.uniquifySuffix) return true;
+  }
 
   // Check parent fields
   if (isDynamicField(inventory.parentFirstName)) return true;

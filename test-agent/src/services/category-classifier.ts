@@ -605,11 +605,13 @@ const PATTERN_RULES: PatternRule[] = [
       // "them" as pronoun reference to children
       /\bhave (any of )?them (ever )?(been|been seen) (to )?(our |this |the |any of our )?(offices?|location)? before\b/i,
       // Pattern for child's actual name: "Has Emma ever been seen at any of our offices before?"
-      /\bhas \w+ (ever )?(been |been seen )(to |at )?(our |this |the |any of our )?(offices?|locations?) before\b/i,
+      // Use [\w-]+ to match names with hyphens (e.g., "ChildTestSibling-9871" from test data)
+      /\bhas [\w-]+ (ever )?(been |been seen )(to |at )?(our |this |the |any of our )?(offices?|locations?) before\b/i,
       // Pattern for "Has either [Name] or your [other child]..." pattern
-      /\bhas (either )?\w+ (or )?(your )?(child|second child|other child) (ever )?(been |been seen )(to |at )?(our |this |the |any of our )?(offices?|locations?) before\b/i,
+      /\bhas (either )?[\w-]+ (or )?(your )?(child|second child|other child) (ever )?(been |been seen )(to |at )?(our |this |the |any of our )?(offices?|locations?) before\b/i,
       // Pattern for TWO child names: "Has either Michael or Lily ever been seen at any of our offices before?"
-      /\bhas (either )?\w+ or \w+ (ever )?(been |been seen )(to |at )?(our |this |the |any of our )?(offices?|locations?) before\b/i,
+      // Use [\w-]+ to match names with hyphens (e.g., test user names like "ChildTestSibling-9871")
+      /\bhas (either )?[\w-]+ or [\w-]+ (ever )?(been |been seen )(to |at )?(our |this |the |any of our )?(offices?|locations?) before\b/i,
     ],
     confidence: 0.88,
     priority: 49,

@@ -1,18 +1,17 @@
 /**
  * ============================================================================
  * CHORD SCHEDULING DSO - Appointment Scheduling Tool (Sandbox B - PROD)
- * Version: v58-PRD | Updated: 2026-01-14
+ * Version: v59-PRD | Updated: 2026-01-16
  * ============================================================================
  * Actions: slots, grouped_slots, book_child, cancel
  *
  * This version calls Node Red /ortho-prd/ endpoints (PROD Cloud9).
  *
- * v58-PRD FIX: CLOUD9 API DATE QUIRK - Start search from 30+ days out
- *          - Cloud9 API only returns Exams slots when searching dates 30+ days out
- *          - Dates too close to today only return Adjustments (for existing patients)
- *          - New minimum search start: 30 days from today
- *          - Larger expansion tiers: 30, 60, 90 days
- *          - Chair 8 Exams filtering for new patient appointments
+ * v59-PRD FIX: REMOVED 30-DAY MINIMUM - Search from today
+ *          - v58 skipped Chair 8 Exams slot on 1/21 because 30-day min started at 2/15
+ *          - Now searches from today with progressive expansion: 14, 30, 60, 90 days
+ *          - Chair 8 Exams filtering still applied for new patient appointments
+ * v58-PRD: Cloud9 API date quirk workaround (30-day minimum - REMOVED in v59)
  * v55-PRD: Chair 8 defaults with GUID extraction guidance
  * v54-PRD: Sandbox B PROD version using /ortho-prd/ routes
  * ============================================================================
@@ -20,7 +19,7 @@
 
 const fetch = require('node-fetch');
 
-const TOOL_VERSION = 'v58-PRD';
+const TOOL_VERSION = 'v59-PRD';
 const MAX_SLOTS_RETURNED = 1;
 const BASE_URL = 'https://c1-aicoe-nodered-lb.prod.c1conversations.io/FabricWorkflow/api/chord';
 const SANDBOX_MIN_DATE = new Date(2026, 0, 13);
@@ -35,12 +34,12 @@ const CHAIR_8_CONFIG = {
     defaultMinutes: 40
 };
 
-// v58: Cloud9 API quirk - Exams slots only available 30+ days out
-const EXAMS_MIN_DAYS_OUT = 30;
+// v59: Removed 30-day minimum - Exams slots can be available sooner
+const EXAMS_MIN_DAYS_OUT = 0;
 
-// v58: Larger date expansion tiers to find Exams slots
-const DATE_EXPANSION_TIERS = [30, 60, 90]; // 1 month, 2 months, 3 months
-const MIN_DATE_RANGE_DAYS = 30; // Minimum range for Exams slot searches
+// v59: Progressive expansion tiers starting from today
+const DATE_EXPANSION_TIERS = [14, 30, 60, 90]; // 2 weeks, 1 month, 2 months, 3 months
+const MIN_DATE_RANGE_DAYS = 14; // Minimum range for slot searches
 const MAX_FUTURE_DAYS = 120; // ~4 months - extended for Exams slot searches
 
 function encodeBookingToken(slot) {
@@ -107,7 +106,7 @@ function filterForChair8Exams(slots) {
         const isExams = slot.AppointmentClassDescription === CHAIR_8_CONFIG.appointmentClass;
         return isChair8 && isExams;
     });
-    console.log('[v58-PRD] Chair 8 Exams filter: ' + slots.length + ' total -> ' + filtered.length + ' Chair 8 Exams');
+    console.log('[v59-PRD] Chair 8 Exams filter: ' + slots.length + ' total -> ' + filtered.length + ' Chair 8 Exams');
     return filtered;
 }
 
@@ -216,25 +215,25 @@ function correctDateRange(startDate, endDate, expansionDays = DATE_EXPANSION_TIE
     maxFutureDate.setDate(maxFutureDate.getDate() + MAX_FUTURE_DAYS);
 
     if (correctedStart && correctedStart > maxFutureDate) {
-        console.log('[v58-PRD] WARNING: startDate ' + startDate + ' too far in future - AUTO-CORRECTING');
+        console.log('[v59-PRD] WARNING: startDate ' + startDate + ' too far in future - AUTO-CORRECTING');
         correctedStart = null;
         datesCorrected = true;
     }
     if (correctedEnd && correctedEnd > maxFutureDate) {
-        console.log('[v58-PRD] WARNING: endDate ' + endDate + ' too far in future - will be recalculated');
+        console.log('[v59-PRD] WARNING: endDate ' + endDate + ' too far in future - will be recalculated');
         correctedEnd = null;
         datesCorrected = true;
     }
 
-    // v58: Cloud9 API quirk - Exams slots only returned when searching 30+ days out
+    // v59: Allow searching from today (removed 30-day minimum)
     const minExamsStart = new Date(today);
     minExamsStart.setDate(minExamsStart.getDate() + EXAMS_MIN_DAYS_OUT);
 
-    // Fix dates in the past or too close to today for Exams searches
+    // Fix dates in the past
     if (!correctedStart || correctedStart < minExamsStart) {
         correctedStart = new Date(Math.max(minExamsStart.getTime(), SANDBOX_MIN_DATE.getTime()));
-        if (originalStart) {
-            console.log('[v58-PRD] Start date ' + originalStart + ' too close - Cloud9 API needs 30+ days out for Exams. Adjusted to ' + formatDate(correctedStart));
+        if (originalStart && correctedStart > new Date(originalStart)) {
+            console.log('[v59-PRD] Start date ' + originalStart + ' adjusted to ' + formatDate(correctedStart));
             datesCorrected = true;
         }
     }
@@ -251,7 +250,7 @@ function correctDateRange(startDate, endDate, expansionDays = DATE_EXPANSION_TIE
     }
 
     if (datesCorrected) {
-        console.log('[v58-PRD] Date auto-correction: original=' + originalStart + ' to ' + originalEnd + ' -> corrected=' + formatDate(correctedStart) + ' to ' + formatDate(correctedEnd));
+        console.log('[v59-PRD] Date auto-correction: original=' + originalStart + ' to ' + originalEnd + ' -> corrected=' + formatDate(correctedStart) + ' to ' + formatDate(correctedEnd));
     }
 
     return { startDate: formatDate(correctedStart), endDate: formatDate(correctedEnd), expansionDays: expansionDays, datesCorrected: datesCorrected };
@@ -281,7 +280,7 @@ async function searchSlotsWithExpansion(action, params, uui, headers) {
         const searchParams = { ...params, startDate: corrected.startDate, endDate: corrected.endDate };
         const body = config.buildBody(searchParams, uui);
 
-        console.log('[v58-PRD] Tier ' + tierIndex + ' search: ' + corrected.startDate + ' to ' + corrected.endDate + ' (' + expansionDays + ' days)');
+        console.log('[v59-PRD] Tier ' + tierIndex + ' search: ' + corrected.startDate + ' to ' + corrected.endDate + ' (' + expansionDays + ' days)');
 
         try {
             const response = await fetch(config.endpoint, { method: config.method, headers: headers, body: JSON.stringify(body) });
@@ -316,22 +315,22 @@ async function searchSlotsWithExpansion(action, params, uui, headers) {
                 data._expansionTier = tierIndex;
                 data._dateRange = { start: corrected.startDate, end: corrected.endDate, days: expansionDays };
                 if (tierIndex > 0) {
-                    console.log('[v58-PRD] Found Chair 8 Exams slots after expanding to tier ' + tierIndex + ' (' + expansionDays + ' days)');
+                    console.log('[v59-PRD] Found Chair 8 Exams slots after expanding to tier ' + tierIndex + ' (' + expansionDays + ' days)');
                 }
                 return { success: true, data: data };
             }
 
             searchExpanded = true;
             finalExpansionDays = expansionDays;
-            console.log('[v58-PRD] No Chair 8 Exams slots at tier ' + tierIndex + ', expanding...');
+            console.log('[v59-PRD] No Chair 8 Exams slots at tier ' + tierIndex + ', expanding...');
 
         } catch (e) {
             lastError = e.message;
-            console.log('[v58-PRD] Search error at tier ' + tierIndex + ': ' + e.message);
+            console.log('[v59-PRD] Search error at tier ' + tierIndex + ': ' + e.message);
         }
     }
 
-    console.log('[v58-PRD] All expansion tiers exhausted, no Chair 8 Exams slots found');
+    console.log('[v59-PRD] All expansion tiers exhausted, no Chair 8 Exams slots found');
     return {
         success: false,
         data: {

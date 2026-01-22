@@ -78,15 +78,28 @@ export async function confirmAppointment(
 }
 
 /**
+ * Cancel appointment response with status info
+ */
+export interface CancelAppointmentResponse {
+  appointment: Appointment;
+  message: string;
+  alreadyCancelled: boolean;
+}
+
+/**
  * Cancel an existing appointment
  */
 export async function cancelAppointment(
   cancelData: CancelAppointmentRequest
-): Promise<Appointment> {
-  const response = await put<{ data: Appointment }>(
+): Promise<CancelAppointmentResponse> {
+  const response = await put<{ data: Appointment & { alreadyCancelled?: boolean }; message: string }>(
     `/appointments/${cancelData.appointmentGuid}/cancel`
   );
-  return response.data;
+  return {
+    appointment: response.data,
+    message: response.message,
+    alreadyCancelled: response.data?.alreadyCancelled ?? false,
+  };
 }
 
 /**

@@ -9,10 +9,16 @@ export default defineConfig({
     port: 5174,
     strictPort: true,
     proxy: {
-      // Proxy Node Red API calls to the test server
-      '/FabricWorkflow': {
-        target: 'http://localhost:3333',
+      // Proxy backend API calls - enables network access via any IP
+      '/api': {
+        target: 'http://localhost:3002',
         changeOrigin: true,
+      },
+      // Proxy Node Red API calls to the production server
+      '/FabricWorkflow': {
+        target: 'https://c1-aicoe-nodered-lb.prod.c1conversations.io',
+        changeOrigin: true,
+        secure: true,
       },
       // Proxy Cloud9 API calls (production) to bypass CORS
       // NOTE: Must come BEFORE /cloud9-api to avoid prefix matching issues

@@ -35,6 +35,8 @@ import {
   SkillsRunnerPage,
   ProdTestTrackerPage,
   AlertsPage,
+  QueueActivityPage,
+  CacheHealthPage,
 } from '../pages/TestMonitor';
 import { NotFound } from '../pages/NotFound';
 import { ROUTES } from '../utils/constants';
@@ -96,7 +98,8 @@ export function AppRouter() {
           <Route
             path={ROUTES.PATIENT_DETAIL}
             element={
-              <ProtectedRoute tabKey="patients">
+              <ProtectedRoute>
+                {/* No tabKey - accessible from Prod Tracker and direct links */}
                 <PatientDetail />
               </ProtectedRoute>
             }
@@ -148,7 +151,9 @@ export function AppRouter() {
             <Route path="experiments" element={<ABTestingDashboard />} />
             <Route path="skills-runner" element={<SkillsRunnerPage />} />
             <Route path="prod-tracker" element={<ProdTestTrackerPage />} />
+            <Route path="queue-activity" element={<QueueActivityPage />} />
             <Route path="alerts" element={<AlertsPage />} />
+            <Route path="cache-health" element={<CacheHealthPage />} />
             <Route path="cases" element={<TestCasesPage />} />
             <Route path="goal-cases" element={<GoalTestsDashboard />} />
             <Route path="create" element={<CreateGoalTestPage />} />

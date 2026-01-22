@@ -193,6 +193,22 @@ export function PersonaEditor({ persona, onChange, readOnly = false }: PersonaEd
             disabled={readOnly}
           />
         </div>
+
+        {/* Make Unique Toggle for Parent */}
+        <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-200 dark:border-gray-700">
+          <input
+            type="checkbox"
+            id="parentUniquifySuffix"
+            checked={inventory.parentUniquifySuffix || false}
+            onChange={(e) => updateInventory('parentUniquifySuffix', e.target.checked)}
+            disabled={readOnly}
+            className="rounded border-gray-300 dark:border-gray-600 text-primary-600 focus:ring-primary-500"
+          />
+          <label htmlFor="parentUniquifySuffix" className="text-xs text-gray-600 dark:text-gray-400">
+            <span className="font-medium">Make Unique</span>
+            <span className="ml-1 text-gray-400">(append -XXXX suffix to names, email, phone)</span>
+          </label>
+        </div>
       </div>
 
       {/* Children */}
@@ -316,6 +332,21 @@ export function PersonaEditor({ persona, onChange, readOnly = false }: PersonaEd
                     disabled={readOnly}
                     compact
                   />
+                  {/* Make Unique Toggle for Child */}
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id={`child-${index}-uniquify`}
+                      checked={(inventory.children[index] as DynamicChildDataDTO)?.uniquifySuffix || false}
+                      onChange={(e) => updateChild(index, 'uniquifySuffix', e.target.checked)}
+                      disabled={readOnly}
+                      className="rounded border-gray-300 dark:border-gray-600 text-primary-600 focus:ring-primary-500"
+                    />
+                    <label htmlFor={`child-${index}-uniquify`} className="text-xs text-gray-600 dark:text-gray-400">
+                      <span className="font-medium">Make Unique</span>
+                      <span className="ml-1 text-gray-400">(-XXXX)</span>
+                    </label>
+                  </div>
                 </div>
               </div>
             )}

@@ -22,6 +22,7 @@ export interface ImportOptions {
   fromDate: string;  // ISO date
   toDate?: string;   // ISO date, defaults to now
   limit?: number;    // Per-page limit, max 100
+  refreshObservations?: boolean;  // Re-import observations for existing traces
 }
 
 export interface ImportResult {

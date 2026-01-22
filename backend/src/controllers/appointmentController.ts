@@ -6,6 +6,48 @@ import { Cloud9Appointment, Cloud9AvailableSlot, Cloud9Location, Cloud9Appointme
 import { AppointmentModel } from '../models/Appointment';
 import { PatientModel } from '../models/Patient';
 import logger from '../utils/logger';
+import BetterSqlite3 from 'better-sqlite3';
+import path from 'path';
+
+// Path to test-agent database (for prod_test_records)
+const TEST_AGENT_DB_PATH = path.resolve(__dirname, '../../../test-agent/data/test-results.db');
+
+/**
+ * Update prod_test_records status by appointment GUID
+ */
+function updateProdTestRecordStatus(appointmentGuid: string, status: 'cancelled' | 'cleanup_failed', notes?: string): void {
+  try {
+    const db = new BetterSqlite3(TEST_AGENT_DB_PATH);
+
+    const updates = ['status = ?', "updated_at = datetime('now')"];
+    const params: any[] = [status];
+
+    if (status === 'cancelled') {
+      updates.push("cancelled_at = datetime('now')");
+    }
+
+    if (notes) {
+      updates.push('cleanup_notes = ?');
+      params.push(notes);
+    }
+
+    // Match by appointment_guid (case-insensitive)
+    const sql = `UPDATE prod_test_records SET ${updates.join(', ')} WHERE UPPER(appointment_guid) = UPPER(?)`;
+    params.push(appointmentGuid);
+
+    const result = db.prepare(sql).run(...params);
+    db.close();
+
+    if (result.changes > 0) {
+      logger.info('Updated prod_test_records status', { appointmentGuid, status, changes: result.changes });
+    }
+  } catch (error) {
+    logger.warn('Failed to update prod_test_records status', {
+      appointmentGuid,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
 
 /**
  * Appointment Controller
@@ -186,6 +228,27 @@ export const getPatientAppointments = asyncHandler(
       localAppointments.map((a) => [a.appointment_guid, a])
     );
 
+    // Also check prod_test_records for schedule_column_guid and notes (for appointments created via Flowise/Node-RED)
+    // Store with uppercase keys for case-insensitive lookup
+    const prodTestRecordMap = new Map<string, { schedule_column_guid: string | null; schedule_view_guid: string | null; note: string | null }>();
+    try {
+      const prodTestRecords = AppointmentModel.getProdTestRecordsByAppointmentGuids(
+        uniqueAppointments.map((a: Cloud9Appointment) => a.AppointmentGUID)
+      );
+      for (const record of prodTestRecords) {
+        if (record.appointment_guid) {
+          // Use uppercase key for case-insensitive matching
+          prodTestRecordMap.set(record.appointment_guid.toUpperCase(), {
+            schedule_column_guid: record.schedule_column_guid,
+            schedule_view_guid: record.schedule_view_guid,
+            note: record.note || null,
+          });
+        }
+      }
+    } catch (err) {
+      logger.debug('Could not fetch prod_test_records for schedule_column_guid', { error: err });
+    }
+
     // Get unique patient GUIDs from appointments to fetch their birth dates
     const uniquePatientGuids = Array.from(new Set(uniqueAppointments.map((appt: Cloud9Appointment) => appt.PatientGUID)));
 
@@ -313,7 +376,8 @@ export const getPatientAppointments = asyncHandler(
         appointment_type_description: appt.AppointmentTypeDescription,
         status: appt.AppointmentStatus,
         status_description: appt.AppointmentStatusDescription,
-        appointment_note: appt.AppointmentNote,
+        // Note priority: Cloud9 AppointmentNote > prod_test_records note
+        appointment_note: appt.AppointmentNote || prodTestRecordMap.get(appt.AppointmentGUID.toUpperCase())?.note || null,
         appointment_minutes: appt.AppointmentMinutes,
         appointment_confirmation: appt.AppointmentConfirmation,
         orthodontist_guid: appt.OrthodontistGUID,
@@ -336,11 +400,14 @@ export const getPatientAppointments = asyncHandler(
           (localAppt?.schedule_column_guid ? scheduleColumnDescriptionMap.get(localAppt.schedule_column_guid) : null) ||
           appointmentChairMap.get(appt.AppointmentGUID) ||
           null,
-        // Schedule view and column info (only available for appointments created through our system)
-        schedule_view_guid: localAppt?.schedule_view_guid || null,
+        // Schedule view and column info (from local appointments table or prod_test_records)
+        schedule_view_guid: localAppt?.schedule_view_guid || prodTestRecordMap.get(appt.AppointmentGUID.toUpperCase())?.schedule_view_guid || null,
         schedule_view_description: localAppt?.schedule_view_description || null,
-        schedule_column_guid: localAppt?.schedule_column_guid || null,
-        schedule_column_description: localAppt?.schedule_column_description || null,
+        schedule_column_guid: localAppt?.schedule_column_guid || prodTestRecordMap.get(appt.AppointmentGUID.toUpperCase())?.schedule_column_guid || null,
+        schedule_column_description: localAppt?.schedule_column_description ||
+          (prodTestRecordMap.get(appt.AppointmentGUID.toUpperCase())?.schedule_column_guid
+            ? scheduleColumnDescriptionMap.get(prodTestRecordMap.get(appt.AppointmentGUID.toUpperCase())!.schedule_column_guid!)
+            : null) || null,
         environment,
         scheduled_at: localAppt?.cached_at || null,
       };
@@ -551,8 +618,17 @@ export const confirmAppointment = asyncHandler(async (req: Request, res: Respons
   const response = await client.confirmAppointment(appointmentGuid);
 
   if (response.status === 'Error' || response.errorMessage) {
-    // Error code 8 = rate limiting
-    const statusCode = response.errorCode === 8 ? 429 : 500;
+    // Determine appropriate status code:
+    // - 429: Rate limiting (errorCode 8)
+    // - 400: Business logic errors from Cloud9 (e.g., "Appointment must be in a Scheduled status")
+    // - 500: Actual server/API errors
+    let statusCode = 500;
+    if (response.errorCode === 8) {
+      statusCode = 429;
+    } else if (response.errorMessage?.startsWith('Error:')) {
+      // Business logic error from Cloud9 Result field - client's fault
+      statusCode = 400;
+    }
     throw new AppError(response.errorMessage || 'Failed to confirm appointment', statusCode);
   }
 
@@ -585,10 +661,64 @@ export const cancelAppointment = asyncHandler(async (req: Request, res: Response
   const response = await client.cancelAppointment(appointmentGuid);
 
   if (response.status === 'Error' || response.errorMessage) {
-    // Error code 8 = rate limiting
-    const statusCode = response.errorCode === 8 ? 429 : 500;
+    // Check if appointment is already cancelled - treat as success
+    if (response.errorMessage?.includes('Status: Cancelled') ||
+        response.errorMessage?.includes('Status: Canceled') ||
+        response.errorMessage?.toLowerCase().includes('already cancel')) {
+      // Update local database to reflect cancelled status
+      try {
+        AppointmentModel.updateStatus(appointmentGuid, 'Cancelled');
+        logger.info('Updated local appointment status to Cancelled', { appointmentGuid });
+      } catch (dbError) {
+        logger.warn('Failed to update local appointment status', {
+          appointmentGuid,
+          error: dbError instanceof Error ? dbError.message : String(dbError),
+        });
+      }
+
+      // Also update prod_test_records table
+      updateProdTestRecordStatus(appointmentGuid, 'cancelled', 'Appointment was already cancelled in Cloud9');
+
+      res.json({
+        status: 'success',
+        message: 'Appointment is already cancelled',
+        data: {
+          appointmentGuid,
+          newStatus: 'Canceled',
+          alreadyCancelled: true,
+        },
+        environment,
+      });
+      return;
+    }
+
+    // Determine appropriate status code for actual errors:
+    // - 429: Rate limiting (errorCode 8)
+    // - 400: Business logic errors from Cloud9 (e.g., "Appointment in the past")
+    // - 500: Actual server/API errors
+    let statusCode = 500;
+    if (response.errorCode === 8) {
+      statusCode = 429;
+    } else if (response.errorMessage?.startsWith('Error:')) {
+      // Business logic error from Cloud9 Result field - client's fault
+      statusCode = 400;
+    }
     throw new AppError(response.errorMessage || 'Failed to cancel appointment', statusCode);
   }
+
+  // Update local database to reflect cancelled status
+  try {
+    AppointmentModel.updateStatus(appointmentGuid, 'Cancelled');
+    logger.info('Updated local appointment status to Cancelled', { appointmentGuid });
+  } catch (dbError) {
+    logger.warn('Failed to update local appointment status', {
+      appointmentGuid,
+      error: dbError instanceof Error ? dbError.message : String(dbError),
+    });
+  }
+
+  // Also update prod_test_records table
+  updateProdTestRecordStatus(appointmentGuid, 'cancelled');
 
   res.json({
     status: 'success',
@@ -596,6 +726,7 @@ export const cancelAppointment = asyncHandler(async (req: Request, res: Response
     data: {
       appointmentGuid,
       newStatus: 'Canceled',
+      alreadyCancelled: false,
     },
     environment,
   });

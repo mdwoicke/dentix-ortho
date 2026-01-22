@@ -19,6 +19,7 @@ export interface Patient {
   location_guid?: string;
   environment?: string;
   created_at?: string;
+  comment?: string; // Patient comment (may contain child info for parent-as-patient model)
 }
 
 export interface CreatePatientRequest {

@@ -410,6 +410,100 @@
           "description": "The plugin command to run (e.g., /commit, /reflect, /ralph-loop)"
         }
       ]
+    },
+    {
+      "id": "nodered-deploy",
+      "name": "Deploy Node-RED Flow",
+      "description": "Push docs/v1/nodered_Cloud9_flows.json to production Node-RED",
+      "command": "cd {{workDir}}/test-agent && node scripts/deploy-nodered.js {{backupArg}} {{dryRunArg}}",
+      "category": "deployment",
+      "inputs": [
+        {
+          "name": "backup",
+          "label": "Create Backup First",
+          "type": "checkbox",
+          "default": true,
+          "description": "Save current flows before deploying"
+        },
+        {
+          "name": "dryRun",
+          "label": "Dry Run (validate only)",
+          "type": "checkbox",
+          "default": false,
+          "description": "Validate connection and file without deploying"
+        }
+      ]
+    },
+    {
+      "id": "nodered-list-flows",
+      "name": "List Node-RED Flows",
+      "description": "List all available flow tabs in Node-RED",
+      "command": "cd {{workDir}}/test-agent && node scripts/copy-nodered-flow.js --list",
+      "category": "deployment",
+      "inputs": []
+    },
+    {
+      "id": "nodered-copy-flow",
+      "name": "Copy Node-RED Flow",
+      "description": "Copy an existing Node-RED flow to a new flow with a new name",
+      "command": "cd {{workDir}}/test-agent && node scripts/copy-nodered-flow.js --source \"{{source}}\" --name \"{{newName}}\" {{disabledArg}} {{backupArg}} {{dryRunArg}}",
+      "category": "deployment",
+      "inputs": [
+        {
+          "name": "source",
+          "label": "Source Flow (ID or Label)",
+          "type": "text",
+          "required": true,
+          "placeholder": "Chord-Cloud9-Ortho-Prd",
+          "description": "The ID or label of the flow to copy"
+        },
+        {
+          "name": "newName",
+          "label": "New Flow Name",
+          "type": "text",
+          "required": true,
+          "placeholder": "Chord-Cloud9-Ortho-Dev",
+          "description": "Label for the new copied flow"
+        },
+        {
+          "name": "disabled",
+          "label": "Create as Disabled",
+          "type": "checkbox",
+          "default": false,
+          "description": "Create the new flow in disabled state"
+        },
+        {
+          "name": "backup",
+          "label": "Create Backup First",
+          "type": "checkbox",
+          "default": true,
+          "description": "Save current flows before copying"
+        },
+        {
+          "name": "dryRun",
+          "label": "Dry Run (validate only)",
+          "type": "checkbox",
+          "default": false,
+          "description": "Validate without deploying"
+        }
+      ]
+    },
+    {
+      "id": "total-call-trace",
+      "name": "Total Call Trace",
+      "description": "Comprehensive Langfuse session analysis - traces all tool calls, investigates slot metadata, detects failure patterns (FP-001 through FP-006), and suggests solutions",
+      "command": "cd {{workDir}}/test-agent && node scripts/total-call-trace.js {{sessionId}}",
+      "category": "test-agent",
+      "inputs": [
+        {
+          "name": "sessionId",
+          "label": "Langfuse Session ID",
+          "type": "text",
+          "required": true,
+          "placeholder": "30dc66e1-eabd-46ca-b546-9a4237e64f19",
+          "description": "The Langfuse session ID to analyze (from Ortho-Test-JL-UAT project)"
+        }
+      ]
     }
   ]
 }

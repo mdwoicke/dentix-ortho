@@ -17,3 +17,4 @@ export { PerformanceWaterfall } from './PerformanceWaterfall';
 export { ConversationDiffViewer } from './ConversationDiffViewer';
 export { FixPreviewModal } from './FixPreviewModal';
 export { LangfuseConnectionsManager } from './LangfuseConnectionsManager';
+export { CancellationProgressModal } from './CancellationProgressModal';

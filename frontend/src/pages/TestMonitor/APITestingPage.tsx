@@ -3,7 +3,7 @@
  * Test Node Red Cloud9 Ortho endpoints AND direct Cloud9 API with sample data and formatted results
  */
 
-import { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { PageHeader } from '../../components/layout';
 import { Button, Card, Spinner } from '../../components/ui';
 
@@ -51,7 +51,7 @@ const NODRED_API_CONFIG = {
     locationGUID: '1070d281-0952-4f01-9a6e-1a2e6926a7db',
     providerGUID: '79ec29fe-c315-4982-845a-0005baefb5a8',
     apptTypeGUID: '8fc9d063-ae46-4975-a5ae-734c6efe341a',
-    scheduleViewGUID: '2544683a-8e79-4b32-a4d4-bf851996bac3',
+    scheduleViewGUID: '4c9e9333-4951-4eb0-8d97-e1ad83ef422d',
     scheduleColumnGUID: 'e062b81f-1fff-40fc-b4a4-1cf9ecc2f32b',
     testPatientGUID: '865c8fa6-caf8-4e30-b152-82da6e93f33b',  // Chris Aleman - verified in sandbox
     uui: '765381306-000000000001030525-SR-000-000000000000DAL130-026DE427|333725|421458314VO|2d411063-3769-4618-86d1-925d3578c112|FSV'
@@ -90,7 +90,7 @@ const CLOUD9_CONFIGS: Record<Cloud9Environment, Cloud9ApiConfig> = {
       locationGUID: '1070d281-0952-4f01-9a6e-1a2e6926a7db',
       providerGUID: '79ec29fe-c315-4982-845a-0005baefb5a8',
       apptTypeGUID: '8fc9d063-ae46-4975-a5ae-734c6efe341a',
-      scheduleViewGUID: '2544683a-8e79-4b32-a4d4-bf851996bac3',
+      scheduleViewGUID: '4c9e9333-4951-4eb0-8d97-e1ad83ef422d',
       testPatientGUID: '64DA8F5C-7E54-4659-8AE1-7BB6A033D2A5'
     }
   },
@@ -105,7 +105,7 @@ const CLOUD9_CONFIGS: Record<Cloud9Environment, Cloud9ApiConfig> = {
       locationGUID: '1070d281-0952-4f01-9a6e-1a2e6926a7db',
       providerGUID: '79ec29fe-c315-4982-845a-0005baefb5a8',
       apptTypeGUID: '8fc9d063-ae46-4975-a5ae-734c6efe341a',
-      scheduleViewGUID: '2544683a-8e79-4b32-a4d4-bf851996bac3',
+      scheduleViewGUID: '4c9e9333-4951-4eb0-8d97-e1ad83ef422d',
       testPatientGUID: '64DA8F5C-7E54-4659-8AE1-7BB6A033D2A5'
     }
   }
@@ -122,6 +122,46 @@ const formatDateMDY = (daysFromNow: number = 0): string => {
   const date = new Date();
   date.setDate(date.getDate() + daysFromNow);
   return `${(date.getMonth() + 1).toString().padStart(2, '0')}/${date.getDate().toString().padStart(2, '0')}/${date.getFullYear()}`;
+};
+
+// Reference Data Lookups - Maps GUIDs to display names
+// These are populated from Cloud9 API or can be manually added
+const GUID_LOOKUPS: {
+  appointmentTypes: Record<string, string>;
+  scheduleColumns: Record<string, string>;
+  scheduleViews: Record<string, string>;
+  providers: Record<string, string>;
+  locations: Record<string, string>;
+} = {
+  appointmentTypes: {
+    'f6c20c35-9abb-47c2-981a-342996016705': 'New Patient Exam',
+    '8fc9d063-ae46-4975-a5ae-734c6efe341a': 'Regular Adjustment',
+    'a1b2c3d4-1234-5678-9abc-def012345678': 'Records Appointment',
+    '3d8f5e7a-9b1c-4d2e-8f6a-7c3b5e9d1a2f': 'Consultation',
+    'b2c3d4e5-2345-6789-abcd-ef0123456789': 'Emergency Visit',
+  },
+  scheduleColumns: {
+    'f0fa4eda-0136-45d5-a5d8-91ad7d0b608a': 'Chair 8',
+    'e062b81f-1fff-40fc-b4a4-1cf9ecc2f32b': 'Chair 1',
+    '5a3b7c9d-4e6f-8a2b-1c3d-5e7f9a1b3c5d': 'Chair 2',
+    '7b4c8d0e-5f7a-9b3c-2d4e-6f8a0b2c4d6e': 'Chair 3',
+  },
+  scheduleViews: {
+    '4c9e9333-4951-4eb0-8d97-e1ad83ef422d': 'Main Schedule',
+  },
+  providers: {
+    '79ec29fe-c315-4982-845a-0005baefb5a8': 'Dr. Smith',
+  },
+  locations: {
+    '1070d281-0952-4f01-9a6e-1a2e6926a7db': 'Main Office',
+  }
+};
+
+// Helper to lookup a GUID and return name, or return the GUID if not found
+const lookupGuid = (guid: string, category: keyof typeof GUID_LOOKUPS): string => {
+  if (!guid) return '-';
+  const name = GUID_LOOKUPS[category][guid.toLowerCase()] || GUID_LOOKUPS[category][guid];
+  return name || guid.substring(0, 8) + '...';
 };
 
 // Copy Button Component
@@ -188,6 +228,23 @@ const CopyableValue = ({ label, value, mono = false }: { label?: string; value: 
     </span>
   </div>
 );
+
+// Component to display a name with copyable GUID - hover to copy the full GUID
+const GuidWithName = ({ guid, name, showGuidPreview = false }: { guid: string; name: string; showGuidPreview?: boolean }) => {
+  if (!guid) return <span className="text-gray-400">-</span>;
+
+  return (
+    <div className="flex items-center gap-1 group">
+      <span className="text-gray-900 dark:text-white">{name}</span>
+      {showGuidPreview && (
+        <span className="text-gray-400 text-xs font-mono ml-1">({guid.substring(0, 8)}...)</span>
+      )}
+      <span className="opacity-0 group-hover:opacity-100 transition-opacity">
+        <CopyButton value={guid} size="xs" />
+      </span>
+    </div>
+  );
+};
 
 // Result Formatters
 const PatientListFormatter = ({ data }: { data: unknown }) => {
@@ -270,38 +327,673 @@ const PatientDetailFormatter = ({ data }: { data: unknown }) => {
   );
 };
 
+// Excel-style Filter Dropdown Component
+const FilterDropdown = ({
+  label,
+  values,
+  selectedValues,
+  onSelectionChange
+}: {
+  label: string;
+  values: string[];
+  selectedValues: Set<string>;
+  onSelectionChange: (newSelection: Set<string>) => void;
+}) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const allSelected = selectedValues.size === 0 || selectedValues.size === values.length;
+  const someSelected = selectedValues.size > 0 && selectedValues.size < values.length;
+
+  const toggleAll = () => {
+    if (allSelected) {
+      // Deselect all (which means filter nothing - show all)
+      onSelectionChange(new Set());
+    } else {
+      // Select all
+      onSelectionChange(new Set());
+    }
+  };
+
+  const toggleValue = (value: string) => {
+    const newSelection = new Set(selectedValues);
+    if (newSelection.has(value)) {
+      newSelection.delete(value);
+    } else {
+      newSelection.add(value);
+    }
+    // If all are selected, clear the set (means no filter)
+    if (newSelection.size === values.length) {
+      onSelectionChange(new Set());
+    } else {
+      onSelectionChange(newSelection);
+    }
+  };
+
+  return (
+    <div className="relative" ref={dropdownRef}>
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className={`w-full px-2 py-1 text-xs border rounded flex items-center justify-between gap-1
+                   ${someSelected ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20' : 'border-gray-300 dark:border-gray-500 bg-white dark:bg-gray-700'}
+                   text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-600`}
+      >
+        <span className="truncate">
+          {someSelected ? `${selectedValues.size} selected` : 'All'}
+        </span>
+        <svg className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {isOpen && (
+        <div className="absolute z-50 mt-1 w-48 max-h-60 overflow-auto bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg">
+          {/* Select All option */}
+          <label className="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer border-b border-gray-200 dark:border-gray-600">
+            <input
+              type="checkbox"
+              checked={allSelected}
+              onChange={toggleAll}
+              className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+            />
+            <span className="text-xs font-medium">(Select All)</span>
+          </label>
+
+          {/* Individual values */}
+          {values.map((value) => (
+            <label key={value} className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={selectedValues.size === 0 || selectedValues.has(value)}
+                onChange={() => toggleValue(value)}
+                className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              />
+              <span className="text-xs truncate" title={value}>{value || '(empty)'}</span>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Sortable Header Component
+const SortableHeader = ({
+  label,
+  sortKey,
+  currentSort,
+  onSort
+}: {
+  label: string;
+  sortKey: string;
+  currentSort: { key: string; direction: 'asc' | 'desc' } | null;
+  onSort: (key: string) => void;
+}) => {
+  const isActive = currentSort?.key === sortKey;
+  const direction = isActive ? currentSort.direction : null;
+
+  return (
+    <button
+      onClick={() => onSort(sortKey)}
+      className="flex items-center gap-1 font-medium mb-1 hover:text-primary-600 dark:hover:text-primary-400 transition-colors"
+    >
+      <span>{label}</span>
+      <span className="text-xs">
+        {direction === 'asc' ? '▲' : direction === 'desc' ? '▼' : '○'}
+      </span>
+    </button>
+  );
+};
+
 const SlotsFormatter = ({ data }: { data: unknown }) => {
   const result = data as { slots?: Array<Record<string, string>>; count?: number };
   const slots = result?.slots || [];
+
+  // Filter state - Set of selected values for each column (empty set = all selected)
+  const [filters, setFilters] = useState<Record<string, Set<string>>>({
+    date: new Set(),
+    time: new Set(),
+    chair: new Set(),
+    apptType: new Set(),
+    duration: new Set()
+  });
+
+  // Sort state
+  const [sort, setSort] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null);
+
   if (!slots.length) return <div className="text-gray-500 italic">No slots available</div>;
+
+  // Process slots with parsed data for filtering
+  const processedSlots = slots.map((slot) => {
+    const [date, ...timeParts] = (slot.StartTime || '').split(' ');
+    const columnGUID = slot.ScheduleColumnGUID || slot.scheduleColumnGUID || '';
+    const typeGUID = slot.AppointmentTypeGUID || slot.appointmentTypeGUID || '';
+    const columnName = slot.ScheduleColumnDescription || slot.ColumnDescription || lookupGuid(columnGUID, 'scheduleColumns');
+    const typeName = slot.AppointmentTypeDescription || slot.AppointmentType || slot.TypeDescription || lookupGuid(typeGUID, 'appointmentTypes');
+    const duration = slot.Minutes || '45';
+
+    return {
+      ...slot,
+      _date: date,
+      _time: timeParts.join(' '),
+      _columnGUID: columnGUID,
+      _typeGUID: typeGUID,
+      _columnName: columnName,
+      _typeName: typeName,
+      _duration: duration
+    };
+  });
+
+  // Get unique values for each column (sorted)
+  const uniqueValues = {
+    date: [...new Set(processedSlots.map(s => s._date))].sort(),
+    time: [...new Set(processedSlots.map(s => s._time))].sort(),
+    chair: [...new Set(processedSlots.map(s => s._columnName))].sort(),
+    apptType: [...new Set(processedSlots.map(s => s._typeName))].sort(),
+    duration: [...new Set(processedSlots.map(s => s._duration))].sort((a, b) => Number(a) - Number(b))
+  };
+
+  // Apply filters - if set is empty, all values pass; otherwise only selected values pass
+  const filteredSlots = processedSlots.filter((slot) => {
+    const dateMatch = filters.date.size === 0 || filters.date.has(slot._date);
+    const timeMatch = filters.time.size === 0 || filters.time.has(slot._time);
+    const chairMatch = filters.chair.size === 0 || filters.chair.has(slot._columnName);
+    const apptTypeMatch = filters.apptType.size === 0 || filters.apptType.has(slot._typeName);
+    const durationMatch = filters.duration.size === 0 || filters.duration.has(slot._duration);
+    return dateMatch && timeMatch && chairMatch && apptTypeMatch && durationMatch;
+  });
+
+  // Apply sorting
+  const sortedSlots = [...filteredSlots].sort((a, b) => {
+    if (!sort) return 0;
+    let aVal: string | number = '';
+    let bVal: string | number = '';
+
+    switch (sort.key) {
+      case 'date':
+        aVal = a._date;
+        bVal = b._date;
+        break;
+      case 'time':
+        aVal = a._time;
+        bVal = b._time;
+        break;
+      case 'chair':
+        aVal = a._columnName;
+        bVal = b._columnName;
+        break;
+      case 'apptType':
+        aVal = a._typeName;
+        bVal = b._typeName;
+        break;
+      case 'duration':
+        aVal = parseInt(a._duration) || 0;
+        bVal = parseInt(b._duration) || 0;
+        break;
+    }
+
+    if (typeof aVal === 'number' && typeof bVal === 'number') {
+      return sort.direction === 'asc' ? aVal - bVal : bVal - aVal;
+    }
+    const comparison = String(aVal).localeCompare(String(bVal));
+    return sort.direction === 'asc' ? comparison : -comparison;
+  });
+
+  const hasFilters = Object.values(filters).some(f => f.size > 0);
+
+  const clearFilters = () => {
+    setFilters({
+      date: new Set(),
+      time: new Set(),
+      chair: new Set(),
+      apptType: new Set(),
+      duration: new Set()
+    });
+  };
+
+  const updateFilter = (key: string, newSelection: Set<string>) => {
+    setFilters(prev => ({ ...prev, [key]: newSelection }));
+  };
+
+  const handleSort = (key: string) => {
+    setSort(prev => {
+      if (prev?.key === key) {
+        if (prev.direction === 'asc') return { key, direction: 'desc' };
+        if (prev.direction === 'desc') return null;
+      }
+      return { key, direction: 'asc' };
+    });
+  };
 
   return (
     <div className="overflow-x-auto">
-      <div className="text-xs text-gray-500 mb-2">{result.count || slots.length} slots found</div>
+      {/* Header with count and clear button */}
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-xs text-gray-500">
+          {hasFilters ? (
+            <span>Showing {filteredSlots.length} of {slots.length} slots</span>
+          ) : (
+            <span>{result.count || slots.length} slots found</span>
+          )}
+        </div>
+        {hasFilters && (
+          <button
+            onClick={clearFilters}
+            className="text-xs px-2 py-1 text-red-600 hover:text-red-800 hover:bg-red-50 dark:hover:bg-red-900/20 rounded"
+          >
+            Clear Filters
+          </button>
+        )}
+      </div>
+
       <table className="min-w-full text-sm">
         <thead className="bg-gray-50 dark:bg-gray-700">
+          {/* Column Headers with Sort and Filter */}
           <tr>
-            <th className="px-3 py-2 text-left font-medium">Date</th>
-            <th className="px-3 py-2 text-left font-medium">Time</th>
-            <th className="px-3 py-2 text-left font-medium">Provider</th>
-            <th className="px-3 py-2 text-left font-medium">Duration</th>
+            <th className="px-3 py-2 text-left">
+              <SortableHeader label="Date" sortKey="date" currentSort={sort} onSort={handleSort} />
+              <FilterDropdown
+                label="Date"
+                values={uniqueValues.date}
+                selectedValues={filters.date}
+                onSelectionChange={(v) => updateFilter('date', v)}
+              />
+            </th>
+            <th className="px-3 py-2 text-left">
+              <SortableHeader label="Time" sortKey="time" currentSort={sort} onSort={handleSort} />
+              <FilterDropdown
+                label="Time"
+                values={uniqueValues.time}
+                selectedValues={filters.time}
+                onSelectionChange={(v) => updateFilter('time', v)}
+              />
+            </th>
+            <th className="px-3 py-2 text-left">
+              <SortableHeader label="Chair/Column" sortKey="chair" currentSort={sort} onSort={handleSort} />
+              <FilterDropdown
+                label="Chair"
+                values={uniqueValues.chair}
+                selectedValues={filters.chair}
+                onSelectionChange={(v) => updateFilter('chair', v)}
+              />
+            </th>
+            <th className="px-3 py-2 text-left">
+              <SortableHeader label="Appt Type" sortKey="apptType" currentSort={sort} onSort={handleSort} />
+              <FilterDropdown
+                label="Appt Type"
+                values={uniqueValues.apptType}
+                selectedValues={filters.apptType}
+                onSelectionChange={(v) => updateFilter('apptType', v)}
+              />
+            </th>
+            <th className="px-3 py-2 text-left">
+              <SortableHeader label="Duration" sortKey="duration" currentSort={sort} onSort={handleSort} />
+              <FilterDropdown
+                label="Duration"
+                values={uniqueValues.duration}
+                selectedValues={filters.duration}
+                onSelectionChange={(v) => updateFilter('duration', v)}
+              />
+            </th>
           </tr>
         </thead>
         <tbody className="divide-y divide-gray-200 dark:divide-gray-600">
-          {slots.map((slot, i) => {
-            const [date, ...timeParts] = (slot.StartTime || '').split(' ');
-            return (
+          {sortedSlots.length === 0 ? (
+            <tr>
+              <td colSpan={5} className="px-3 py-4 text-center text-gray-500 italic">
+                No slots match the current filters
+              </td>
+            </tr>
+          ) : (
+            sortedSlots.map((slot, i) => (
               <tr key={i} className="hover:bg-gray-50 dark:hover:bg-gray-700">
-                <td className="px-3 py-2">{date}</td>
-                <td className="px-3 py-2">{timeParts.join(' ')}</td>
-                <td className="px-3 py-2">{slot.ScheduleColumnDescription || 'N/A'}</td>
-                <td className="px-3 py-2">{slot.Minutes || '45'} min</td>
+                <td className="px-3 py-2">{slot._date}</td>
+                <td className="px-3 py-2">{slot._time}</td>
+                <td className="px-3 py-2">
+                  {slot._columnGUID ? (
+                    <GuidWithName guid={slot._columnGUID} name={slot._columnName} />
+                  ) : (
+                    <span>{slot._columnName || 'N/A'}</span>
+                  )}
+                </td>
+                <td className="px-3 py-2">
+                  {slot._typeGUID ? (
+                    <GuidWithName guid={slot._typeGUID} name={slot._typeName} />
+                  ) : (
+                    <span>{slot._typeName || '-'}</span>
+                  )}
+                </td>
+                <td className="px-3 py-2">{slot._duration} min</td>
               </tr>
-            );
-          })}
+            ))
+          )}
         </tbody>
       </table>
-      <div className="text-xs text-gray-500 mt-2">Showing {slots.length} slots</div>
+      <div className="text-xs text-gray-500 mt-2">
+        {hasFilters || sort ? (
+          <span>
+            {hasFilters ? `Filtered: ${sortedSlots.length} of ${slots.length} slots` : `Showing ${slots.length} slots`}
+            {sort && ` (sorted by ${sort.key} ${sort.direction})`}
+          </span>
+        ) : (
+          <span>Showing {slots.length} slots</span>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// Cloud9 Slots Formatter - handles Cloud9 GetOnlineReservations XML response with Excel-like filters
+const Cloud9SlotsFormatter = ({ data }: { data: unknown }) => {
+  const result = data as { status?: string; records?: Array<Record<string, string>>; error?: string };
+  const records = result?.records || [];
+
+  // Filter state - Set of selected values for each column (empty set = all selected)
+  const [filters, setFilters] = useState<Record<string, Set<string>>>({
+    date: new Set(),
+    time: new Set(),
+    location: new Set(),
+    scheduleView: new Set(),
+    scheduleColumn: new Set(),
+    apptType: new Set(),
+    duration: new Set()
+  });
+
+  // Sort state
+  const [sort, setSort] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null);
+
+  if (result?.error) {
+    return <div className="text-red-600 text-sm">{result.error}</div>;
+  }
+  if (!records.length) return <div className="text-gray-500 italic">No slots available</div>;
+
+  // Process records with parsed data for filtering
+  const processedSlots = records.map((record) => {
+    const startTime = record.StartTime || '';
+    const [date, ...timeParts] = startTime.split(' ');
+    const time = timeParts.join(' ');
+
+    // Get GUIDs
+    const locationGUID = record.LocationGUID || '';
+    const scheduleViewGUID = record.ScheduleViewGUID || '';
+    const scheduleColumnGUID = record.ScheduleColumnGUID || '';
+    const apptTypeGUID = record.AppointmentTypeGUID || '';
+
+    // Get display names from response or lookup
+    const locationName = record.LocationDescription || lookupGuid(locationGUID, 'locations');
+    const scheduleViewName = record.ScheduleViewDescription || lookupGuid(scheduleViewGUID, 'scheduleViews');
+    const scheduleColumnName = record.ScheduleColumnDescription || lookupGuid(scheduleColumnGUID, 'scheduleColumns');
+    const apptTypeName = record.AppointmentTypeDescription || lookupGuid(apptTypeGUID, 'appointmentTypes');
+    const duration = record.Minutes || '45';
+
+    return {
+      ...record,
+      _date: date,
+      _time: time,
+      _locationGUID: locationGUID,
+      _locationName: locationName,
+      _scheduleViewGUID: scheduleViewGUID,
+      _scheduleViewName: scheduleViewName,
+      _scheduleColumnGUID: scheduleColumnGUID,
+      _scheduleColumnName: scheduleColumnName,
+      _apptTypeGUID: apptTypeGUID,
+      _apptTypeName: apptTypeName,
+      _duration: duration
+    };
+  });
+
+  // Get unique values for each column (sorted)
+  const uniqueValues = {
+    date: [...new Set(processedSlots.map(s => s._date))].sort(),
+    time: [...new Set(processedSlots.map(s => s._time))].sort(),
+    location: [...new Set(processedSlots.map(s => s._locationName))].sort(),
+    scheduleView: [...new Set(processedSlots.map(s => s._scheduleViewName))].sort(),
+    scheduleColumn: [...new Set(processedSlots.map(s => s._scheduleColumnName))].sort(),
+    apptType: [...new Set(processedSlots.map(s => s._apptTypeName))].sort(),
+    duration: [...new Set(processedSlots.map(s => s._duration))].sort((a, b) => Number(a) - Number(b))
+  };
+
+  // Apply filters
+  const filteredSlots = processedSlots.filter((slot) => {
+    const dateMatch = filters.date.size === 0 || filters.date.has(slot._date);
+    const timeMatch = filters.time.size === 0 || filters.time.has(slot._time);
+    const locationMatch = filters.location.size === 0 || filters.location.has(slot._locationName);
+    const scheduleViewMatch = filters.scheduleView.size === 0 || filters.scheduleView.has(slot._scheduleViewName);
+    const scheduleColumnMatch = filters.scheduleColumn.size === 0 || filters.scheduleColumn.has(slot._scheduleColumnName);
+    const apptTypeMatch = filters.apptType.size === 0 || filters.apptType.has(slot._apptTypeName);
+    const durationMatch = filters.duration.size === 0 || filters.duration.has(slot._duration);
+    return dateMatch && timeMatch && locationMatch && scheduleViewMatch && scheduleColumnMatch && apptTypeMatch && durationMatch;
+  });
+
+  // Apply sorting
+  const sortedSlots = [...filteredSlots].sort((a, b) => {
+    if (!sort) return 0;
+    let aVal: string | number = '';
+    let bVal: string | number = '';
+
+    switch (sort.key) {
+      case 'date':
+        aVal = a._date;
+        bVal = b._date;
+        break;
+      case 'time':
+        aVal = a._time;
+        bVal = b._time;
+        break;
+      case 'location':
+        aVal = a._locationName;
+        bVal = b._locationName;
+        break;
+      case 'scheduleView':
+        aVal = a._scheduleViewName;
+        bVal = b._scheduleViewName;
+        break;
+      case 'scheduleColumn':
+        aVal = a._scheduleColumnName;
+        bVal = b._scheduleColumnName;
+        break;
+      case 'apptType':
+        aVal = a._apptTypeName;
+        bVal = b._apptTypeName;
+        break;
+      case 'duration':
+        aVal = parseInt(a._duration) || 0;
+        bVal = parseInt(b._duration) || 0;
+        break;
+    }
+
+    if (typeof aVal === 'number' && typeof bVal === 'number') {
+      return sort.direction === 'asc' ? aVal - bVal : bVal - aVal;
+    }
+    const comparison = String(aVal).localeCompare(String(bVal));
+    return sort.direction === 'asc' ? comparison : -comparison;
+  });
+
+  const hasFilters = Object.values(filters).some(f => f.size > 0);
+
+  const clearFilters = () => {
+    setFilters({
+      date: new Set(),
+      time: new Set(),
+      location: new Set(),
+      scheduleView: new Set(),
+      scheduleColumn: new Set(),
+      apptType: new Set(),
+      duration: new Set()
+    });
+  };
+
+  const updateFilter = (key: string, newSelection: Set<string>) => {
+    setFilters(prev => ({ ...prev, [key]: newSelection }));
+  };
+
+  const handleSort = (key: string) => {
+    setSort(prev => {
+      if (prev?.key === key) {
+        if (prev.direction === 'asc') return { key, direction: 'desc' };
+        if (prev.direction === 'desc') return null;
+      }
+      return { key, direction: 'asc' };
+    });
+  };
+
+  return (
+    <div className="overflow-x-auto">
+      {/* Header with count and clear button */}
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-xs text-gray-500">
+          {hasFilters || sort ? (
+            <span>
+              {hasFilters ? `Showing ${sortedSlots.length} of ${records.length} slots` : `${records.length} slots found`}
+              {sort && ` (sorted by ${sort.key} ${sort.direction})`}
+            </span>
+          ) : (
+            <span>{records.length} slots found</span>
+          )}
+        </div>
+        {hasFilters && (
+          <button
+            onClick={clearFilters}
+            className="text-xs px-2 py-1 text-red-600 hover:text-red-800 hover:bg-red-50 dark:hover:bg-red-900/20 rounded"
+          >
+            Clear Filters
+          </button>
+        )}
+      </div>
+
+      <table className="min-w-full text-sm">
+        <thead className="bg-gray-50 dark:bg-gray-700">
+          {/* Column Headers with Sort and Filter */}
+          <tr>
+            <th className="px-2 py-2 text-left">
+              <SortableHeader label="Date" sortKey="date" currentSort={sort} onSort={handleSort} />
+              <FilterDropdown
+                label="Date"
+                values={uniqueValues.date}
+                selectedValues={filters.date}
+                onSelectionChange={(v) => updateFilter('date', v)}
+              />
+            </th>
+            <th className="px-2 py-2 text-left">
+              <SortableHeader label="Time" sortKey="time" currentSort={sort} onSort={handleSort} />
+              <FilterDropdown
+                label="Time"
+                values={uniqueValues.time}
+                selectedValues={filters.time}
+                onSelectionChange={(v) => updateFilter('time', v)}
+              />
+            </th>
+            <th className="px-2 py-2 text-left">
+              <SortableHeader label="Location" sortKey="location" currentSort={sort} onSort={handleSort} />
+              <FilterDropdown
+                label="Location"
+                values={uniqueValues.location}
+                selectedValues={filters.location}
+                onSelectionChange={(v) => updateFilter('location', v)}
+              />
+            </th>
+            <th className="px-2 py-2 text-left">
+              <SortableHeader label="Schedule View" sortKey="scheduleView" currentSort={sort} onSort={handleSort} />
+              <FilterDropdown
+                label="View"
+                values={uniqueValues.scheduleView}
+                selectedValues={filters.scheduleView}
+                onSelectionChange={(v) => updateFilter('scheduleView', v)}
+              />
+            </th>
+            <th className="px-2 py-2 text-left">
+              <SortableHeader label="Chair/Column" sortKey="scheduleColumn" currentSort={sort} onSort={handleSort} />
+              <FilterDropdown
+                label="Chair"
+                values={uniqueValues.scheduleColumn}
+                selectedValues={filters.scheduleColumn}
+                onSelectionChange={(v) => updateFilter('scheduleColumn', v)}
+              />
+            </th>
+            <th className="px-2 py-2 text-left">
+              <SortableHeader label="Appt Type" sortKey="apptType" currentSort={sort} onSort={handleSort} />
+              <FilterDropdown
+                label="Type"
+                values={uniqueValues.apptType}
+                selectedValues={filters.apptType}
+                onSelectionChange={(v) => updateFilter('apptType', v)}
+              />
+            </th>
+            <th className="px-2 py-2 text-left">
+              <SortableHeader label="Duration" sortKey="duration" currentSort={sort} onSort={handleSort} />
+              <FilterDropdown
+                label="Duration"
+                values={uniqueValues.duration}
+                selectedValues={filters.duration}
+                onSelectionChange={(v) => updateFilter('duration', v)}
+              />
+            </th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-gray-200 dark:divide-gray-600">
+          {sortedSlots.length === 0 ? (
+            <tr>
+              <td colSpan={7} className="px-3 py-4 text-center text-gray-500 italic">
+                No slots match the current filters
+              </td>
+            </tr>
+          ) : (
+            sortedSlots.map((slot, i) => (
+              <tr key={i} className="hover:bg-gray-50 dark:hover:bg-gray-700 text-xs">
+                <td className="px-2 py-2">{slot._date}</td>
+                <td className="px-2 py-2">{slot._time}</td>
+                <td className="px-2 py-2">
+                  {slot._locationGUID ? (
+                    <GuidWithName guid={slot._locationGUID} name={slot._locationName} />
+                  ) : (
+                    <span>{slot._locationName || 'N/A'}</span>
+                  )}
+                </td>
+                <td className="px-2 py-2">
+                  {slot._scheduleViewGUID ? (
+                    <GuidWithName guid={slot._scheduleViewGUID} name={slot._scheduleViewName} />
+                  ) : (
+                    <span>{slot._scheduleViewName || 'N/A'}</span>
+                  )}
+                </td>
+                <td className="px-2 py-2">
+                  {slot._scheduleColumnGUID ? (
+                    <GuidWithName guid={slot._scheduleColumnGUID} name={slot._scheduleColumnName} />
+                  ) : (
+                    <span>{slot._scheduleColumnName || 'N/A'}</span>
+                  )}
+                </td>
+                <td className="px-2 py-2">
+                  {slot._apptTypeGUID ? (
+                    <GuidWithName guid={slot._apptTypeGUID} name={slot._apptTypeName} />
+                  ) : (
+                    <span>{slot._apptTypeName || '-'}</span>
+                  )}
+                </td>
+                <td className="px-2 py-2">{slot._duration} min</td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+      <div className="text-xs text-gray-500 mt-2">
+        {hasFilters ? (
+          <span>Filtered: {filteredSlots.length} of {records.length} slots</span>
+        ) : (
+          <span>Showing {records.length} slots</span>
+        )}
+      </div>
     </div>
   );
 };
@@ -659,12 +1351,25 @@ const CLOUD9_ENDPOINTS: Cloud9EndpointConfig[] = [
     description: 'Get available appointment slots',
     sampleParams: {
       startDate: formatDateMDY(1),
-      endDate: formatDateMDY(14),
-      schdvwGUIDs: CLOUD9_API_CONFIG.defaults.scheduleViewGUID
+      endDate: formatDateMDY(60),
+      schdvwGUIDs: CLOUD9_API_CONFIG.defaults.scheduleViewGUID,
+      schclnGUIDs: 'f0fa4eda-0136-45d5-a5d8-91ad7d0b608a',  // Optional: Chair 8 (clear to get all)
+      appttypGUIDs: 'f6c20c35-9abb-47c2-981a-342996016705',  // Optional: New Patient Exam (clear to get all)
+      morning: 'True',
+      afternoon: 'True'
     },
-    formatResult: (data) => <Cloud9RecordsFormatter data={data} />
+    formatResult: (data) => <Cloud9SlotsFormatter data={data} />
   },
   // Reference Data
+  {
+    id: 'c9_apptTypes',
+    name: 'GetApptTypes',
+    procedure: 'GetApptTypes',
+    category: 'reference',
+    description: 'Get all appointment types (check AllowOnlineScheduling field)',
+    sampleParams: {},
+    formatResult: (data) => <Cloud9RecordsFormatter data={data} />
+  },
   {
     id: 'c9_locations',
     name: 'GetLocations',
@@ -673,6 +1378,24 @@ const CLOUD9_ENDPOINTS: Cloud9EndpointConfig[] = [
     description: 'Get all practice locations',
     sampleParams: { showDeleted: 'False' },
     formatResult: (data) => <LocationsWithSearchFormatter data={data} />
+  },
+  {
+    id: 'c9_scheduleViews',
+    name: 'GetScheduleViews',
+    procedure: 'GetScheduleViews',
+    category: 'reference',
+    description: 'Get all schedule views (calendars)',
+    sampleParams: {},
+    formatResult: (data) => <Cloud9RecordsFormatter data={data} />
+  },
+  {
+    id: 'c9_scheduleColumns',
+    name: 'GetScheduleColumns',
+    procedure: 'GetScheduleColumns',
+    category: 'reference',
+    description: 'Get all schedule columns (chairs/providers)',
+    sampleParams: {},
+    formatResult: (data) => <Cloud9RecordsFormatter data={data} />
   },
   // Write Operations
   {
@@ -748,7 +1471,7 @@ const ENDPOINTS: EndpointConfig[] = [
   {
     id: 'patientLookup',
     name: 'Patient Lookup (Name)',
-    endpoint: '/ortho/getPatientByFilter',
+    endpoint: '/ortho-prd/getPatientByFilter',
     category: 'patient',
     description: 'Search patients by name (uses GetPortalPatientLookup)',
     sampleData: { filter: 'Aleman, Chris', locationGUID: API_CONFIG.defaults.locationGUID },
@@ -757,7 +1480,7 @@ const ENDPOINTS: EndpointConfig[] = [
   {
     id: 'getPatient',
     name: 'Get Patient Details',
-    endpoint: '/ortho/getPatient',
+    endpoint: '/ortho-prd/getPatient',
     category: 'patient',
     description: 'Get patient information by GUID (Chris Aleman)',
     sampleData: { patientGUID: API_CONFIG.defaults.testPatientGUID },
@@ -766,7 +1489,7 @@ const ENDPOINTS: EndpointConfig[] = [
   {
     id: 'createPatient',
     name: 'Create Patient',
-    endpoint: '/ortho/createPatient',
+    endpoint: '/ortho-prd/createPatient',
     category: 'patient',
     description: 'Register a new patient',
     sampleData: {
@@ -783,7 +1506,7 @@ const ENDPOINTS: EndpointConfig[] = [
   {
     id: 'getPatientAppts',
     name: 'Get Patient Appointments',
-    endpoint: '/ortho/getPatientAppts',
+    endpoint: '/ortho-prd/getPatientAppts',
     category: 'patient',
     description: 'Get appointments for a patient',
     sampleData: { patientGUID: API_CONFIG.defaults.testPatientGUID },
@@ -792,7 +1515,7 @@ const ENDPOINTS: EndpointConfig[] = [
   {
     id: 'getLocation',
     name: 'Get Clinic Info',
-    endpoint: '/ortho/getLocation',
+    endpoint: '/ortho-prd/getLocation',
     category: 'patient',
     description: 'Get clinic/location details',
     sampleData: { locationGUID: API_CONFIG.defaults.locationGUID },
@@ -801,7 +1524,7 @@ const ENDPOINTS: EndpointConfig[] = [
   {
     id: 'editInsurance',
     name: 'Edit Insurance',
-    endpoint: '/ortho/editInsurance',
+    endpoint: '/ortho-prd/editInsurance',
     category: 'patient',
     description: 'Update patient insurance info',
     sampleData: {
@@ -815,7 +1538,7 @@ const ENDPOINTS: EndpointConfig[] = [
   {
     id: 'confirmAppt',
     name: 'Confirm Appointment',
-    endpoint: '/ortho/confirmAppt',
+    endpoint: '/ortho-prd/confirmAppt',
     category: 'patient',
     description: 'Confirm an appointment',
     sampleData: { appointmentId: '0a22fcc4-6ba0-4009-a9e7-2b5664170669' },  // Chris Aleman's appointment
@@ -825,20 +1548,22 @@ const ENDPOINTS: EndpointConfig[] = [
   {
     id: 'getSlots',
     name: 'Get Available Slots',
-    endpoint: '/ortho/getApptSlots',
+    endpoint: '/ortho-prd/getApptSlots',
     category: 'scheduling',
     description: 'Get available appointment times',
     sampleData: {
       startDate: formatDateMDY(1),
       endDate: formatDateMDY(14),
-      scheduleViewGUIDs: API_CONFIG.defaults.scheduleViewGUID
+      scheduleViewGUIDs: API_CONFIG.defaults.scheduleViewGUID,
+      scheduleColumnGUID: 'f0fa4eda-0136-45d5-a5d8-91ad7d0b608a',  // Optional: filter by specific chair/column
+      appointmentTypeGUID: 'f6c20c35-9abb-47c2-981a-342996016705'  // Optional: filter by appointment type
     },
     formatResult: (data) => <SlotsFormatter data={data} />
   },
   {
     id: 'groupedSlots',
     name: 'Grouped Slots (Siblings)',
-    endpoint: '/ortho/getGroupedApptSlots',
+    endpoint: '/ortho-prd/getGroupedApptSlots',
     category: 'scheduling',
     description: 'Find consecutive slots for multiple patients',
     sampleData: {
@@ -853,7 +1578,7 @@ const ENDPOINTS: EndpointConfig[] = [
   {
     id: 'createAppt',
     name: 'Book Appointment',
-    endpoint: '/ortho/createAppt',
+    endpoint: '/ortho-prd/createAppt',
     category: 'scheduling',
     description: 'Create a new appointment',
     sampleData: {
@@ -870,7 +1595,7 @@ const ENDPOINTS: EndpointConfig[] = [
   {
     id: 'cancelAppt',
     name: 'Cancel Appointment',
-    endpoint: '/ortho/cancelAppt',
+    endpoint: '/ortho-prd/cancelAppt',
     category: 'scheduling',
     description: 'Cancel an existing appointment',
     sampleData: { appointmentGUID: '1efdfbbc-420a-4197-95da-76d15173a6ab' },  // Chris Aleman's 2nd appointment

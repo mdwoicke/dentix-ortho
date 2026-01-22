@@ -628,6 +628,8 @@ export interface DynamicChildDataDTO {
   isNewPatient: MaybeDynamicDTO<boolean>;
   hadBracesBefore?: MaybeDynamicDTO<boolean>;
   specialNeeds?: MaybeDynamicDTO<string>;
+  /** When enabled, appends a random 4-digit suffix to name fields for uniqueness */
+  uniquifySuffix?: boolean;
 }
 
 /**
@@ -649,6 +651,8 @@ export interface DynamicDataInventoryDTO {
   }>;
   previousVisitToOffice?: MaybeDynamicDTO<boolean>;
   previousOrthoTreatment?: MaybeDynamicDTO<boolean>;
+  /** When enabled, appends a random 4-digit suffix to parent name/email/phone for uniqueness */
+  parentUniquifySuffix?: boolean;
 }
 
 /**
@@ -1142,6 +1146,7 @@ export interface ProductionSessionDetailResponse {
   traces: ProductionTrace[];
   transcript: ConversationTurn[];
   apiCalls: any[];
+  observations: ProductionTraceObservation[];
 }
 
 // ============================================================================
@@ -1191,6 +1196,44 @@ export interface SessionTypeCost {
 export interface ToolCallStats {
   count: number;
   avgLatencyMs: number;
+}
+
+// ============================================================================
+// API REPLAY TYPES
+// ============================================================================
+
+/**
+ * Request to replay a tool call
+ */
+export interface ReplayRequest {
+  toolName: string;
+  action: string;
+  input: Record<string, unknown>;
+  originalObservationId?: string;
+}
+
+/**
+ * Response from a replay execution
+ */
+export interface ReplayResponse {
+  success: boolean;
+  data?: {
+    response: unknown;
+    durationMs: number;
+    endpoint: string;
+    statusCode: number;
+    timestamp: string;
+    toolVersion?: string;
+    preCallLogs?: string[];
+  };
+  error?: string;
+}
+
+/**
+ * Available replay endpoints
+ */
+export interface ReplayEndpoints {
+  [toolName: string]: string[];
 }
 
 /**
@@ -1275,4 +1318,164 @@ export interface TraceInsightsResponse {
       count: number;
     }>;
   };
+}
+
+// ============================================================================
+// REDIS SLOT CACHE HEALTH TYPES
+// ============================================================================
+
+/**
+ * Slot count by date
+ */
+export interface SlotsByDate {
+  date: string;
+  count: number;
+}
+
+/**
+ * Cache tier status and details
+ */
+export interface CacheTierStatus {
+  tier: number;
+  tierDays: number;
+  status: 'fresh' | 'stale' | 'critical_stale' | 'empty' | 'error';
+  slotCount: number;
+  ageSeconds: number;
+  fetchedAt: string;
+  dateRange: {
+    start: string;
+    end: string;
+  };
+  consecutiveFailures: number;
+  lastSuccess: string | null;
+  lastError: string | null;
+  lastInvalidation: string | null;
+  lastInvalidatedSlot: {
+    startTime: string;
+    at: string;
+  } | null;
+  lastRestoration: string | null;
+  slotsByDate: SlotsByDate[];
+  error?: string;
+}
+
+/**
+ * Refresh history entry
+ */
+export interface CacheRefreshHistoryEntry {
+  timestamp: string;
+  tier: number;
+  success: boolean;
+  slotCount: number;
+  error: string | null;
+}
+
+/**
+ * Cache health summary
+ */
+export interface CacheHealthSummary {
+  totalSlots: number;
+  staleTiers: number;
+  criticalStaleTiers: number;
+  failedTiers: number;
+  maxConsecutiveFailures: number;
+}
+
+/**
+ * Refresh stats from history
+ */
+export interface CacheRefreshStats {
+  last20Refreshes: {
+    success: number;
+    failure: number;
+    successRate: string;
+  };
+}
+
+/**
+ * Cache configuration
+ */
+export interface CacheHealthConfig {
+  maxCacheAgeMs: number;
+  hardStaleMs: number;
+  refreshIntervalMs: number;
+  businessHours: string;
+}
+
+/**
+ * Full cache health response from Node-RED endpoint
+ */
+export interface CacheHealthResponse {
+  status: 'healthy' | 'degraded' | 'unhealthy';
+  timestamp: string;
+  summary: CacheHealthSummary;
+  tiers: CacheTierStatus[];
+  refreshStats: CacheRefreshStats;
+  refreshHistory: CacheRefreshHistoryEntry[];
+  config: CacheHealthConfig;
+}
+
+/**
+ * Force refresh request
+ */
+export interface CacheRefreshRequest {
+  tier?: number | 'all';
+}
+
+/**
+ * Cache operation result
+ */
+export interface CacheOperationResult {
+  tier: number;
+  status: 'cleared' | 'refreshed' | 'error';
+  error?: string;
+}
+
+/**
+ * Cache operation response
+ */
+export interface CacheOperationResponse {
+  success: boolean;
+  timestamp: string;
+  results: CacheOperationResult[];
+  note?: string;
+}
+
+/**
+ * Full slot data from cache
+ */
+export interface CacheSlot {
+  StartTime: string;
+  EndTime: string;
+  ScheduleColumnDescription: string;
+  ScheduleColumnGUID: string;
+  ScheduleViewDescription: string;
+  ScheduleViewGUID: string;
+  AppointmentTypeDescription: string;
+  AppointmentTypeGUID: string;
+  AppointmentClassDescription?: string;
+  AppointmentClassGUID?: string;
+  ScheduleTemplateName?: string;
+  Minutes: string;
+  LocationGUID: string;
+  _date: string; // Flattened date from group
+}
+
+/**
+ * Response from tier slots endpoint
+ */
+export interface TierSlotsResponse {
+  success: boolean;
+  tier: number;
+  tierDays: number;
+  slots: CacheSlot[];
+  slotCount: number;
+  fetchedAt: string;
+  cacheAgeSeconds: number | null;
+  dateRange: {
+    start: string;
+    end: string;
+  };
+  cacheStatus: 'fresh' | 'stale' | 'empty';
+  message?: string;
 }

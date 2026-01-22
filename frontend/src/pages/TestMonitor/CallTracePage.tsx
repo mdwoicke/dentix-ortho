@@ -611,24 +611,34 @@ function SessionModal({ sessionId, configId, timezone, langfuseProjectId, onClos
 
         {/* Tab Navigation */}
         {sessionDetail && (
-          <div className="px-6 pt-2 border-b border-gray-200 dark:border-gray-700">
-            <nav className="flex gap-4">
+          <div className="px-6 py-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
+            <nav className="flex gap-2">
               <button
                 onClick={() => setActiveTab('transcript')}
-                className={`pb-2 text-sm font-medium border-b-2 transition-colors ${
+                className={`px-4 py-2 text-sm font-medium rounded-lg transition-all flex items-center gap-2 ${
                   activeTab === 'transcript'
-                    ? 'border-blue-500 text-blue-600 dark:text-blue-400'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300'
+                    ? 'bg-blue-600 text-white shadow-md'
+                    : 'bg-white dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600 border border-gray-200 dark:border-gray-600'
                 }`}
               >
-                Full Conversation ({sessionDetail.transcript.length} turns)
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+                </svg>
+                Full Conversation
+                <span className={`px-1.5 py-0.5 text-xs rounded-full ${
+                  activeTab === 'transcript'
+                    ? 'bg-blue-500 text-white'
+                    : 'bg-gray-200 dark:bg-gray-600 text-gray-600 dark:text-gray-300'
+                }`}>
+                  {sessionDetail.transcript.length}
+                </span>
               </button>
               <button
                 onClick={() => setActiveTab('performance')}
-                className={`pb-2 text-sm font-medium border-b-2 transition-colors flex items-center gap-1 ${
+                className={`px-4 py-2 text-sm font-medium rounded-lg transition-all flex items-center gap-2 ${
                   activeTab === 'performance'
-                    ? 'border-blue-500 text-blue-600 dark:text-blue-400'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300'
+                    ? 'bg-amber-500 text-white shadow-md'
+                    : 'bg-white dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600 border border-gray-200 dark:border-gray-600'
                 }`}
               >
                 <Icons.Clock />
@@ -636,10 +646,10 @@ function SessionModal({ sessionId, configId, timezone, langfuseProjectId, onClos
               </button>
               <button
                 onClick={() => setActiveTab('flow')}
-                className={`pb-2 text-sm font-medium border-b-2 transition-colors flex items-center gap-1 ${
+                className={`px-4 py-2 text-sm font-medium rounded-lg transition-all flex items-center gap-2 ${
                   activeTab === 'flow'
-                    ? 'border-blue-500 text-blue-600 dark:text-blue-400'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300'
+                    ? 'bg-purple-600 text-white shadow-md'
+                    : 'bg-white dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600 border border-gray-200 dark:border-gray-600'
                 }`}
               >
                 <Icons.Flow />
@@ -647,13 +657,23 @@ function SessionModal({ sessionId, configId, timezone, langfuseProjectId, onClos
               </button>
               <button
                 onClick={() => setActiveTab('traces')}
-                className={`pb-2 text-sm font-medium border-b-2 transition-colors ${
+                className={`px-4 py-2 text-sm font-medium rounded-lg transition-all flex items-center gap-2 ${
                   activeTab === 'traces'
-                    ? 'border-blue-500 text-blue-600 dark:text-blue-400'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300'
+                    ? 'bg-green-600 text-white shadow-md'
+                    : 'bg-white dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600 border border-gray-200 dark:border-gray-600'
                 }`}
               >
-                Individual Traces ({sessionDetail.traces.length})
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+                </svg>
+                Individual Traces
+                <span className={`px-1.5 py-0.5 text-xs rounded-full ${
+                  activeTab === 'traces'
+                    ? 'bg-green-500 text-white'
+                    : 'bg-gray-200 dark:bg-gray-600 text-gray-600 dark:text-gray-300'
+                }`}>
+                  {sessionDetail.traces.length}
+                </span>
               </button>
             </nav>
           </div>
@@ -772,6 +792,7 @@ export default function CallTracePage() {
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [rebuildingSessions, setRebuildingessions] = useState(false);
+  const [hasImported, setHasImported] = useState(false); // Track if user has run import
 
   // Filter state
   const [filterFromDate, setFilterFromDate] = useState('');
@@ -996,10 +1017,12 @@ export default function CallTracePage() {
     loadData();
   };
 
-  // Load data when config, page, or view mode changes
+  // Load data when config, page, or view mode changes (only after initial import)
   useEffect(() => {
-    loadData();
-  }, [loadData]);
+    if (hasImported) {
+      loadData();
+    }
+  }, [loadData, hasImported]);
 
   // Reset page when view mode changes
   useEffect(() => {
@@ -1034,6 +1057,8 @@ export default function CallTracePage() {
       });
 
       if (result.status === 'completed') {
+        // Mark as imported so data loads
+        setHasImported(true);
         // Reload data and history
         await loadData();
         const history = await getImportHistory(selectedConfigId, 5);
@@ -1064,6 +1089,8 @@ export default function CallTracePage() {
       });
 
       if (result.status === 'completed') {
+        // Mark as imported so data loads
+        setHasImported(true);
         await loadData();
         const history = await getImportHistory(selectedConfigId, 5);
         setImportHistory(history);
@@ -1532,7 +1559,17 @@ export default function CallTracePage() {
                 </tr>
               </thead>
               <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
-                {loading && sessions.length === 0 ? (
+                {!hasImported ? (
+                  <tr>
+                    <td colSpan={9} className="px-4 py-12 text-center">
+                      <div className="flex flex-col items-center gap-3 text-gray-500 dark:text-gray-400">
+                        <Icons.Download />
+                        <div className="text-lg font-medium">Select a date and run Import to load data</div>
+                        <div className="text-sm">Choose an "Import From Date" above and click the Import button to fetch traces from Langfuse.</div>
+                      </div>
+                    </td>
+                  </tr>
+                ) : loading && sessions.length === 0 ? (
                   <tr>
                     <td colSpan={9} className="px-4 py-8 text-center">
                       <Spinner size="lg" />
@@ -1541,7 +1578,7 @@ export default function CallTracePage() {
                 ) : sessions.length === 0 ? (
                   <tr>
                     <td colSpan={9} className="px-4 py-8 text-center text-gray-500 dark:text-gray-400">
-                      No conversations found. Import traces from Langfuse to get started.
+                      No conversations found. Try adjusting the date range or import more traces.
                     </td>
                   </tr>
                 ) : (
@@ -1654,7 +1691,17 @@ export default function CallTracePage() {
                 </tr>
               </thead>
               <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
-                {loading && traces.length === 0 ? (
+                {!hasImported ? (
+                  <tr>
+                    <td colSpan={8} className="px-4 py-12 text-center">
+                      <div className="flex flex-col items-center gap-3 text-gray-500 dark:text-gray-400">
+                        <Icons.Download />
+                        <div className="text-lg font-medium">Select a date and run Import to load data</div>
+                        <div className="text-sm">Choose an "Import From Date" above and click the Import button to fetch traces from Langfuse.</div>
+                      </div>
+                    </td>
+                  </tr>
+                ) : loading && traces.length === 0 ? (
                   <tr>
                     <td colSpan={8} className="px-4 py-8 text-center">
                       <Spinner size="lg" />
@@ -1663,7 +1710,7 @@ export default function CallTracePage() {
                 ) : traces.length === 0 ? (
                   <tr>
                     <td colSpan={8} className="px-4 py-8 text-center text-gray-500 dark:text-gray-400">
-                      No traces found. Import traces from Langfuse to get started.
+                      No traces found. Try adjusting the date range or import more traces.
                     </td>
                   </tr>
                 ) : (
@@ -1749,13 +1796,21 @@ export default function CallTracePage() {
         {/* Insights View */}
         {viewMode === 'insights' && selectedConfigId && (
           <div className="p-4">
-            <TraceInsights
-              configId={selectedConfigId}
-              onViewSessions={handleViewIssueSessions}
-              cachedInsights={cachedInsights}
-              cachedLastDays={cachedInsightsLastDays}
-              onInsightsLoaded={handleInsightsLoaded}
-            />
+            {!hasImported ? (
+              <div className="flex flex-col items-center gap-3 py-12 text-gray-500 dark:text-gray-400">
+                <Icons.Download />
+                <div className="text-lg font-medium">Select a date and run Import to load data</div>
+                <div className="text-sm">Choose an "Import From Date" above and click the Import button to fetch traces from Langfuse.</div>
+              </div>
+            ) : (
+              <TraceInsights
+                configId={selectedConfigId}
+                onViewSessions={handleViewIssueSessions}
+                cachedInsights={cachedInsights}
+                cachedLastDays={cachedInsightsLastDays}
+                onInsightsLoaded={handleInsightsLoaded}
+              />
+            )}
           </div>
         )}
 
