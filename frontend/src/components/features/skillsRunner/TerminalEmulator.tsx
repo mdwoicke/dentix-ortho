@@ -10,17 +10,79 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 import { API_CONFIG } from '../../../utils/constants';
 
+export interface AgentReport {
+  agent: string;
+  sessionId: string;
+  timestamp: string;
+  status: 'success' | 'failure' | 'warning';
+  summary: {
+    toolCalls: number;
+    errors: number;
+    duration: string;
+    [key: string]: unknown;
+  };
+  failurePatterns?: Array<{
+    code: string;
+    name: string;
+    severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
+    evidence: string;
+    confidence?: string;
+  }>;
+  timeline?: Array<{
+    time: string;
+    action: string;
+    status: 'ok' | 'error' | 'warning';
+    detail?: string;
+  }>;
+  rootCause?: string;
+  recommendations?: string[];
+  actionableSteps?: Array<{
+    step: number;
+    action: string;
+    detail: string;
+    command?: string;
+  }>;
+  diagnostics?: {
+    toolCalls?: Array<{
+      name: string;
+      timestamp: string;
+      status: 'ok' | 'error';
+      input: Record<string, unknown>;
+      output: Record<string, unknown>;
+      issue?: string;
+    }>;
+    dataIssues?: Array<{
+      field: string;
+      expected: string;
+      actual: string;
+      source: string;
+    }>;
+    conversationExcerpts?: Array<{
+      role: string;
+      content: string;
+      issue?: string;
+    }>;
+  };
+}
+
+export interface AgentReportData {
+  json: AgentReport;
+  markdown?: string;
+}
+
 interface TerminalEmulatorProps {
   sessionId: string | null;
   onSessionEnd?: (exitCode: number) => void;
+  onReportReady?: (report: AgentReportData) => void;
   className?: string;
 }
 
-export function TerminalEmulator({ sessionId, onSessionEnd, className = '' }: TerminalEmulatorProps) {
+export function TerminalEmulator({ sessionId, onSessionEnd, onReportReady, className = '' }: TerminalEmulatorProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const outputBufferRef = useRef<string>('');
 
   // Initialize terminal
   useEffect(() => {
@@ -101,6 +163,34 @@ export function TerminalEmulator({ sessionId, onSessionEnd, className = '' }: Te
     const terminal = xtermRef.current;
     terminal.clear();
     terminal.writeln('\x1b[90m[Connecting to session...]\x1b[0m\r\n');
+    outputBufferRef.current = '';
+
+    const REPORT_JSON_START = '<!-- AGENT_REPORT_JSON -->';
+    const REPORT_JSON_END = '<!-- END_AGENT_REPORT -->';
+    const REPORT_MD_START = '<!-- AGENT_REPORT_MD -->';
+    const REPORT_MD_END = '<!-- END_AGENT_REPORT_MD -->';
+
+    let reportJson: AgentReport | null = null;
+    let reportMd: string | undefined;
+
+    const extractReport = (buffer: string) => {
+      // Extract JSON report
+      const jsonStart = buffer.indexOf(REPORT_JSON_START);
+      const jsonEnd = buffer.indexOf(REPORT_JSON_END);
+      if (jsonStart !== -1 && jsonEnd !== -1) {
+        const jsonStr = buffer.substring(jsonStart + REPORT_JSON_START.length, jsonEnd);
+        try {
+          reportJson = JSON.parse(jsonStr);
+        } catch { /* ignore parse errors */ }
+      }
+
+      // Extract markdown report
+      const mdStart = buffer.indexOf(REPORT_MD_START);
+      const mdEnd = buffer.indexOf(REPORT_MD_END);
+      if (mdStart !== -1 && mdEnd !== -1) {
+        reportMd = buffer.substring(mdStart + REPORT_MD_START.length, mdEnd);
+      }
+    };
 
     const eventSource = new EventSource(
       `${API_CONFIG.BASE_URL}/skills-runner/sessions/${sessionId}/stream`
@@ -113,10 +203,13 @@ export function TerminalEmulator({ sessionId, onSessionEnd, className = '' }: Te
 
         switch (data.type) {
           case 'connected':
-            // Connection established
             break;
           case 'data':
-            terminal.write(data.content);
+            outputBufferRef.current += data.content;
+            // Don't render report markers to terminal
+            if (!data.content.includes('<!-- AGENT_REPORT')) {
+              terminal.write(data.content);
+            }
             break;
           case 'status':
             if (data.status === 'failed' && data.error) {
@@ -124,6 +217,11 @@ export function TerminalEmulator({ sessionId, onSessionEnd, className = '' }: Te
             }
             break;
           case 'end':
+            // Check for report in buffered output
+            extractReport(outputBufferRef.current);
+            if (reportJson && onReportReady) {
+              onReportReady({ json: reportJson, markdown: reportMd });
+            }
             if (onSessionEnd) {
               onSessionEnd(data.exitCode);
             }
@@ -133,7 +231,6 @@ export function TerminalEmulator({ sessionId, onSessionEnd, className = '' }: Te
             break;
         }
       } catch {
-        // Raw data, write directly
         terminal.write(event.data);
       }
     };
