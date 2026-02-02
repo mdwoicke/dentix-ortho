@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-02-02)
 
 **Core value:** Every failed call gets a complete diagnosis -- from what the caller wanted, to what actually happened, to exactly where and why it broke.
-**Current focus:** Phase 5 in progress. Replay engine services.
+**Current focus:** Phase 5 complete. Ready for Phase 6.
 
 ## Current Position
 
 Phase: 5 of 6 (Replay Engine)
 Plan: 2 of 2 in current phase
-Status: In progress
-Last activity: 2026-02-02 -- Completed 05-02-PLAN.md
+Status: Phase complete
+Last activity: 2026-02-02 -- Completed 05-01-PLAN.md
 
-Progress: [████████████░] ~85%
+Progress: [█████████████░] ~92%
 
 ## Performance Metrics
 
@@ -34,7 +34,7 @@ Progress: [████████████░] ~85%
 | 5 | 2/2 | ~6 min | ~3 min |
 
 **Recent Trend:**
-- Last 5 plans: 04-02, 04-03, 05-01, 05-02
+- Last 5 plans: 04-03, 05-02, 05-01
 - Trend: Consistent, slightly improving
 
 *Updated after each plan completion*
@@ -65,6 +65,8 @@ Recent decisions affecting current work:
 - Dynamic import() in controllers for lazy loading replay/cloud9 services.
 - XML template strings for Cloud9 direct testing (no xml library needed).
 - Positional (index-based) tool call comparison for Flowise replay.
+- Mock key extraction uses last URL segment for environment-agnostic matching.
+- Optional mockMap parameter threaded through existing replay functions.
 
 ### Pending Todos
 
@@ -77,5 +79,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-02
-Stopped at: Completed 05-02-PLAN.md
+Stopped at: Completed 05-01-PLAN.md (Phase 5 complete)
 Resume file: None
