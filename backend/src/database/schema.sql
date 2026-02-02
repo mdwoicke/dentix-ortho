@@ -290,3 +290,18 @@ CREATE TABLE IF NOT EXISTS session_analysis (
 
 CREATE INDEX IF NOT EXISTS idx_session_analysis_session ON session_analysis(session_id);
 CREATE INDEX IF NOT EXISTS idx_session_analysis_intent ON session_analysis(caller_intent_type);
+
+-- Artifact deploy events for version correlation
+CREATE TABLE IF NOT EXISTS artifact_deploy_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  artifact_key TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  deployed_at TEXT NOT NULL DEFAULT (datetime('now')),
+  deploy_method TEXT,
+  nodered_rev TEXT,
+  description TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_artifact_deploy_artifact ON artifact_deploy_events(artifact_key);
+CREATE INDEX IF NOT EXISTS idx_artifact_deploy_time ON artifact_deploy_events(deployed_at);
