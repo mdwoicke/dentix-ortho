@@ -31,12 +31,12 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. System classifies caller intent (booking, rescheduling, cancellation, info lookup) and for booking intents extracts child count, names, parent info, and requested dates
   4. System maps classified intent to expected tool call sequence and shows which steps occurred vs which were expected
   5. Multi-trace sessions are grouped into a single conversation view
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 01-01: Trace pull and storage service
-- [ ] 01-02: Transcript extraction and intent classification
-- [ ] 01-03: Observation tree and session grouping
+- [ ] 01-01-PLAN.md -- Caller intent classifier and tool sequence mapper services
+- [ ] 01-02-PLAN.md -- Database schema for analysis cache and verify existing trace infrastructure
+- [ ] 01-03-PLAN.md -- Trace analysis API endpoint (orchestration)
 
 ### Phase 2: Fulfillment Verification
 **Goal**: User can see whether a call actually achieved its goal by comparing trace claims against live Cloud9 records
@@ -121,7 +121,7 @@ Note: Phase 3 and Phase 5 can proceed in parallel with Phase 2 and Phase 4 respe
 
 | Phase | Plans Complete | Status | Completed |
 |-------|---------------|--------|-----------|
-| 1. Trace Foundation | 0/3 | Not started | - |
+| 1. Trace Foundation | 0/3 | Planned | - |
 | 2. Fulfillment Verification | 0/2 | Not started | - |
 | 3. Trace Analysis UI | 0/2 | Not started | - |
 | 4. Expert Agents & Diagnostics | 0/3 | Not started | - |
