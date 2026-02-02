@@ -1,7 +1,7 @@
 # Requirements: Call Trace Analyzer
 
 **Defined:** 2026-02-02
-**Core Value:** Every failed call gets a complete diagnosis — from what the caller wanted, to what actually happened, to exactly where and why it broke.
+**Core Value:** Every failed call gets a complete diagnosis -- from what the caller wanted, to what actually happened, to exactly where and why it broke.
 
 ## v1 Requirements
 
@@ -67,8 +67,8 @@
 ### Enhanced Monitoring
 
 - **MON-V2-01**: Cost and latency tracking per call and aggregate
-- **MON-V2-02**: Trend analysis — failure rate over time by intent type
-- **MON-V2-03**: SLA tracking — percentage of calls fully fulfilled within target
+- **MON-V2-02**: Trend analysis -- failure rate over time by intent type
+- **MON-V2-03**: SLA tracking -- percentage of calls fully fulfilled within target
 
 ### Enhanced UI
 
@@ -78,7 +78,7 @@
 
 ### Enhanced Diagnostics
 
-- **DIAG-V2-01**: Multi-trace pattern analysis — find common root cause across multiple failures
+- **DIAG-V2-01**: Multi-trace pattern analysis -- find common root cause across multiple failures
 - **DIAG-V2-02**: Automatic regression detection when new Node-RED version deployed
 
 ## Out of Scope
@@ -96,45 +96,45 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| TRACE-01 | | Pending |
-| TRACE-02 | | Pending |
-| TRACE-03 | | Pending |
-| TRACE-04 | | Pending |
-| INTENT-01 | | Pending |
-| INTENT-02 | | Pending |
-| INTENT-03 | | Pending |
-| INTENT-04 | | Pending |
-| VERIFY-01 | | Pending |
-| VERIFY-02 | | Pending |
-| VERIFY-03 | | Pending |
-| VERIFY-04 | | Pending |
-| VERIFY-05 | | Pending |
-| EXPERT-01 | | Pending |
-| EXPERT-02 | | Pending |
-| EXPERT-03 | | Pending |
-| EXPERT-04 | | Pending |
-| EXPERT-05 | | Pending |
-| DIAG-01 | | Pending |
-| DIAG-02 | | Pending |
-| DIAG-03 | | Pending |
-| DIAG-04 | | Pending |
-| DIAG-05 | | Pending |
-| REPLAY-01 | | Pending |
-| REPLAY-02 | | Pending |
-| REPLAY-03 | | Pending |
-| MON-01 | | Pending |
-| MON-02 | | Pending |
-| MON-03 | | Pending |
-| UI-01 | | Pending |
-| UI-02 | | Pending |
-| UI-03 | | Pending |
-| UI-04 | | Pending |
+| TRACE-01 | Phase 1 | Pending |
+| TRACE-02 | Phase 1 | Pending |
+| TRACE-03 | Phase 1 | Pending |
+| TRACE-04 | Phase 1 | Pending |
+| INTENT-01 | Phase 1 | Pending |
+| INTENT-02 | Phase 1 | Pending |
+| INTENT-03 | Phase 1 | Pending |
+| INTENT-04 | Phase 1 | Pending |
+| VERIFY-01 | Phase 2 | Pending |
+| VERIFY-02 | Phase 2 | Pending |
+| VERIFY-03 | Phase 2 | Pending |
+| VERIFY-04 | Phase 2 | Pending |
+| VERIFY-05 | Phase 2 | Pending |
+| UI-01 | Phase 3 | Pending |
+| UI-02 | Phase 3 | Pending |
+| UI-03 | Phase 3 | Pending |
+| UI-04 | Phase 3 | Pending |
+| EXPERT-01 | Phase 4 | Pending |
+| EXPERT-02 | Phase 4 | Pending |
+| EXPERT-03 | Phase 4 | Pending |
+| EXPERT-04 | Phase 4 | Pending |
+| EXPERT-05 | Phase 4 | Pending |
+| DIAG-01 | Phase 4 | Pending |
+| DIAG-02 | Phase 4 | Pending |
+| DIAG-03 | Phase 4 | Pending |
+| DIAG-04 | Phase 4 | Pending |
+| DIAG-05 | Phase 4 | Pending |
+| REPLAY-01 | Phase 5 | Pending |
+| REPLAY-02 | Phase 5 | Pending |
+| REPLAY-03 | Phase 5 | Pending |
+| MON-01 | Phase 6 | Pending |
+| MON-02 | Phase 6 | Pending |
+| MON-03 | Phase 6 | Pending |
 
 **Coverage:**
 - v1 requirements: 33 total
-- Mapped to phases: 0
-- Unmapped: 33 ⚠️
+- Mapped to phases: 33
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-02-02*
-*Last updated: 2026-02-02 after initial definition*
+*Last updated: 2026-02-02 after roadmap creation*
