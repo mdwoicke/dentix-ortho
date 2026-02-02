@@ -20,6 +20,8 @@ export interface ClaimedRecord {
   patientGuid?: string;
   claimedName?: string;
   claimedDate?: string;
+  /** Child name extracted from tool input/output — used for grouping */
+  childName?: string;
   source: string; // observation ID or description of where we found this
 }
 
@@ -38,8 +40,11 @@ export interface RecordVerification {
 
 export interface ChildVerification {
   childName: string;
+  patientRecordStatus: 'pass' | 'fail' | 'skipped';
+  appointmentRecordStatus: 'pass' | 'fail' | 'skipped';
   patientVerification?: RecordVerification;
   appointmentVerification?: RecordVerification;
+  details: RecordVerification[];
 }
 
 export type FulfillmentStatus = 'verified' | 'partial' | 'failed' | 'no_claims';
@@ -96,7 +101,7 @@ function extractGuid(obj: any, ...keys: string[]): string | undefined {
  * Parses observation input/output JSON defensively, looking for GUIDs in
  * create_patient, lookup, and book_child tool outputs.
  */
-export function extractClaimedRecords(observations: any[], intent: CallerIntent): ClaimedRecord[] {
+export function extractClaimedRecords(observations: any[], _intent: CallerIntent): ClaimedRecord[] {
   const claims: ClaimedRecord[] = [];
 
   for (const obs of observations) {
@@ -130,12 +135,16 @@ export function extractClaimedRecords(observations: any[], intent: CallerIntent)
     if (action === 'create_patient' && output) {
       const guid = extractGuid(output, 'patientGuid', 'PatientGUID', 'guid', 'GUID', 'patGUID', 'patientId', 'PatientId');
       if (guid) {
+        const name = input?.firstName && input?.lastName
+          ? `${input.firstName} ${input.lastName}`
+          : output.name || output.patientName || undefined;
+        // Use childName from input if present, otherwise fall back to the constructed name
+        const childName = input?.childName || name || undefined;
         claims.push({
           type: 'patient',
           guid,
-          claimedName: input?.firstName && input?.lastName
-            ? `${input.firstName} ${input.lastName}`
-            : output.name || output.patientName || undefined,
+          claimedName: name,
+          childName,
           source: `create_patient:${obsId}`,
         });
       }
@@ -148,11 +157,13 @@ export function extractClaimedRecords(observations: any[], intent: CallerIntent)
         const patGuid = extractGuid(output, 'patientGuid', 'PatientGUID', 'patGUID')
           || extractGuid(input, 'patientGuid', 'PatientGUID', 'patGUID');
 
+        const childName = input?.childName || output?.childName || undefined;
         claims.push({
           type: 'appointment',
           guid: apptGuid,
           patientGuid: patGuid,
-          claimedName: input?.childName || output?.childName || undefined,
+          claimedName: childName,
+          childName,
           claimedDate: input?.date || input?.startTime || output?.date || output?.startTime || undefined,
           source: `book_child:${obsId}`,
         });
@@ -243,23 +254,161 @@ async function verifyAppointmentRecord(client: Cloud9Client, claimed: ClaimedRec
 // MAIN EXPORT
 // ============================================================================
 
+// ============================================================================
+// MULTI-CHILD GROUPING HELPERS
+// ============================================================================
+
+function recordStatus(v: RecordVerification | undefined): 'pass' | 'fail' | 'skipped' {
+  if (!v) return 'skipped';
+  if (v.exists && v.mismatches.length === 0) return 'pass';
+  return 'fail';
+}
+
+/**
+ * Normalize a child name for grouping (lowercase, trimmed).
+ * Records with no childName are grouped under null (responsible_party).
+ */
+function normalizeChildKey(name: string | undefined | null): string | null {
+  if (!name) return null;
+  return name.trim().toLowerCase();
+}
+
+/**
+ * Build per-child verifications from grouped record verifications.
+ */
+function buildChildVerifications(
+  claims: ClaimedRecord[],
+  verifications: RecordVerification[],
+  intent: CallerIntent,
+): { childVerifications: ChildVerification[]; parentVerifications: RecordVerification[] } {
+  // Group claims by normalized child name. null key = responsible_party (parent)
+  const groups = new Map<string | null, ClaimedRecord[]>();
+  for (const claim of claims) {
+    const key = normalizeChildKey(claim.childName);
+    const group = groups.get(key) || [];
+    group.push(claim);
+    groups.set(key, group);
+  }
+
+  // Extract parent (responsible_party) verifications — key is null
+  const parentClaims = groups.get(null) || [];
+  const parentVerifications = parentClaims
+    .map((c) => verifications.find((v) => v.claimed === c))
+    .filter((v): v is RecordVerification => !!v);
+  groups.delete(null);
+
+  // Build ChildVerification for each child group
+  const childVerifications: ChildVerification[] = [];
+  const processedKeys = new Set<string>();
+
+  for (const [key, groupClaims] of groups) {
+    if (key === null) continue;
+    processedKeys.add(key);
+
+    const groupVerifications = groupClaims
+      .map((c) => verifications.find((v) => v.claimed === c))
+      .filter((v): v is RecordVerification => !!v);
+
+    const patientV = groupVerifications.find((v) => v.claimed.type === 'patient');
+    const appointmentV = groupVerifications.find((v) => v.claimed.type === 'appointment');
+
+    // Use the original casing from the first claim in the group
+    const displayName = groupClaims[0].childName || key;
+
+    childVerifications.push({
+      childName: displayName,
+      patientRecordStatus: recordStatus(patientV),
+      appointmentRecordStatus: recordStatus(appointmentV),
+      patientVerification: patientV,
+      appointmentVerification: appointmentV,
+      details: groupVerifications,
+    });
+  }
+
+  // Cross-reference with intent's childNames — add 'fail' for missing children
+  const intentChildNames = intent.bookingDetails?.childNames || [];
+  for (const intentChild of intentChildNames) {
+    const normalizedIntentChild = normalizeChildKey(intentChild);
+    if (normalizedIntentChild && !processedKeys.has(normalizedIntentChild)) {
+      childVerifications.push({
+        childName: intentChild,
+        patientRecordStatus: 'fail',
+        appointmentRecordStatus: 'fail',
+        details: [],
+      });
+    }
+  }
+
+  return { childVerifications, parentVerifications };
+}
+
+/**
+ * Build a human-readable summary string.
+ */
+function buildSummary(
+  childVerifications: ChildVerification[],
+  parentVerifications: RecordVerification[],
+  isBookingIntent: boolean,
+): string {
+  if (!isBookingIntent) {
+    return 'No booking records to verify';
+  }
+
+  const parts: string[] = [];
+
+  // Parent status
+  if (parentVerifications.length > 0) {
+    const parentOk = parentVerifications.every((v) => v.exists && v.mismatches.length === 0);
+    parts.push(`Parent record: ${parentOk ? 'verified' : 'not found'}`);
+  }
+
+  // Child summary
+  if (childVerifications.length === 0) {
+    parts.push('No child records found');
+  } else if (childVerifications.length === 1) {
+    const cv = childVerifications[0];
+    parts.push(`Verified: patient record ${cv.patientRecordStatus}, appointment ${cv.appointmentRecordStatus}`);
+  } else {
+    const fullyVerified = childVerifications.filter(
+      (cv) => cv.patientRecordStatus === 'pass' && cv.appointmentRecordStatus === 'pass'
+    ).length;
+    const total = childVerifications.length;
+    const childDetails = childVerifications
+      .map((cv) => {
+        const ok = cv.patientRecordStatus === 'pass' && cv.appointmentRecordStatus === 'pass';
+        if (ok) return `${cv.childName}: pass`;
+        const failures: string[] = [];
+        if (cv.patientRecordStatus !== 'pass') failures.push('no patient record');
+        if (cv.appointmentRecordStatus !== 'pass') failures.push('no appointment record');
+        return `${cv.childName}: fail - ${failures.join(', ')}`;
+      })
+      .join(', ');
+    parts.push(`Verified ${fullyVerified}/${total} children fully (${childDetails})`);
+  }
+
+  return parts.join('. ');
+}
+
 /**
  * Verify fulfillment for a session by extracting claimed records from observations
  * and checking them against Cloud9 production API.
  */
 export async function verifyFulfillment(
-  sessionId: string,
+  _sessionId: string,
   observations: any[],
   intent: CallerIntent,
 ): Promise<FulfillmentVerdict> {
   const claims = extractClaimedRecords(observations, intent);
+  const isBookingIntent = intent.type === 'booking' || intent.type === 'rescheduling';
 
   if (claims.length === 0) {
     return {
       status: 'no_claims',
       verifications: [],
       childVerifications: [],
-      summary: 'No verifiable claims found in session observations',
+      summary: isBookingIntent
+        ? 'Booking intent detected but no verifiable claims found in session observations'
+        : 'No verifiable claims found in session observations',
       verifiedAt: new Date().toISOString(),
     };
   }
@@ -281,48 +430,40 @@ export async function verifyFulfillment(
     await sleep(200);
   }
 
-  // Build child verifications by grouping patient + appointment per child
-  const childVerifications: ChildVerification[] = [];
-  const apptClaims = claims.filter((c) => c.type === 'appointment');
+  // Build per-child verifications with multi-child grouping
+  const { childVerifications, parentVerifications } = buildChildVerifications(claims, verifications, intent);
 
-  for (const apptClaim of apptClaims) {
-    const childName = apptClaim.claimedName || 'Unknown';
-    const apptVerification = verifications.find((v) => v.claimed === apptClaim);
-
-    // Find associated patient verification
-    let patientVerification: RecordVerification | undefined;
-    if (apptClaim.patientGuid) {
-      patientVerification = verifications.find(
-        (v) => v.claimed.type === 'patient' && v.claimed.guid === apptClaim.patientGuid
-      );
-    }
-
-    childVerifications.push({
-      childName,
-      patientVerification,
-      appointmentVerification: apptVerification,
-    });
-  }
-
-  // Compute overall status
-  const totalChecks = verifications.length;
-  const verified = verifications.filter((v) => v.exists && v.mismatches.length === 0).length;
-  const existsWithMismatch = verifications.filter((v) => v.exists && v.mismatches.length > 0).length;
-
+  // Compute overall status with multi-child awareness
   let status: FulfillmentStatus;
-  if (verified === totalChecks) {
-    status = 'verified';
-  } else if (verified > 0 || existsWithMismatch > 0) {
-    status = 'partial';
+
+  if (!isBookingIntent && claims.length === 0) {
+    status = 'no_claims';
+  } else if (childVerifications.length === 0 && parentVerifications.length === 0) {
+    // Only parent lookups, no child booking records
+    const allParentOk = parentVerifications.every((v) => v.exists && v.mismatches.length === 0);
+    status = allParentOk ? 'verified' : 'failed';
+  } else if (childVerifications.length > 0) {
+    const allChildrenPass = childVerifications.every(
+      (cv) => cv.patientRecordStatus === 'pass' && cv.appointmentRecordStatus === 'pass'
+    );
+    const anyChildPass = childVerifications.some(
+      (cv) => cv.patientRecordStatus === 'pass' || cv.appointmentRecordStatus === 'pass'
+    );
+
+    if (allChildrenPass) {
+      status = 'verified';
+    } else if (anyChildPass) {
+      status = 'partial';
+    } else {
+      status = 'failed';
+    }
   } else {
-    status = 'failed';
+    // Fallback: use record-level check
+    const verified = verifications.filter((v) => v.exists && v.mismatches.length === 0).length;
+    status = verified > 0 ? (verified === verifications.length ? 'verified' : 'partial') : 'failed';
   }
 
-  const summary = `${verified}/${totalChecks} records verified` +
-    (existsWithMismatch > 0 ? `, ${existsWithMismatch} with mismatches` : '') +
-    (totalChecks - verified - existsWithMismatch > 0
-      ? `, ${totalChecks - verified - existsWithMismatch} not found`
-      : '');
+  const summary = buildSummary(childVerifications, parentVerifications, isBookingIntent);
 
   return {
     status,
