@@ -10,6 +10,9 @@ import * as traceAnalysisController from '../controllers/traceAnalysisController
 
 const router = Router();
 
+// GET /api/trace-analysis/monitoring-results - Filtered monitoring results
+router.get('/monitoring-results', traceAnalysisController.getMonitoringResults);
+
 // GET /api/trace-analysis/:sessionId - Full session analysis
 router.get('/:sessionId', traceAnalysisController.analyzeSession);
 

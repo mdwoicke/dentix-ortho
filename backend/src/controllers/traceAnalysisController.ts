@@ -435,6 +435,99 @@ export async function verifySession(req: Request, res: Response): Promise<void> 
 }
 
 /**
+ * GET /api/trace-analysis/monitoring-results
+ *
+ * Query monitoring_results with filters: dateFrom, dateTo, status, intentType, sessionId, limit, offset.
+ */
+export async function getMonitoringResults(req: Request, res: Response): Promise<void> {
+  let db: BetterSqlite3.Database | null = null;
+
+  try {
+    db = getDb();
+
+    // Ensure monitoring_results table exists (may not if monitoring hasn't run yet)
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS monitoring_results (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL UNIQUE,
+        intent_type TEXT,
+        intent_confidence REAL,
+        verification_status TEXT,
+        verdict_summary TEXT,
+        diagnostic_status TEXT,
+        diagnostic_report_json TEXT,
+        analyzed_at TEXT NOT NULL DEFAULT (datetime('now')),
+        diagnosed_at TEXT
+      );
+    `);
+
+    const {
+      dateFrom,
+      dateTo,
+      status,
+      intentType,
+      sessionId,
+      limit: limitStr,
+      offset: offsetStr,
+    } = req.query as Record<string, string | undefined>;
+
+    const limit = limitStr ? parseInt(limitStr) : 50;
+    const offset = offsetStr ? parseInt(offsetStr) : 0;
+
+    const conditions: string[] = [];
+    const params: any[] = [];
+
+    if (dateFrom) {
+      conditions.push('mr.analyzed_at >= ?');
+      params.push(dateFrom);
+    }
+    if (dateTo) {
+      conditions.push('mr.analyzed_at <= ?');
+      params.push(dateTo + 'T23:59:59');
+    }
+    if (status) {
+      const statuses = status.split(',').map(s => s.trim());
+      conditions.push(`mr.verification_status IN (${statuses.map(() => '?').join(',')})`);
+      params.push(...statuses);
+    }
+    if (intentType) {
+      const types = intentType.split(',').map(s => s.trim());
+      conditions.push(`mr.intent_type IN (${types.map(() => '?').join(',')})`);
+      params.push(...types);
+    }
+    if (sessionId) {
+      conditions.push('mr.session_id LIKE ?');
+      params.push(`%${sessionId}%`);
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    // Count total
+    const countRow = db.prepare(
+      `SELECT COUNT(*) as total FROM monitoring_results mr ${whereClause}`
+    ).get(...params) as any;
+    const total = countRow?.total || 0;
+
+    // Fetch results with optional join to session_analysis for caller_intent_summary
+    const results = db.prepare(`
+      SELECT mr.*, sa.caller_intent_summary
+      FROM monitoring_results mr
+      LEFT JOIN session_analysis sa ON mr.session_id = sa.session_id
+      ${whereClause}
+      ORDER BY mr.analyzed_at DESC
+      LIMIT ? OFFSET ?
+    `).all(...params, limit, offset);
+
+    res.json({ results, total });
+  } catch (err: any) {
+    console.error('Error fetching monitoring results:', err);
+    res.status(500).json({ error: err.message });
+  } finally {
+    if (db) db.close();
+  }
+}
+
+/**
  * Build a unified transcript from all traces in a session, ordered chronologically.
  */
 function buildTranscript(traces: any[], observations: any[]): ConversationTurn[] {
