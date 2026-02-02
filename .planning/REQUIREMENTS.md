@@ -29,19 +29,19 @@
 
 ### Expert Agents
 
-- [ ] **EXPERT-01**: Node-RED Flow Expert agent/skill that deeply understands flow routing, session cache, API orchestration, chair selection, slot grouping, and can troubleshoot flow-level failures
-- [ ] **EXPERT-02**: Patient Tool Expert agent/skill that deeply understands patient lookup, creation, family linkage, sibling handling, and Cloud9 patient API interactions
-- [ ] **EXPERT-03**: Scheduling Tool Expert agent/skill that deeply understands slot search, appointment booking, reservation logic, multi-child scheduling, and Cloud9 appointment API interactions
-- [ ] **EXPERT-04**: System Prompt Expert agent/skill that deeply understands conversation flow design, persona rules, data gathering sequences, and edge case handling
-- [ ] **EXPERT-05**: Each expert agent is loaded with the current version of its artifact (Node-RED flow JSON, tool JS, prompt MD) as working context
+- [x] **EXPERT-01**: Node-RED Flow Expert agent/skill that deeply understands flow routing, session cache, API orchestration, chair selection, slot grouping, and can troubleshoot flow-level failures
+- [x] **EXPERT-02**: Patient Tool Expert agent/skill that deeply understands patient lookup, creation, family linkage, sibling handling, and Cloud9 patient API interactions
+- [x] **EXPERT-03**: Scheduling Tool Expert agent/skill that deeply understands slot search, appointment booking, reservation logic, multi-child scheduling, and Cloud9 appointment API interactions
+- [x] **EXPERT-04**: System Prompt Expert agent/skill that deeply understands conversation flow design, persona rules, data gathering sequences, and edge case handling
+- [x] **EXPERT-05**: Each expert agent is loaded with the current version of its artifact (Node-RED flow JSON, tool JS, prompt MD) as working context
 
 ### Diagnostics
 
-- [ ] **DIAG-01**: When fulfillment gaps detected, diagnostic orchestrator routes to the relevant expert agent(s) based on where the failure occurred in the call flow
-- [ ] **DIAG-02**: Expert agents produce markdown report: root cause identification, affected code artifact, confidence level, call flow context
-- [ ] **DIAG-03**: Diagnostic report includes PR-ready code diff for the failing artifact (Node-RED function, tool JS, prompt)
-- [ ] **DIAG-04**: System correlates failures with Node-RED flow deploy versions to identify regression timing
-- [ ] **DIAG-05**: Expert agents can be invoked standalone for manual troubleshooting outside the automated pipeline
+- [x] **DIAG-01**: When fulfillment gaps detected, diagnostic orchestrator routes to the relevant expert agent(s) based on where the failure occurred in the call flow
+- [x] **DIAG-02**: Expert agents produce markdown report: root cause identification, affected code artifact, confidence level, call flow context
+- [x] **DIAG-03**: Diagnostic report includes PR-ready code diff for the failing artifact (Node-RED function, tool JS, prompt)
+- [x] **DIAG-04**: System correlates failures with Node-RED flow deploy versions to identify regression timing
+- [x] **DIAG-05**: Expert agents can be invoked standalone for manual troubleshooting outside the automated pipeline
 
 ### Replay
 
@@ -113,16 +113,16 @@
 | UI-02 | Phase 3 | Complete |
 | UI-03 | Phase 3 | Complete |
 | UI-04 | Phase 3 | Complete |
-| EXPERT-01 | Phase 4 | Pending |
-| EXPERT-02 | Phase 4 | Pending |
-| EXPERT-03 | Phase 4 | Pending |
-| EXPERT-04 | Phase 4 | Pending |
-| EXPERT-05 | Phase 4 | Pending |
-| DIAG-01 | Phase 4 | Pending |
-| DIAG-02 | Phase 4 | Pending |
-| DIAG-03 | Phase 4 | Pending |
-| DIAG-04 | Phase 4 | Pending |
-| DIAG-05 | Phase 4 | Pending |
+| EXPERT-01 | Phase 4 | Complete |
+| EXPERT-02 | Phase 4 | Complete |
+| EXPERT-03 | Phase 4 | Complete |
+| EXPERT-04 | Phase 4 | Complete |
+| EXPERT-05 | Phase 4 | Complete |
+| DIAG-01 | Phase 4 | Complete |
+| DIAG-02 | Phase 4 | Complete |
+| DIAG-03 | Phase 4 | Complete |
+| DIAG-04 | Phase 4 | Complete |
+| DIAG-05 | Phase 4 | Complete |
 | REPLAY-01 | Phase 5 | Pending |
 | REPLAY-02 | Phase 5 | Pending |
 | REPLAY-03 | Phase 5 | Pending |

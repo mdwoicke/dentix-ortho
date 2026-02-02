@@ -15,7 +15,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Trace Foundation** - Deterministic trace parsing, transcript extraction, and intent classification
 - [x] **Phase 2: Fulfillment Verification** - Cross-reference intent against live Cloud9 records
 - [x] **Phase 3: Trace Analysis UI** - Dedicated page for interactive trace investigation
-- [ ] **Phase 4: Expert Agents & Diagnostics** - LLM-powered root cause analysis with domain expert agents
+- [x] **Phase 4: Expert Agents & Diagnostics** - LLM-powered root cause analysis with domain expert agents
 - [ ] **Phase 5: Replay** - Test harness generation and regression detection via trace replay
 - [ ] **Phase 6: Automated Monitoring** - Continuous post-call analysis pipeline with alert integration
 
@@ -124,6 +124,6 @@ Note: Phase 3 and Phase 5 can proceed in parallel with Phase 2 and Phase 4 respe
 | 1. Trace Foundation | 3/3 | Complete | 2026-02-02 |
 | 2. Fulfillment Verification | 2/2 | Complete | 2026-02-02 |
 | 3. Trace Analysis UI | 2/2 | Complete | 2026-02-02 |
-| 4. Expert Agents & Diagnostics | 0/3 | Not started | - |
+| 4. Expert Agents & Diagnostics | 3/3 | Complete | 2026-02-02 |
 | 5. Replay | 0/2 | Not started | - |
 | 6. Automated Monitoring | 0/2 | Not started | - |
