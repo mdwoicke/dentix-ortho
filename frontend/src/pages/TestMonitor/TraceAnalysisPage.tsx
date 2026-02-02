@@ -9,9 +9,11 @@ import { PageHeader } from '../../components/layout';
 import { Button, Card, Spinner } from '../../components/ui';
 import {
   getTraceAnalysis,
+  diagnoseProductionTrace,
   type TraceAnalysisResponse,
   type TraceAnalysisTranscriptTurn,
   type TraceAnalysisToolStep,
+  type DiagnosisResult,
 } from '../../services/api/testMonitorApi';
 
 // ============================================================================
@@ -393,6 +395,80 @@ function VerificationCard({ verification }: { verification: TraceAnalysisRespons
   );
 }
 
+function DiagnosticReportCard({ diagnosis }: { diagnosis: DiagnosisResult }) {
+  return (
+    <Card>
+      <div className="p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <Icons.AlertCircle />
+          <h3 className="text-base font-semibold text-gray-900 dark:text-white">Diagnostic Report</h3>
+          {diagnosis.fixesGenerated > 0 && (
+            <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300">
+              {diagnosis.fixesGenerated} fix{diagnosis.fixesGenerated !== 1 ? 'es' : ''} generated
+            </span>
+          )}
+        </div>
+
+        {/* Summary message */}
+        <p className="text-sm text-gray-700 dark:text-gray-300 mb-3">{diagnosis.message}</p>
+
+        {/* Analysis details */}
+        {diagnosis.analysis && (
+          <div className="space-y-3">
+            {diagnosis.analysis.rootCause && (
+              <div className="p-3 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
+                <div className="text-xs font-medium text-red-600 dark:text-red-400 uppercase tracking-wider mb-1">Root Cause</div>
+                <p className="text-sm text-red-800 dark:text-red-300">{diagnosis.analysis.rootCause}</p>
+              </div>
+            )}
+            {diagnosis.analysis.summary && (
+              <div className="p-3 rounded-lg bg-gray-50 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600">
+                <div className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">Summary</div>
+                <p className="text-sm text-gray-700 dark:text-gray-300">{diagnosis.analysis.summary}</p>
+              </div>
+            )}
+            {diagnosis.analysis.issues && diagnosis.analysis.issues.length > 0 && (
+              <div className="p-3 rounded-lg bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800">
+                <div className="text-xs font-medium text-yellow-600 dark:text-yellow-400 uppercase tracking-wider mb-1">Issues Found</div>
+                <ul className="space-y-1">
+                  {diagnosis.analysis.issues.map((issue, idx) => (
+                    <li key={idx} className="text-sm text-yellow-800 dark:text-yellow-300 flex gap-2">
+                      <span className="text-yellow-500">-</span>
+                      <span>{issue}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Root cause breakdown from summary */}
+        {diagnosis.summary?.rootCauseBreakdown && Object.keys(diagnosis.summary.rootCauseBreakdown).length > 0 && (
+          <div className="mt-3 p-3 rounded-lg bg-gray-50 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600">
+            <div className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">Root Cause Breakdown</div>
+            <div className="grid grid-cols-2 gap-2 text-sm">
+              {Object.entries(diagnosis.summary.rootCauseBreakdown).map(([cause, count]) => (
+                <div key={cause} className="flex justify-between">
+                  <span className="text-gray-600 dark:text-gray-400">{cause}:</span>
+                  <span className="font-medium text-gray-900 dark:text-white">{count}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Metadata */}
+        <div className="mt-3 flex items-center gap-4 text-xs text-gray-400 dark:text-gray-500">
+          {diagnosis.provider && <span>Provider: {diagnosis.provider}</span>}
+          {diagnosis.durationMs && <span>Duration: {(diagnosis.durationMs / 1000).toFixed(1)}s</span>}
+          {diagnosis.runId && <span className="font-mono">Run: {diagnosis.runId}</span>}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 // ============================================================================
 // MAIN PAGE COMPONENT
 // ============================================================================
@@ -402,8 +478,11 @@ export default function TraceAnalysisPage() {
 
   const [sessionIdInput, setSessionIdInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [verifyLoading, setVerifyLoading] = useState(false);
+  const [diagnoseLoading, setDiagnoseLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<TraceAnalysisResponse | null>(null);
+  const [diagnosisResult, setDiagnosisResult] = useState<DiagnosisResult | null>(null);
 
   const analyzeSession = useCallback(async (sessionId: string, opts?: { force?: boolean; verify?: boolean }) => {
     if (!sessionId.trim()) return;
@@ -411,6 +490,7 @@ export default function TraceAnalysisPage() {
     try {
       setLoading(true);
       setError(null);
+      setDiagnosisResult(null);
       const data = await getTraceAnalysis(sessionId.trim(), {
         force: opts?.force,
         verify: opts?.verify,
@@ -446,9 +526,32 @@ export default function TraceAnalysisPage() {
     }
   };
 
-  const handleVerify = () => {
-    if (result?.sessionId) {
-      analyzeSession(result.sessionId, { verify: true, force: true });
+  const handleVerify = async () => {
+    if (!result?.sessionId) return;
+    try {
+      setVerifyLoading(true);
+      setError(null);
+      const data = await getTraceAnalysis(result.sessionId, { verify: true, force: true });
+      setResult(data);
+    } catch (err: any) {
+      setError(err.message || 'Verification failed');
+    } finally {
+      setVerifyLoading(false);
+    }
+  };
+
+  const handleDiagnose = async () => {
+    if (!result?.traces?.length) return;
+    const traceId = result.traces[0].traceId;
+    try {
+      setDiagnoseLoading(true);
+      setError(null);
+      const data = await diagnoseProductionTrace(traceId);
+      setDiagnosisResult(data);
+    } catch (err: any) {
+      setError(err.message || 'Diagnosis failed');
+    } finally {
+      setDiagnoseLoading(false);
     }
   };
 
@@ -482,11 +585,15 @@ export default function TraceAnalysisPage() {
             {result && (
               <>
                 <Button variant="secondary" onClick={handleRefresh} disabled={loading} title="Force re-analyze (bypass cache)">
-                  <Icons.Refresh />
+                  {loading ? <Spinner size="sm" /> : <Icons.Refresh />}
                 </Button>
-                <Button variant="secondary" onClick={handleVerify} disabled={loading} title="Run fulfillment verification">
-                  <Icons.Shield />
+                <Button variant="secondary" onClick={handleVerify} disabled={verifyLoading || loading} title="Run fulfillment verification">
+                  {verifyLoading ? <Spinner size="sm" /> : <Icons.Shield />}
                   <span className="ml-1">Verify</span>
+                </Button>
+                <Button variant="secondary" onClick={handleDiagnose} disabled={diagnoseLoading || loading || !result.traces?.length} title="Diagnose & generate fixes">
+                  {diagnoseLoading ? <Spinner size="sm" /> : <Icons.AlertCircle />}
+                  <span className="ml-1">Diagnose</span>
                 </Button>
               </>
             )}
@@ -530,6 +637,9 @@ export default function TraceAnalysisPage() {
 
           {/* Verification (if present) */}
           {result.verification && <VerificationCard verification={result.verification} />}
+
+          {/* Diagnostic Report (if present) */}
+          {diagnosisResult && <DiagnosticReportCard diagnosis={diagnosisResult} />}
 
           {/* Intent Classification */}
           <Card>
