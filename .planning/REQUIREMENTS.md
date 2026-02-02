@@ -96,19 +96,19 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| TRACE-01 | Phase 1 | Pending |
-| TRACE-02 | Phase 1 | Pending |
-| TRACE-03 | Phase 1 | Pending |
-| TRACE-04 | Phase 1 | Pending |
-| INTENT-01 | Phase 1 | Pending |
-| INTENT-02 | Phase 1 | Pending |
-| INTENT-03 | Phase 1 | Pending |
-| INTENT-04 | Phase 1 | Pending |
-| VERIFY-01 | Phase 2 | Pending |
-| VERIFY-02 | Phase 2 | Pending |
-| VERIFY-03 | Phase 2 | Pending |
-| VERIFY-04 | Phase 2 | Pending |
-| VERIFY-05 | Phase 2 | Pending |
+| TRACE-01 | Phase 1 | Complete |
+| TRACE-02 | Phase 1 | Complete |
+| TRACE-03 | Phase 1 | Complete |
+| TRACE-04 | Phase 1 | Complete |
+| INTENT-01 | Phase 1 | Complete |
+| INTENT-02 | Phase 1 | Complete |
+| INTENT-03 | Phase 1 | Complete |
+| INTENT-04 | Phase 1 | Complete |
+| VERIFY-01 | Phase 2 | Complete |
+| VERIFY-02 | Phase 2 | Complete |
+| VERIFY-03 | Phase 2 | Complete |
+| VERIFY-04 | Phase 2 | Complete |
+| VERIFY-05 | Phase 2 | Complete |
 | UI-01 | Phase 3 | Complete |
 | UI-02 | Phase 3 | Complete |
 | UI-03 | Phase 3 | Complete |
