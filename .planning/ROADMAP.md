@@ -93,11 +93,11 @@ Plans:
   1. System generates test harness from a trace that mocks Cloud9 API responses to isolate Node-RED/tool logic failures
   2. System can re-send caller messages through Flowise to reproduce issues at the integration layer
   3. When Node-RED does not produce expected results, system tests Cloud9 API directly to isolate whether the bottleneck is Cloud9 or tool logic
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 05-01: Mock harness generation from trace data
-- [ ] 05-02: Flowise replay and Cloud9 direct testing
+- [ ] 05-01-PLAN.md -- Mock harness generation and mock replay mode for replayService
+- [ ] 05-02-PLAN.md -- Flowise end-to-end replay and Cloud9 direct API testing
 
 ### Phase 6: Automated Monitoring
 **Goal**: Every completed call is automatically checked and failures trigger the full diagnostic pipeline
