@@ -107,11 +107,11 @@ Plans:
   1. System runs lightweight intent-vs-fulfillment check automatically on every completed call without manual intervention
   2. When alert engine flags issues, system auto-triggers full trace analysis with diagnostics
   3. User can filter traces by date, pass/fail status, intent type, and search by session ID
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 06-01: Post-call automatic analysis pipeline
-- [ ] 06-02: Alert integration and trace filtering
+- [ ] 06-01-PLAN.md -- MonitoringService pipeline with auto-analysis and diagnostic triggering
+- [ ] 06-02-PLAN.md -- Monitoring results API with filtering and CallTracePage filter UI
 
 ## Progress
 
