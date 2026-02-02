@@ -78,12 +78,12 @@ Plans:
   3. Diagnostic report includes PR-ready code diff for the failing artifact
   4. Expert agents can be invoked standalone for manual troubleshooting outside the automated pipeline
   5. System correlates failures with Node-RED flow deploy versions to identify regression timing
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 04-01: Expert agent framework and artifact loading
-- [ ] 04-02: Diagnostic orchestrator and routing logic
-- [ ] 04-03: Report generation with PR-ready diffs and version correlation
+- [ ] 04-01-PLAN.md -- Expert agent framework with 4 domain agents and deploy events table
+- [ ] 04-02-PLAN.md -- Diagnostic orchestrator, routing logic, and standalone expert endpoints
+- [ ] 04-03-PLAN.md -- PR-ready unified diffs and deploy event recording
 
 ### Phase 5: Replay
 **Goal**: User can reproduce a failed call scenario to verify whether a fix resolves it
