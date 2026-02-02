@@ -10,7 +10,49 @@
 
 import fs from 'fs';
 import path from 'path';
+import BetterSqlite3 from 'better-sqlite3';
 import { getNodeRedConfig, getNodeRedAuthHeader, isNodeRedConfigured } from '../config/nodered';
+
+// Path to test-agent database for deploy event tracking
+const TEST_AGENT_DB_PATH = path.resolve(__dirname, '../../../test-agent/data/test-results.db');
+
+/**
+ * Record a deploy event in artifact_deploy_events for version correlation.
+ */
+function recordDeployEvent(rev: string, description: string): void {
+  try {
+    const db = new BetterSqlite3(TEST_AGENT_DB_PATH, { readonly: false });
+    try {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS artifact_deploy_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          artifact_key TEXT NOT NULL,
+          version INTEGER NOT NULL,
+          deployed_at TEXT NOT NULL DEFAULT (datetime('now')),
+          deploy_method TEXT,
+          nodered_rev TEXT,
+          description TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+
+      // Get current nodered_flow version from prompt_working_copies
+      const row = db.prepare(
+        'SELECT version FROM prompt_working_copies WHERE file_key = ?'
+      ).get('nodered_flow') as { version: number } | undefined;
+      const version = row?.version ?? 0;
+
+      db.prepare(`
+        INSERT INTO artifact_deploy_events (artifact_key, version, deploy_method, nodered_rev, description)
+        VALUES ('nodered_flow', ?, 'nodered_deploy', ?, ?)
+      `).run(version, rev, description);
+    } finally {
+      db.close();
+    }
+  } catch (err: unknown) {
+    console.warn(`[NodeRED Deploy] Failed to record deploy event: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
 
 // Path to V1 flow source file
 const V1_FLOW_PATH = path.resolve(__dirname, '../../../docs/v1/nodered_Cloud9_flows.json');
@@ -70,6 +112,9 @@ export interface CopyFlowResult {
   error?: string;
 }
 
+// v9: Timeout configuration for Node-RED Admin API calls
+const NODERED_FETCH_TIMEOUT_MS = 30000; // 30 seconds
+
 /**
  * Get current flows from Node-RED Admin API
  * Uses v2 API to get revision ID for optimistic concurrency
@@ -82,22 +127,31 @@ export async function getCurrentFlows(): Promise<NodeRedFlowsResponse> {
   const config = getNodeRedConfig();
   const url = `${config.adminUrl}/flows`;
 
-  const response = await fetch(url, {
-    method: 'GET',
-    headers: {
-      Authorization: getNodeRedAuthHeader(),
-      'Node-RED-API-Version': 'v2',
-      Accept: 'application/json',
-    },
-  });
+  // v9: Add timeout using AbortController
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), NODERED_FETCH_TIMEOUT_MS);
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to get flows from Node-RED: ${response.status} - ${errorText}`);
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Authorization: getNodeRedAuthHeader(),
+        'Node-RED-API-Version': 'v2',
+        Accept: 'application/json',
+      },
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Failed to get flows from Node-RED: ${response.status} - ${errorText}`);
+    }
+
+    const data = await response.json();
+    return data as NodeRedFlowsResponse;
+  } finally {
+    clearTimeout(timeoutId);
   }
-
-  const data = await response.json();
-  return data as NodeRedFlowsResponse;
 }
 
 /**
@@ -155,19 +209,29 @@ export async function deployFlows(
       currentRev = currentFlows.rev;
     }
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        Authorization: getNodeRedAuthHeader(),
-        'Node-RED-API-Version': 'v2',
-        'Node-RED-Deployment-Type': 'full',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        rev: currentRev,
-        flows: flows,
-      }),
-    });
+    // v9: Add timeout using AbortController (60s for deploy - larger payloads)
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 60000);
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          Authorization: getNodeRedAuthHeader(),
+          'Node-RED-API-Version': 'v2',
+          'Node-RED-Deployment-Type': 'full',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          rev: currentRev,
+          flows: flows,
+        }),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     if (response.ok) {
       const data = await response.json() as { rev: string };
@@ -302,6 +366,12 @@ export async function deployFromV1File(options: {
 
     console.log(`[NodeRED Deploy] Successfully deployed ${flows.length} nodes`);
     console.log(`[NodeRED Deploy] Previous rev: ${deployResult.previousRev}, New rev: ${deployResult.newRev}`);
+
+    // Record deploy event for failure-version correlation
+    recordDeployEvent(
+      deployResult.newRev,
+      `Deployed ${flows.length} nodes from V1 file`
+    );
 
     return {
       success: true,

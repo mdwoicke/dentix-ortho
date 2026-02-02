@@ -131,6 +131,28 @@ export function detectUnescapedBraces(content: string): {
   };
 }
 
+// ============================================================================
+// ARTIFACT DEPLOY EVENTS TABLE
+// ============================================================================
+
+/**
+ * Ensure the artifact_deploy_events table exists for deploy tracking.
+ */
+function ensureArtifactDeployEventsTable(db: BetterSqlite3.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS artifact_deploy_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      artifact_key TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      deployed_at TEXT NOT NULL DEFAULT (datetime('now')),
+      deploy_method TEXT,
+      nodered_rev TEXT,
+      description TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+}
+
 // Path to test-agent database
 const TEST_AGENT_DB_PATH = path.resolve(__dirname, '../../../test-agent/data/test-results.db');
 
@@ -718,6 +740,17 @@ export function applyFix(fileKey: string, fixId: string): { newVersion: number; 
       UPDATE generated_fixes SET status = 'applied' WHERE fix_id = ?
     `).run(fixId);
 
+    // Record deploy event for version correlation
+    try {
+      ensureArtifactDeployEventsTable(db);
+      db.prepare(`
+        INSERT INTO artifact_deploy_events (artifact_key, version, deploy_method, description)
+        VALUES (?, ?, 'fix_applied', ?)
+      `).run(fileKey, newVersion, fix.change_description);
+    } catch (deployErr: unknown) {
+      console.warn(`[promptService] Failed to record deploy event: ${deployErr instanceof Error ? deployErr.message : String(deployErr)}`);
+    }
+
     return {
       newVersion,
       content: contentToSave,
@@ -1096,6 +1129,17 @@ export function saveNewVersion(
       INSERT INTO prompt_version_history (file_key, version, content, fix_id, change_description, created_at)
       VALUES (?, ?, ?, NULL, ?, ?)
     `).run(fileKey, newVersion, contentToSave, changeDescription, now);
+
+    // Record deploy event for version correlation
+    try {
+      ensureArtifactDeployEventsTable(db);
+      db.prepare(`
+        INSERT INTO artifact_deploy_events (artifact_key, version, deploy_method, description)
+        VALUES (?, ?, 'prompt_update', ?)
+      `).run(fileKey, newVersion, changeDescription);
+    } catch (deployErr: unknown) {
+      console.warn(`[promptService] Failed to record deploy event: ${deployErr instanceof Error ? deployErr.message : String(deployErr)}`);
+    }
 
     return {
       newVersion,
