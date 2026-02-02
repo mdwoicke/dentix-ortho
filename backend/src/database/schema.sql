@@ -252,7 +252,12 @@ CREATE TABLE IF NOT EXISTS prod_test_records (
   -- Timestamps
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now')),
-  cloud9_created_at TEXT      -- When Cloud9 actually created the record
+  cloud9_created_at TEXT,     -- When Cloud9 actually created the record
+
+  -- v72 Individual Patient Model columns
+  family_id TEXT,             -- Links all family members together (parent + children)
+  is_child INTEGER DEFAULT 0, -- 1 if this is a child record, 0 if parent
+  parent_patient_guid TEXT    -- For child records, references the parent's patient_guid
 );
 
 -- Indexes for common queries
@@ -262,3 +267,26 @@ CREATE INDEX IF NOT EXISTS idx_prod_test_records_patient_guid ON prod_test_recor
 CREATE INDEX IF NOT EXISTS idx_prod_test_records_appointment_guid ON prod_test_records(appointment_guid);
 CREATE INDEX IF NOT EXISTS idx_prod_test_records_trace_id ON prod_test_records(trace_id);
 CREATE INDEX IF NOT EXISTS idx_prod_test_records_created_at ON prod_test_records(created_at);
+
+-- v72 Individual Patient Model indexes
+CREATE INDEX IF NOT EXISTS idx_prod_test_records_family_id ON prod_test_records(family_id);
+CREATE INDEX IF NOT EXISTS idx_prod_test_records_parent_guid ON prod_test_records(parent_patient_guid);
+CREATE INDEX IF NOT EXISTS idx_prod_test_records_is_child ON prod_test_records(is_child);
+
+-- Session analysis cache (Phase 1: Trace Foundation)
+CREATE TABLE IF NOT EXISTS session_analysis (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT NOT NULL,
+  caller_intent_type TEXT,
+  caller_intent_confidence REAL,
+  caller_intent_summary TEXT,
+  booking_details_json TEXT,
+  tool_sequence_json TEXT,
+  completion_rate REAL,
+  analyzed_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(session_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_analysis_session ON session_analysis(session_id);
+CREATE INDEX IF NOT EXISTS idx_session_analysis_intent ON session_analysis(caller_intent_type);

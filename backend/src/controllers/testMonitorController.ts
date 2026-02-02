@@ -37,7 +37,7 @@ const FILE_KEY_DISPLAY_NAMES: Record<string, string> = {
 };
 
 // ConversationTurn type for trace diagnosis
-interface ConversationTurn {
+export interface ConversationTurn {
   role: 'user' | 'assistant';
   content: string;
   timestamp: string;
@@ -2718,6 +2718,17 @@ export async function startExecution(req: Request, res: Response, next: NextFunc
           args.push('--flowise-config-name', `"${flowiseConfigName}"`);
         }
         console.log(`[Execution] Using Flowise config: ${flowiseConfigName || flowiseConfigId}`);
+      }
+
+      // If no Flowise config resolved yet, use the default from flowise_configs
+      if (!flowiseConfigName) {
+        const defaultConfig = db.prepare('SELECT id, name FROM flowise_configs WHERE is_default = 1').get() as { id: number; name: string } | undefined;
+        if (defaultConfig) {
+          flowiseConfigName = defaultConfig.name;
+          args.push('--flowise-config-id', String(defaultConfig.id));
+          args.push('--flowise-config-name', `"${defaultConfig.name}"`);
+          console.log(`[Execution] Using default Flowise config: ${defaultConfig.name} (id=${defaultConfig.id})`);
+        }
       }
 
       if (langfuseConfigId && !langfuseConfigName) {
@@ -7999,10 +8010,12 @@ export async function getEnvironmentPresets(
       SELECT
         ep.id, ep.name, ep.description, ep.flowise_config_id, ep.langfuse_config_id,
         ep.is_default, ep.created_at, ep.updated_at,
-        fc.name as flowise_config_name,
+        COALESCE(fc.name, dfc.name) as flowise_config_name,
+        COALESCE(ep.flowise_config_id, dfc.id) as resolved_flowise_config_id,
         lc.name as langfuse_config_name
       FROM environment_presets ep
       LEFT JOIN flowise_configs fc ON ep.flowise_config_id = fc.id
+      LEFT JOIN flowise_configs dfc ON dfc.is_default = 1 AND ep.flowise_config_id IS NULL
       LEFT JOIN langfuse_configs lc ON ep.langfuse_config_id = lc.id
       ORDER BY ep.is_default DESC, ep.name ASC
     `).all() as any[];
@@ -8013,9 +8026,9 @@ export async function getEnvironmentPresets(
         id: p.id,
         name: p.name,
         description: p.description,
-        flowiseConfigId: p.flowise_config_id,
+        flowiseConfigId: p.resolved_flowise_config_id,
         langfuseConfigId: p.langfuse_config_id,
-        flowiseConfigName: p.flowise_config_name,
+        flowiseConfigName: p.flowise_config_name ? (p.flowise_config_id ? p.flowise_config_name : `${p.flowise_config_name} (Default)`) : null,
         langfuseConfigName: p.langfuse_config_name,
         isDefault: !!p.is_default,
         createdAt: p.created_at,
@@ -8048,10 +8061,12 @@ export async function getActiveEnvironmentPreset(
       SELECT
         ep.id, ep.name, ep.description, ep.flowise_config_id, ep.langfuse_config_id,
         ep.is_default, ep.created_at, ep.updated_at,
-        fc.name as flowise_config_name,
+        COALESCE(fc.name, dfc.name) as flowise_config_name,
+        COALESCE(ep.flowise_config_id, dfc.id) as resolved_flowise_config_id,
         lc.name as langfuse_config_name
       FROM environment_presets ep
       LEFT JOIN flowise_configs fc ON ep.flowise_config_id = fc.id
+      LEFT JOIN flowise_configs dfc ON dfc.is_default = 1 AND ep.flowise_config_id IS NULL
       LEFT JOIN langfuse_configs lc ON ep.langfuse_config_id = lc.id
       WHERE ep.is_default = 1
     `).get() as any;
@@ -8067,9 +8082,9 @@ export async function getActiveEnvironmentPreset(
         id: preset.id,
         name: preset.name,
         description: preset.description,
-        flowiseConfigId: preset.flowise_config_id,
+        flowiseConfigId: preset.resolved_flowise_config_id,
         langfuseConfigId: preset.langfuse_config_id,
-        flowiseConfigName: preset.flowise_config_name,
+        flowiseConfigName: preset.flowise_config_name ? (preset.flowise_config_id ? preset.flowise_config_name : `${preset.flowise_config_name} (Default)`) : null,
         langfuseConfigName: preset.langfuse_config_name,
         isDefault: true,
         createdAt: preset.created_at,
@@ -8429,7 +8444,7 @@ function transformObservationRow(row: any) {
 /**
  * Transform Langfuse trace data to conversation turns for TranscriptViewer
  */
-function transformToConversationTurns(trace: any, _observations: any[]): any[] {
+export function transformToConversationTurns(trace: any, _observations: any[]): any[] {
   const turns: any[] = [];
 
   // Parse input/output from trace
@@ -8485,7 +8500,7 @@ const EXCLUDED_OBSERVATION_NAMES = [
 /**
  * Filter out internal Langchain execution traces that add noise
  */
-function filterInternalTraces(observations: any[]): any[] {
+export function filterInternalTraces(observations: any[]): any[] {
   return observations.filter(obs => {
     // Exclude internal Langchain traces by name
     if (obs.name && EXCLUDED_OBSERVATION_NAMES.some(excluded => obs.name.includes(excluded))) {
@@ -8594,14 +8609,26 @@ export async function getProductionTrace(
 
     let result = service.getTrace(traceId);
 
-    // If not found locally and configId provided, try on-demand import from Langfuse
+    // If not found locally, try on-demand import from Langfuse
     if (!result && configId !== null) {
       console.log(`[getProductionTrace] Trace ${traceId} not found locally, attempting on-demand import from config ${configId}`);
       try {
         result = await service.importSingleTrace(traceId, configId);
       } catch (importError: any) {
         console.error(`[getProductionTrace] On-demand import failed:`, importError.message);
-        // Fall through to 404 if import fails
+      }
+    }
+
+    // If still not found and no configId, try all configs
+    if (!result && configId === null) {
+      const configs = db!.prepare(`SELECT id FROM langfuse_configs ORDER BY id`).all() as any[];
+      for (const cfg of configs) {
+        try {
+          result = await service.importSingleTrace(traceId, (cfg as any).id);
+          if (result) break;
+        } catch {
+          // continue to next config
+        }
       }
     }
 
@@ -8609,7 +8636,6 @@ export async function getProductionTrace(
       res.status(404).json({
         success: false,
         error: 'Trace not found',
-        hint: configId ? 'Trace not found in Langfuse either' : 'Provide configId query param to attempt on-demand import from Langfuse'
       });
       return;
     }
@@ -9649,10 +9675,35 @@ export async function getProductionSession(
     db = getTestAgentDbWritable();
     const service = new LangfuseTraceService(db);
 
-    const result = service.getSession(
+    const parsedConfigId = configId ? parseInt(configId as string) : null;
+
+    let result = service.getSession(
       sessionId,
-      configId ? parseInt(configId as string) : undefined
+      parsedConfigId || undefined
     );
+
+    // If not found locally, try on-demand import from Langfuse
+    if (!result && parsedConfigId !== null) {
+      console.log(`[getProductionSession] Session ${sessionId} not found locally, attempting on-demand import from config ${parsedConfigId}`);
+      try {
+        result = await service.importSessionTraces(sessionId, parsedConfigId);
+      } catch (importError: any) {
+        console.error(`[getProductionSession] On-demand import failed:`, importError.message);
+      }
+    }
+
+    // If still not found and no configId, try all configs
+    if (!result && parsedConfigId === null) {
+      const configs = db!.prepare(`SELECT id FROM langfuse_configs ORDER BY id`).all() as any[];
+      for (const cfg of configs) {
+        try {
+          result = await service.importSessionTraces(sessionId, cfg.id);
+          if (result) break;
+        } catch {
+          // continue to next config
+        }
+      }
+    }
 
     if (!result) {
       res.status(404).json({ success: false, error: 'Session not found' });
@@ -10676,7 +10727,7 @@ export async function purgeAndRefreshCache(
       });
 
       if (refreshResponse.ok) {
-        const data = await refreshResponse.json();
+        const data = await refreshResponse.json() as { totalSlotsCached?: number };
         results.refresh = {
           success: true,
           totalSlots: data.totalSlotsCached || 0,
