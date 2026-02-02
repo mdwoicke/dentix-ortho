@@ -1651,6 +1651,11 @@ export interface ProdTestRecord {
   updated_at: string;
   cloud9_created_at: string | null;
   note: string | null;
+
+  // v72 Individual Patient Model fields
+  family_id: string | null;           // Links all family members together
+  is_child: boolean;                  // True if this is a child record
+  parent_patient_guid: string | null; // For child records, references parent
 }
 
 export interface ProdTestRecordStats {
@@ -2155,6 +2160,88 @@ export async function purgeAndRefreshCache(): Promise<CacheOperationResponse> {
     {}
   );
   return response.data;
+}
+
+// ============================================================================
+// TRACE ANALYSIS API
+// ============================================================================
+
+export interface TraceAnalysisTranscriptTurn {
+  role: 'user' | 'assistant' | 'tool';
+  content: string;
+  timestamp?: string;
+}
+
+export interface TraceAnalysisIntent {
+  type: string;
+  confidence: number;
+  summary: string;
+  bookingDetails?: {
+    patientName?: string;
+    appointmentType?: string;
+    requestedDate?: string;
+    requestedTime?: string;
+    location?: string;
+    isNewPatient?: boolean;
+    childName?: string;
+  };
+}
+
+export interface TraceAnalysisToolStep {
+  step: number;
+  name: string;
+  status: 'success' | 'failure' | 'skipped' | 'not_started';
+  optional?: boolean;
+  details?: string;
+  durationMs?: number;
+}
+
+export interface TraceAnalysisToolSequence {
+  steps: TraceAnalysisToolStep[];
+  completionRate: number;
+  summary?: string;
+}
+
+export interface TraceAnalysisVerification {
+  status: 'fulfilled' | 'partially_fulfilled' | 'not_fulfilled' | 'unknown';
+  verifiedAt: string;
+  evidence: Array<{ source: string; detail: string }>;
+  summary: string;
+}
+
+export interface TraceAnalysisTrace {
+  traceId: string;
+  timestamp: string;
+  name: string;
+}
+
+export interface TraceAnalysisResponse {
+  sessionId: string;
+  traces: TraceAnalysisTrace[];
+  transcript: TraceAnalysisTranscriptTurn[];
+  intent: TraceAnalysisIntent | null;
+  toolSequence: TraceAnalysisToolSequence | null;
+  verification?: TraceAnalysisVerification | null;
+  analyzedAt: string;
+  cached: boolean;
+}
+
+/**
+ * Analyze a session by ID - returns traces, transcript, intent, tool sequence
+ */
+export async function getTraceAnalysis(
+  sessionId: string,
+  options?: { verify?: boolean; force?: boolean; configId?: number }
+): Promise<TraceAnalysisResponse> {
+  const params = new URLSearchParams();
+  if (options?.verify) params.append('verify', 'true');
+  if (options?.force) params.append('force', 'true');
+  if (options?.configId) params.append('configId', options.configId.toString());
+
+  const queryString = params.toString();
+  const url = `/trace-analysis/${sessionId}${queryString ? `?${queryString}` : ''}`;
+  const response = await get<TraceAnalysisResponse>(url);
+  return response;
 }
 
 /**
