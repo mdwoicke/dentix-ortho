@@ -21,11 +21,11 @@
 
 ### Fulfillment Verification
 
-- [ ] **VERIFY-01**: System cross-references Langfuse trace tool outputs against live Cloud9 API records (patient profiles, appointments)
-- [ ] **VERIFY-02**: For booking intents, system verifies: adult patient record exists, child patient record exists per child, appointment record exists per child
-- [ ] **VERIFY-03**: System verifies record data matches caller-provided info (names, dates, appointment types)
-- [ ] **VERIFY-04**: System produces pass/fail verdict with specific gap details (which records missing, which data mismatched)
-- [ ] **VERIFY-05**: For multi-child bookings, system verifies ALL N children have complete records, not just the first
+- [x] **VERIFY-01**: System cross-references Langfuse trace tool outputs against live Cloud9 API records (patient profiles, appointments)
+- [x] **VERIFY-02**: For booking intents, system verifies: adult patient record exists, child patient record exists per child, appointment record exists per child
+- [x] **VERIFY-03**: System verifies record data matches caller-provided info (names, dates, appointment types)
+- [x] **VERIFY-04**: System produces pass/fail verdict with specific gap details (which records missing, which data mismatched)
+- [x] **VERIFY-05**: For multi-child bookings, system verifies ALL N children have complete records, not just the first
 
 ### Expert Agents
 
