@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-02)
 
 **Core value:** Every failed call gets a complete diagnosis -- from what the caller wanted, to what actually happened, to exactly where and why it broke.
-**Current focus:** Phase 4 complete. Ready for Phase 5.
+**Current focus:** Phase 5 in progress. Replay engine services.
 
 ## Current Position
 
-Phase: 4 of 6 (Expert Agents & Diagnostics)
-Plan: 3 of 3 in current phase
-Status: Phase complete
-Last activity: 2026-02-02 -- Completed 04-03-PLAN.md
+Phase: 5 of 6 (Replay Engine)
+Plan: 2 of 2 in current phase
+Status: In progress
+Last activity: 2026-02-02 -- Completed 05-02-PLAN.md
 
-Progress: [██████████░░] ~77%
+Progress: [████████████░] ~85%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 10
-- Average duration: ~3.5 min
-- Total execution time: ~36 min
+- Total plans completed: 12
+- Average duration: ~3.3 min
+- Total execution time: ~42 min
 
 **By Phase:**
 
@@ -31,9 +31,10 @@ Progress: [██████████░░] ~77%
 | 2 | 2/2 | ~8 min | ~4 min |
 | 3 | 2/2 | ~7 min | ~3.5 min |
 | 4 | 3/3 | ~10 min | ~3.3 min |
+| 5 | 2/2 | ~6 min | ~3 min |
 
 **Recent Trend:**
-- Last 5 plans: 03-02, 04-01, 04-02, 04-03
+- Last 5 plans: 04-02, 04-03, 05-01, 05-02
 - Trend: Consistent, slightly improving
 
 *Updated after each plan completion*
@@ -61,6 +62,9 @@ Recent decisions affecting current work:
 - Sequential expert execution to avoid LLM rate limiting.
 - StepStatus from session_analysis cache with on-the-fly fallback.
 - Backward-compatible diagnoseProductionTrace response with new diagnosticReport field.
+- Dynamic import() in controllers for lazy loading replay/cloud9 services.
+- XML template strings for Cloud9 direct testing (no xml library needed).
+- Positional (index-based) tool call comparison for Flowise replay.
 
 ### Pending Todos
 
@@ -73,5 +77,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-02
-Stopped at: Completed 04-03-PLAN.md (Phase 4 complete)
+Stopped at: Completed 05-02-PLAN.md
 Resume file: None
