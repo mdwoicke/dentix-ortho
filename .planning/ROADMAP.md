@@ -47,11 +47,11 @@ Plans:
   2. For booking calls, system verifies adult patient record + child patient record + appointment record exist per child, with correct names and dates
   3. For multi-child bookings, system verifies ALL N children have complete records, not just the first
   4. Each analyzed trace shows a clear pass/fail/partial verdict with specific gap details (which records missing, which data mismatched)
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 02-01: Cloud9 verification service
-- [ ] 02-02: Multi-child booking verification and verdict logic
+- [ ] 02-01-PLAN.md -- Cloud9 verification service and trace analysis endpoint extension
+- [ ] 02-02-PLAN.md -- Multi-child booking verification, per-child verdict logic, and smoke test
 
 ### Phase 3: Trace Analysis UI
 **Goal**: User can interactively investigate any call trace through a dedicated page in the App UI
