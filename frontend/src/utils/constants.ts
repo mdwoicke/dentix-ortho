@@ -41,6 +41,7 @@ export const ROUTES = {
   TEST_MONITOR_ALERTS: '/test-monitor/alerts',
   TEST_MONITOR_QUEUE_ACTIVITY: '/test-monitor/queue-activity',
   TEST_MONITOR_CACHE_HEALTH: '/test-monitor/cache-health',
+  TEST_MONITOR_TRACE_ANALYSIS: '/test-monitor/trace-analysis',
 } as const;
 
 /**

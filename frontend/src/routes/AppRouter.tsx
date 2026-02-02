@@ -37,6 +37,7 @@ import {
   AlertsPage,
   QueueActivityPage,
   CacheHealthPage,
+  TraceAnalysisPage,
 } from '../pages/TestMonitor';
 import { NotFound } from '../pages/NotFound';
 import { ROUTES } from '../utils/constants';
@@ -154,6 +155,7 @@ export function AppRouter() {
             <Route path="queue-activity" element={<QueueActivityPage />} />
             <Route path="alerts" element={<AlertsPage />} />
             <Route path="cache-health" element={<CacheHealthPage />} />
+            <Route path="trace-analysis" element={<TraceAnalysisPage />} />
             <Route path="cases" element={<TestCasesPage />} />
             <Route path="goal-cases" element={<GoalTestsDashboard />} />
             <Route path="create" element={<CreateGoalTestPage />} />

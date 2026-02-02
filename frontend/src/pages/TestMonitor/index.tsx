@@ -19,6 +19,7 @@ const tabs = [
   { name: 'Queue Activity', path: ROUTES.TEST_MONITOR_QUEUE_ACTIVITY },
   { name: 'Alerts', path: ROUTES.TEST_MONITOR_ALERTS },
   { name: 'Cache Health', path: ROUTES.TEST_MONITOR_CACHE_HEALTH },
+  { name: 'Trace Analysis', path: ROUTES.TEST_MONITOR_TRACE_ANALYSIS },
   // Legacy tabs (deprecated - routes still work for backwards compatibility)
   // { name: 'Goal Tests', path: ROUTES.TEST_MONITOR_GOAL_CASES },
   // { name: 'Goal Test Generator', path: ROUTES.TEST_MONITOR_CREATE },
@@ -96,3 +97,4 @@ export { ProdTestTrackerPage } from './ProdTestTracker';
 export { AlertsPage } from './AlertsPage';
 export { QueueActivityPage } from './QueueActivityPage';
 export { CacheHealthPage } from './CacheHealthPage';
+export { default as TraceAnalysisPage } from './TraceAnalysisPage';
