@@ -4,6 +4,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { PageHeader } from '../../components/layout';
 import { Button, Card, Spinner } from '../../components/ui';
 import { TranscriptViewer } from '../../components/features/testMonitor/TranscriptViewer';
@@ -14,6 +15,7 @@ import { CallFlowNavigator } from '../../components/features/testMonitor/CallFlo
 import {
   getImportHistory,
   getLastImportDate,
+  getMonitoringResults,
   getProductionSession,
   getProductionSessions,
   getProductionTrace,
@@ -21,6 +23,7 @@ import {
   importProductionTraces,
   rebuildProductionSessions,
 } from '../../services/api/testMonitorApi';
+import type { MonitoringResult } from '../../services/api/testMonitorApi';
 import { getLangfuseConfigs, getAppSettings } from '../../services/api/appSettingsApi';
 import type {
   ImportHistoryEntry,
@@ -769,9 +772,12 @@ function SessionModal({ sessionId, configId, timezone, langfuseProjectId, onClos
 // MAIN PAGE COMPONENT
 // ============================================================================
 
-type ViewMode = 'sessions' | 'traces' | 'insights';
+type ViewMode = 'sessions' | 'traces' | 'insights' | 'monitoring';
 
 export default function CallTracePage() {
+  // URL parameters
+  const [searchParams, setSearchParams] = useSearchParams();
+
   // State
   const [viewMode, setViewMode] = useState<ViewMode>('sessions');
   const [timezone, setTimezone] = useState<string>(getStoredTimezone);
@@ -800,6 +806,18 @@ export default function CallTracePage() {
   const [filterSessionId, setFilterSessionId] = useState('');
   const [showFilters, setShowFilters] = useState(false);
   const [showConnectionsManager, setShowConnectionsManager] = useState(false);
+
+  // Monitoring filter state
+  const [monitoringResults, setMonitoringResults] = useState<MonitoringResult[]>([]);
+  const [monitoringTotal, setMonitoringTotal] = useState(0);
+  const [monitoringPage, setMonitoringPage] = useState(0);
+  const [monitoringLoading, setMonitoringLoading] = useState(false);
+  const [monitoringDateFrom, setMonitoringDateFrom] = useState('');
+  const [monitoringDateTo, setMonitoringDateTo] = useState('');
+  const [monitoringStatus, setMonitoringStatus] = useState<string[]>([]);
+  const [monitoringIntentType, setMonitoringIntentType] = useState('');
+  const [monitoringSessionSearch, setMonitoringSessionSearch] = useState('');
+  const [monitoringSearchDebounce, setMonitoringSearchDebounce] = useState<ReturnType<typeof setTimeout> | null>(null);
 
   // Insights filter state (for drill-down from insights view)
   const [filteredSessionIds, setFilteredSessionIds] = useState<string[] | null>(null);
@@ -864,6 +882,24 @@ export default function CallTracePage() {
   useEffect(() => {
     reloadConfigs(false);
   }, []);
+
+  // Handle URL parameters for deep linking (traceId, sessionId)
+  useEffect(() => {
+    const traceIdParam = searchParams.get('traceId');
+    const sessionIdParam = searchParams.get('sessionId');
+
+    if (traceIdParam) {
+      setSelectedTraceId(traceIdParam);
+      setViewMode('traces');
+      // Clear the URL parameter after opening
+      setSearchParams({}, { replace: true });
+    } else if (sessionIdParam) {
+      setSelectedSessionId(sessionIdParam);
+      setViewMode('sessions');
+      // Clear the URL parameter after opening
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
 
   // Fetch Langfuse project ID from app settings (for URL linking)
   useEffect(() => {
@@ -951,15 +987,39 @@ export default function CallTracePage() {
     }
   }, [selectedConfigId, page, pageSize, filterFromDate, filterToDate, filterSessionId]);
 
+  // Load monitoring results
+  const loadMonitoringResults = useCallback(async () => {
+    try {
+      setMonitoringLoading(true);
+      const result = await getMonitoringResults({
+        dateFrom: monitoringDateFrom || undefined,
+        dateTo: monitoringDateTo || undefined,
+        status: monitoringStatus.length > 0 ? monitoringStatus.join(',') : undefined,
+        intentType: monitoringIntentType || undefined,
+        sessionId: monitoringSessionSearch || undefined,
+        limit: 50,
+        offset: monitoringPage * 50,
+      });
+      setMonitoringResults(result.results);
+      setMonitoringTotal(result.total);
+    } catch (err: any) {
+      setError(err.message || 'Failed to load monitoring results');
+    } finally {
+      setMonitoringLoading(false);
+    }
+  }, [monitoringDateFrom, monitoringDateTo, monitoringStatus, monitoringIntentType, monitoringSessionSearch, monitoringPage]);
+
   // Load data based on view mode
   const loadData = useCallback(() => {
     if (viewMode === 'sessions') {
       loadSessions();
     } else if (viewMode === 'traces') {
       loadTraces();
+    } else if (viewMode === 'monitoring') {
+      loadMonitoringResults();
     }
     // insights view doesn't need to load data here - component handles its own loading
-  }, [viewMode, loadSessions, loadTraces]);
+  }, [viewMode, loadSessions, loadTraces, loadMonitoringResults]);
 
   // Handler for drill-down from insights view
   const handleViewIssueSessions = useCallback((sessionIds: string[], issueType: string, description: string) => {
@@ -1023,6 +1083,25 @@ export default function CallTracePage() {
       loadData();
     }
   }, [loadData, hasImported]);
+
+  // Auto-load monitoring results when filters change
+  useEffect(() => {
+    if (viewMode === 'monitoring') {
+      loadMonitoringResults();
+    }
+  }, [monitoringDateFrom, monitoringDateTo, monitoringStatus, monitoringIntentType, monitoringPage, viewMode]);
+
+  // Debounce monitoring session search
+  useEffect(() => {
+    if (viewMode !== 'monitoring') return;
+    if (monitoringSearchDebounce) clearTimeout(monitoringSearchDebounce);
+    const timer = setTimeout(() => {
+      setMonitoringPage(0);
+      loadMonitoringResults();
+    }, 300);
+    setMonitoringSearchDebounce(timer);
+    return () => clearTimeout(timer);
+  }, [monitoringSessionSearch]);
 
   // Reset page when view mode changes
   useEffect(() => {
@@ -1258,12 +1337,24 @@ export default function CallTracePage() {
                 >
                   Insights
                 </button>
+                <button
+                  onClick={() => setViewMode('monitoring')}
+                  className={`px-3 py-1.5 text-sm font-medium transition-colors border-l border-gray-200 dark:border-gray-600 ${
+                    viewMode === 'monitoring'
+                      ? 'bg-blue-500 text-white'
+                      : 'bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600'
+                  }`}
+                >
+                  Monitoring
+                </button>
               </div>
               <span className="text-xs text-gray-400 dark:text-gray-500">
                 {viewMode === 'sessions'
                   ? 'Grouped by session (full conversations)'
                   : viewMode === 'traces'
                   ? 'Individual API calls'
+                  : viewMode === 'monitoring'
+                  ? 'Automated monitoring results with pass/fail status'
                   : 'Summary metrics and issue analysis'}
               </span>
             </div>
@@ -1791,6 +1882,184 @@ export default function CallTracePage() {
             </tbody>
           </table>
         </div>
+        )}
+
+        {/* Monitoring View */}
+        {viewMode === 'monitoring' && (
+          <div className="p-4 space-y-4">
+            {/* Monitoring Filter Bar */}
+            <div className="flex flex-wrap items-end gap-3">
+              {/* Date From */}
+              <div>
+                <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">From</label>
+                <input
+                  type="date"
+                  value={monitoringDateFrom}
+                  onChange={(e) => { setMonitoringDateFrom(e.target.value); setMonitoringPage(0); }}
+                  className="block w-36 px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                />
+              </div>
+              {/* Date To */}
+              <div>
+                <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">To</label>
+                <input
+                  type="date"
+                  value={monitoringDateTo}
+                  onChange={(e) => { setMonitoringDateTo(e.target.value); setMonitoringPage(0); }}
+                  className="block w-36 px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                />
+              </div>
+              {/* Status Toggles */}
+              <div>
+                <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Status</label>
+                <div className="flex gap-1">
+                  {(['pass', 'fail', 'partial', 'skipped', 'error'] as const).map(s => (
+                    <button
+                      key={s}
+                      onClick={() => {
+                        setMonitoringStatus(prev =>
+                          prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s]
+                        );
+                        setMonitoringPage(0);
+                      }}
+                      className={`px-2 py-1 text-xs font-medium rounded transition-colors ${
+                        monitoringStatus.includes(s)
+                          ? s === 'pass' ? 'bg-green-600 text-white'
+                            : s === 'fail' ? 'bg-red-600 text-white'
+                            : s === 'partial' ? 'bg-yellow-500 text-white'
+                            : 'bg-gray-600 text-white'
+                          : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
+                      }`}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {/* Intent Type */}
+              <div>
+                <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Intent</label>
+                <select
+                  value={monitoringIntentType}
+                  onChange={(e) => { setMonitoringIntentType(e.target.value); setMonitoringPage(0); }}
+                  className="block w-40 px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                >
+                  <option value="">All intents</option>
+                  <option value="booking">Booking</option>
+                  <option value="cancellation">Cancellation</option>
+                  <option value="rescheduling">Rescheduling</option>
+                  <option value="info_lookup">Info Lookup</option>
+                  <option value="other">Other</option>
+                </select>
+              </div>
+              {/* Session Search */}
+              <div>
+                <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Session ID</label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={monitoringSessionSearch}
+                    onChange={(e) => setMonitoringSessionSearch(e.target.value)}
+                    placeholder="Search..."
+                    className="block w-48 px-2 py-1.5 pl-8 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400"
+                  />
+                  <div className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400">
+                    <Icons.Search />
+                  </div>
+                </div>
+              </div>
+              {/* Total count */}
+              <div className="text-sm text-gray-500 dark:text-gray-400 self-end pb-1">
+                {monitoringTotal} results
+              </div>
+            </div>
+
+            {/* Monitoring Results Table */}
+            {monitoringLoading && monitoringResults.length === 0 ? (
+              <div className="flex justify-center py-8"><Spinner size="lg" /></div>
+            ) : monitoringResults.length === 0 ? (
+              <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+                No monitoring results found. Run the automated monitoring cycle to generate results.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full">
+                  <thead className="bg-gray-50 dark:bg-gray-700">
+                    <tr>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Session ID</th>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Intent</th>
+                      <th className="px-4 py-2 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Status</th>
+                      <th className="px-4 py-2 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Confidence</th>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Summary</th>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Analyzed At</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                    {monitoringResults.map(r => {
+                      const statusColors: Record<string, string> = {
+                        pass: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400',
+                        fulfilled: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400',
+                        fail: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400',
+                        not_fulfilled: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400',
+                        partial: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400',
+                        partially_fulfilled: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400',
+                        skipped: 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400',
+                        error: 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400',
+                      };
+                      const badgeClass = statusColors[r.verification_status] || statusColors.skipped;
+                      return (
+                        <tr key={r.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                          <td className="px-4 py-2 text-sm">
+                            <button
+                              onClick={() => setSelectedSessionId(r.session_id)}
+                              className="font-mono text-blue-600 dark:text-blue-400 hover:underline"
+                              title={r.session_id}
+                            >
+                              {r.session_id.length > 12 ? r.session_id.slice(0, 12) + '...' : r.session_id}
+                            </button>
+                          </td>
+                          <td className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300">
+                            {r.intent_type || '-'}
+                          </td>
+                          <td className="px-4 py-2 text-center">
+                            <span className={`inline-block px-2 py-0.5 text-xs font-medium rounded-full ${badgeClass}`}>
+                              {r.verification_status || 'unknown'}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2 text-center text-sm text-gray-500 dark:text-gray-400">
+                            {r.intent_confidence != null ? `${Math.round(r.intent_confidence * 100)}%` : '-'}
+                          </td>
+                          <td className="px-4 py-2 text-sm text-gray-600 dark:text-gray-400 max-w-xs truncate" title={r.verdict_summary || r.caller_intent_summary || ''}>
+                            {r.verdict_summary || r.caller_intent_summary || '-'}
+                          </td>
+                          <td className="px-4 py-2 text-sm text-gray-500 dark:text-gray-400">
+                            {r.analyzed_at ? formatDateWithTimezone(r.analyzed_at, timezone) : '-'}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Monitoring Pagination */}
+            {monitoringTotal > 50 && (
+              <div className="flex items-center justify-between pt-2">
+                <div className="text-sm text-gray-500 dark:text-gray-400">
+                  Showing {monitoringPage * 50 + 1} to {Math.min((monitoringPage + 1) * 50, monitoringTotal)} of {monitoringTotal}
+                </div>
+                <div className="flex gap-2">
+                  <Button variant="secondary" size="sm" disabled={monitoringPage === 0} onClick={() => setMonitoringPage(p => p - 1)}>
+                    Previous
+                  </Button>
+                  <Button variant="secondary" size="sm" disabled={(monitoringPage + 1) * 50 >= monitoringTotal} onClick={() => setMonitoringPage(p => p + 1)}>
+                    Next
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
         )}
 
         {/* Insights View */}

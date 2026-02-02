@@ -2244,6 +2244,47 @@ export async function getTraceAnalysis(
   return response;
 }
 
+// ============================================================================
+// MONITORING RESULTS API
+// ============================================================================
+
+export interface MonitoringResult {
+  id: number;
+  session_id: string;
+  intent_type: string | null;
+  intent_confidence: number | null;
+  verification_status: string;
+  verdict_summary: string | null;
+  diagnostic_status: string | null;
+  analyzed_at: string;
+  caller_intent_summary?: string | null;
+}
+
+export interface MonitoringFilters {
+  dateFrom?: string;
+  dateTo?: string;
+  status?: string;
+  intentType?: string;
+  sessionId?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export async function getMonitoringResults(filters: MonitoringFilters): Promise<{ results: MonitoringResult[]; total: number }> {
+  const params = new URLSearchParams();
+  if (filters.dateFrom) params.set('dateFrom', filters.dateFrom);
+  if (filters.dateTo) params.set('dateTo', filters.dateTo);
+  if (filters.status) params.set('status', filters.status);
+  if (filters.intentType) params.set('intentType', filters.intentType);
+  if (filters.sessionId) params.set('sessionId', filters.sessionId);
+  if (filters.limit) params.set('limit', String(filters.limit));
+  if (filters.offset) params.set('offset', String(filters.offset));
+  const response = await get<{ results: MonitoringResult[]; total: number }>(
+    `/trace-analysis/monitoring-results?${params}`
+  );
+  return response;
+}
+
 /**
  * Get all cached slots for a specific tier
  * Returns full slot data with filtering/sorting capabilities
