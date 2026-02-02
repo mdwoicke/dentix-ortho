@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-02)
 
 **Core value:** Every failed call gets a complete diagnosis -- from what the caller wanted, to what actually happened, to exactly where and why it broke.
-**Current focus:** Phase 5 complete. Ready for Phase 6.
+**Current focus:** Phase 6 in progress. Plan 1 of 2 complete.
 
 ## Current Position
 
-Phase: 5 of 6 (Replay Engine)
-Plan: 2 of 2 in current phase
-Status: Phase complete
-Last activity: 2026-02-02 -- Completed 05-01-PLAN.md
+Phase: 6 of 6 (Automated Monitoring)
+Plan: 1 of 2 in current phase
+Status: In progress
+Last activity: 2026-02-02 -- Completed 06-01-PLAN.md
 
-Progress: [█████████████░] ~92%
+Progress: [██████████████░] ~96%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 12
+- Total plans completed: 13
 - Average duration: ~3.3 min
-- Total execution time: ~42 min
+- Total execution time: ~45 min
 
 **By Phase:**
 
@@ -32,9 +32,10 @@ Progress: [█████████████░] ~92%
 | 3 | 2/2 | ~7 min | ~3.5 min |
 | 4 | 3/3 | ~10 min | ~3.3 min |
 | 5 | 2/2 | ~6 min | ~3 min |
+| 6 | 1/2 | ~3 min | ~3 min |
 
 **Recent Trend:**
-- Last 5 plans: 04-03, 05-02, 05-01
+- Last 5 plans: 05-01, 05-02, 06-01
 - Trend: Consistent, slightly improving
 
 *Updated after each plan completion*
@@ -67,6 +68,9 @@ Recent decisions affecting current work:
 - Positional (index-based) tool call comparison for Flowise replay.
 - Mock key extraction uses last URL segment for environment-agnostic matching.
 - Optional mockMap parameter threaded through existing replay functions.
+- 5-minute monitoring interval via heartbeat timestamp check (not separate timer).
+- Diagnostics capped at 3 per cycle to prevent LLM rate limiting storms.
+- Dynamic import for DiagnosticOrchestrator (lazy loading, avoids circular deps).
 
 ### Pending Todos
 
@@ -79,5 +83,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-02
-Stopped at: Completed 05-01-PLAN.md (Phase 5 complete)
+Stopped at: Completed 06-01-PLAN.md
 Resume file: None
