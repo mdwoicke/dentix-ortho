@@ -21,6 +21,10 @@ import * as documentParserService from '../services/documentParserService';
 import { LangfuseTraceService } from '../services/langfuseTraceService';
 import { QueueActivityService } from '../services/queueActivityService';
 import { getLLMProvider } from '../../../shared/services/llm-provider';
+import { DiagnosticOrchestrator, DiagnosticRequest } from '../services/diagnosticOrchestrator';
+import { ExpertAgentService, ExpertAgentType } from '../services/expertAgentService';
+import { classifyCallerIntent } from '../services/callerIntentClassifier';
+import { mapToolSequence, StepStatus } from '../services/toolSequenceMapper';
 
 // Path to test-agent database (main database with all test run data)
 const TEST_AGENT_DB_PATH = path.resolve(__dirname, '../../../test-agent/data/test-results.db');
@@ -8859,11 +8863,6 @@ export async function diagnoseProductionTrace(
       .map(turn => `[${turn.role.toUpperCase()}]: ${turn.content}`)
       .join('\n\n');
 
-    // Build API call summary
-    const apiCallSummary = apiErrors
-      .map(call => `- ${call.name}: ${call.statusCode ? `Status ${call.statusCode}` : 'Error'}, Output: ${call.output?.slice(0, 500) || 'Unknown'}`)
-      .join('\n');
-
     // Create fix generation ID based on trace
     const diagnosisRunId = `trace-diag-${traceId.slice(0, 8)}-${Date.now()}`;
 
@@ -8897,118 +8896,73 @@ export async function diagnoseProductionTrace(
       return;
     }
 
-    // Close DB before LLM call (may take time)
-    db.close();
-    db = null;
-
-    // Create fix generation prompt
-    const fixPrompt = `You are an expert at analyzing and fixing dental appointment scheduling chatbot issues. Analyze the following production conversation and generate specific fixes.
-
-## Conversation Transcript
-${transcriptText}
-
-${apiCallSummary ? `## API Errors Detected\n${apiCallSummary}` : ''}
-
-## Fix Generation Instructions
-Analyze the conversation and generate fixes for any issues found. For each issue, provide a concrete fix with code changes.
-
-Format your response as JSON with an array of fixes:
-{
-  "analysis": {
-    "summary": "Brief summary of what happened",
-    "issues": ["issue 1", "issue 2"],
-    "rootCause": "Root cause if identifiable"
-  },
-  "fixes": [
-    {
-      "type": "prompt_modification",
-      "priority": "critical|high|medium|low",
-      "confidence": 0-100,
-      "targetFile": "system_prompt|scheduling_tool|patient_tool",
-      "changeDescription": "What this fix does",
-      "changeCode": "The actual code/text change to make",
-      "rootCause": {
-        "type": "missing_validation|unclear_instruction|api_error|logic_error|other",
-        "evidence": ["evidence from conversation"]
-      }
-    }
-  ]
-}
-
-Fix types:
-- prompt_modification: Changes to system prompt instructions
-- tool_addition: Adding new capabilities to tools
-- workflow_change: Changes to conversation flow logic
-
-Target files:
-- system_prompt: The main Flowise system prompt
-- scheduling_tool: schedule_appointment_ortho tool code
-- patient_tool: chord_ortho_patient tool code
-
-Only generate fixes if there are actual issues. If the conversation was successful, return an empty fixes array.`;
-
-    // Execute LLM analysis
-    const llmResponse = await llmProvider.execute({
-      prompt: fixPrompt,
-      systemPrompt: 'You are an expert chatbot fixer. Always respond with valid JSON only, no markdown.',
-      maxTokens: 4000,
-      temperature: 0.3,
-      purpose: 'failure-analysis',
-    });
-
-    if (!llmResponse.success || !llmResponse.content) {
-      res.status(500).json({
-        success: false,
-        error: `LLM analysis failed: ${llmResponse.error || 'No response'}`,
-      });
-      return;
-    }
-
-    // Parse LLM response
-    let diagnosisResult;
+    // Build step statuses for orchestrator routing
+    let stepStatuses: StepStatus[] = [];
     try {
-      // First try to remove markdown code blocks
-      let cleanedContent = llmResponse.content
-        .replace(/```json\n?/g, '')
-        .replace(/```\n?/g, '')
-        .trim();
+      // Try session_analysis cache first
+      const cached = db.prepare(
+        'SELECT step_statuses FROM session_analysis WHERE session_id = ? ORDER BY analyzed_at DESC LIMIT 1'
+      ).get(trace.session_id || '') as { step_statuses: string } | undefined;
 
-      // If the content doesn't start with {, try to extract JSON object
-      if (!cleanedContent.startsWith('{')) {
-        const jsonStart = cleanedContent.indexOf('{');
-        const jsonEnd = cleanedContent.lastIndexOf('}');
-        if (jsonStart !== -1 && jsonEnd !== -1 && jsonEnd > jsonStart) {
-          cleanedContent = cleanedContent.substring(jsonStart, jsonEnd + 1);
+      if (cached?.step_statuses) {
+        stepStatuses = JSON.parse(cached.step_statuses);
+      } else {
+        // Classify intent and map tool sequence on the fly
+        const roleMap: Record<string, 'user' | 'assistant'> = { human: 'user', ai: 'assistant', user: 'user', assistant: 'assistant' };
+        const turns = transcript.map(t => ({ role: roleMap[t.role] || 'user' as const, content: t.content }));
+        if (turns.length > 0) {
+          const intent = await classifyCallerIntent(turns);
+          const seqResult = mapToolSequence(intent, filteredObservations);
+          stepStatuses = seqResult.stepStatuses;
         }
       }
+    } catch (stepErr: unknown) {
+      console.warn('[diagnoseProductionTrace] Could not build stepStatuses:', stepErr instanceof Error ? stepErr.message : stepErr);
+    }
 
-      diagnosisResult = JSON.parse(cleanedContent);
-    } catch (parseError) {
-      console.error('[diagnoseProductionTrace] Failed to parse LLM response:', parseError);
-      res.status(500).json({
-        success: false,
-        error: 'Failed to parse LLM response',
-        rawResponse: llmResponse.content,
-      });
+    // Use orchestrator for expert-based diagnosis
+    const orchestrator = new DiagnosticOrchestrator(db);
+    const diagnosticRequest: DiagnosticRequest = {
+      traceId,
+      sessionId: trace.session_id || traceId,
+      transcript: transcriptText,
+      apiErrors: apiErrors.map(call =>
+        `${call.name}: ${call.statusCode ? `Status ${call.statusCode}` : 'Error'}, Output: ${(call.output || '').slice(0, 500)}`
+      ),
+      stepStatuses,
+      failureTimestamp: trace.timestamp || undefined,
+    };
+
+    // Close DB before LLM calls (may take time)
+    const dbForFixes = db;
+    db = null;
+
+    let diagnosticReport;
+    try {
+      diagnosticReport = await orchestrator.diagnose(diagnosticRequest);
+    } catch (orchErr: unknown) {
+      const msg = orchErr instanceof Error ? orchErr.message : String(orchErr);
+      console.error('[diagnoseProductionTrace] Orchestrator failed:', msg);
+      res.status(500).json({ success: false, error: `Orchestrator failed: ${msg}` });
       return;
     }
 
-    // Store generated fixes in database
-    const fixes = diagnosisResult.fixes || [];
+    // Store expert fixes in generated_fixes for backward compatibility
     let fixesGenerated = 0;
     let promptFixes = 0;
     let toolFixes = 0;
     let highConfidenceFixes = 0;
     const rootCauseBreakdown: Record<string, number> = {};
 
-    if (fixes.length > 0) {
-      db = getTestAgentDbWritable();
+    try {
+      for (const agent of diagnosticReport.agents) {
+        if (agent.confidence === 0 && agent.rootCause.type === 'analysis-error') continue;
 
-      for (const fix of fixes) {
         const fixId = `fix-${traceId.slice(0, 8)}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        const targetFile = agent.affectedArtifact.fileKey;
 
         try {
-          db.prepare(`
+          dbForFixes.prepare(`
             INSERT INTO generated_fixes (
               fix_id, run_id, type, target_file, change_description, change_code,
               priority, confidence, status, root_cause_type, root_cause_evidence,
@@ -9017,34 +8971,29 @@ Only generate fixes if there are actual issues. If the conversation was successf
           `).run(
             fixId,
             diagnosisRunId,
-            fix.type || 'prompt_modification',
-            fix.targetFile || 'system_prompt',
-            fix.changeDescription || '',
-            fix.changeCode || '',
-            fix.priority || 'medium',
-            fix.confidence || 50,
-            fix.rootCause?.type || null,
-            fix.rootCause?.evidence ? JSON.stringify(fix.rootCause.evidence) : null,
-            JSON.stringify([traceId]), // affected_tests contains the traceId
-            JSON.stringify({ issueLocation: 'bot', issueCategory: 'production_trace' })
+            'prompt_modification',
+            targetFile,
+            agent.summary,
+            agent.suggestedCode || '',
+            agent.confidence >= 70 ? 'high' : agent.confidence >= 40 ? 'medium' : 'low',
+            agent.confidence,
+            agent.rootCause.type,
+            JSON.stringify(agent.rootCause.evidence),
+            JSON.stringify([traceId]),
+            JSON.stringify({ issueLocation: 'bot', issueCategory: 'production_trace', expert: agent.agentType })
           );
 
           fixesGenerated++;
-
-          // Track stats
-          if (fix.targetFile === 'system_prompt') promptFixes++;
-          else if (fix.targetFile?.includes('tool')) toolFixes++;
-          if (fix.confidence && fix.confidence >= 70) highConfidenceFixes++;
-          if (fix.rootCause?.type) {
-            rootCauseBreakdown[fix.rootCause.type] = (rootCauseBreakdown[fix.rootCause.type] || 0) + 1;
-          }
+          if (targetFile === 'system_prompt') promptFixes++;
+          else if (targetFile.includes('tool')) toolFixes++;
+          if (agent.confidence >= 70) highConfidenceFixes++;
+          rootCauseBreakdown[agent.rootCause.type] = (rootCauseBreakdown[agent.rootCause.type] || 0) + 1;
         } catch (insertError: any) {
           console.error(`[diagnoseProductionTrace] Failed to insert fix:`, insertError.message);
         }
       }
-
-      db.close();
-      db = null;
+    } finally {
+      dbForFixes.close();
     }
 
     res.json({
@@ -9061,11 +9010,59 @@ Only generate fixes if there are actual issues. If the conversation was successf
         highConfidenceFixes,
         rootCauseBreakdown,
       },
-      analysis: diagnosisResult.analysis,
+      analysis: {
+        summary: diagnosticReport.combinedMarkdown.slice(0, 500),
+        issues: diagnosticReport.agents.map(a => a.summary),
+        rootCause: diagnosticReport.agents[0]?.rootCause.type || 'unknown',
+      },
+      diagnosticReport,
       runId: diagnosisRunId,
-      provider: llmResponse.provider,
-      durationMs: llmResponse.durationMs,
     });
+  } catch (error) {
+    next(error);
+  } finally {
+    if (db) db.close();
+  }
+}
+
+/**
+ * POST /api/test-monitor/expert/:agentType/analyze
+ * Standalone expert agent analysis endpoint
+ */
+export async function analyzeWithExpert(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  let db: BetterSqlite3.Database | null = null;
+  try {
+    const { agentType } = req.params;
+    const validTypes: ExpertAgentType[] = ['nodered_flow', 'patient_tool', 'scheduling_tool', 'system_prompt'];
+
+    if (!validTypes.includes(agentType as ExpertAgentType)) {
+      res.status(400).json({ success: false, error: `Invalid agentType. Must be one of: ${validTypes.join(', ')}` });
+      return;
+    }
+
+    const { transcript, apiErrors, stepStatuses, context } = req.body;
+
+    db = getTestAgentDbWritable();
+    const service = new ExpertAgentService(db);
+
+    const result = await service.analyze({
+      agentType: agentType as ExpertAgentType,
+      traceContext: {
+        transcript: transcript || '',
+        apiErrors: apiErrors || [],
+        stepStatuses: stepStatuses || [],
+      },
+      freeformContext: context,
+    });
+
+    db.close();
+    db = null;
+
+    res.json({ success: true, result });
   } catch (error) {
     next(error);
   } finally {

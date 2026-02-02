@@ -534,6 +534,13 @@ router.delete('/environment-presets/:id', testMonitorController.deleteEnvironmen
 router.post('/environment-presets/:id/set-default', testMonitorController.setEnvironmentPresetDefault);
 
 // ============================================================================
+// EXPERT AGENT ROUTES
+// ============================================================================
+
+// POST /api/test-monitor/expert/:agentType/analyze - Standalone expert analysis
+router.post('/expert/:agentType/analyze', testMonitorController.analyzeWithExpert);
+
+// ============================================================================
 // PRODUCTION CALLS (LANGFUSE TRACES) ROUTES
 // ============================================================================
 
