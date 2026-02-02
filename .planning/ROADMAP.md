@@ -16,7 +16,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 2: Fulfillment Verification** - Cross-reference intent against live Cloud9 records
 - [x] **Phase 3: Trace Analysis UI** - Dedicated page for interactive trace investigation
 - [x] **Phase 4: Expert Agents & Diagnostics** - LLM-powered root cause analysis with domain expert agents
-- [ ] **Phase 5: Replay** - Test harness generation and regression detection via trace replay
+- [x] **Phase 5: Replay** - Test harness generation and regression detection via trace replay
 - [ ] **Phase 6: Automated Monitoring** - Continuous post-call analysis pipeline with alert integration
 
 ## Phase Details
@@ -96,8 +96,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 05-01-PLAN.md -- Mock harness generation and mock replay mode for replayService
-- [ ] 05-02-PLAN.md -- Flowise end-to-end replay and Cloud9 direct API testing
+- [x] 05-01-PLAN.md -- Mock harness generation and mock replay mode for replayService
+- [x] 05-02-PLAN.md -- Flowise end-to-end replay and Cloud9 direct API testing
 
 ### Phase 6: Automated Monitoring
 **Goal**: Every completed call is automatically checked and failures trigger the full diagnostic pipeline
@@ -125,5 +125,5 @@ Note: Phase 3 and Phase 5 can proceed in parallel with Phase 2 and Phase 4 respe
 | 2. Fulfillment Verification | 2/2 | Complete | 2026-02-02 |
 | 3. Trace Analysis UI | 2/2 | Complete | 2026-02-02 |
 | 4. Expert Agents & Diagnostics | 3/3 | Complete | 2026-02-02 |
-| 5. Replay | 0/2 | Not started | - |
+| 5. Replay | 2/2 | Complete | 2026-02-02 |
 | 6. Automated Monitoring | 0/2 | Not started | - |

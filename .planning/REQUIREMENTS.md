@@ -123,9 +123,9 @@
 | DIAG-03 | Phase 4 | Complete |
 | DIAG-04 | Phase 4 | Complete |
 | DIAG-05 | Phase 4 | Complete |
-| REPLAY-01 | Phase 5 | Pending |
-| REPLAY-02 | Phase 5 | Pending |
-| REPLAY-03 | Phase 5 | Pending |
+| REPLAY-01 | Phase 5 | Complete |
+| REPLAY-02 | Phase 5 | Complete |
+| REPLAY-03 | Phase 5 | Complete |
 | MON-01 | Phase 6 | Pending |
 | MON-02 | Phase 6 | Pending |
 | MON-03 | Phase 6 | Pending |
