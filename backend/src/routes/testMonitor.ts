@@ -401,6 +401,21 @@ router.post('/replay', testMonitorController.executeReplay);
 // GET /api/test-monitor/replay/endpoints - Get available replay endpoints
 router.get('/replay/endpoints', testMonitorController.getReplayEndpoints);
 
+// GET /api/test-monitor/replay/modes - List all available replay modes
+router.get('/replay/modes', testMonitorController.getReplayModes);
+
+// POST /api/test-monitor/replay/mock-harness - Generate mock harness from trace observations
+router.post('/replay/mock-harness', testMonitorController.generateMockHarness);
+
+// POST /api/test-monitor/replay/mock - Execute mock replay using captured trace data
+router.post('/replay/mock', testMonitorController.executeMockReplay);
+
+// POST /api/test-monitor/replay/flowise - Re-send caller messages through Flowise
+router.post('/replay/flowise', testMonitorController.replayThroughFlowise);
+
+// POST /api/test-monitor/replay/cloud9-direct - Test Cloud9 API directly
+router.post('/replay/cloud9-direct', testMonitorController.testCloud9Direct);
+
 // ============================================================================
 // QUEUE ACTIVITY ROUTES
 // ============================================================================

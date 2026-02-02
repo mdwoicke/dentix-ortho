@@ -10258,6 +10258,96 @@ export async function getReplayEndpoints(
 }
 
 // ============================================================================
+// FLOWISE REPLAY & CLOUD9 DIRECT TEST
+// ============================================================================
+
+/**
+ * POST /api/test-monitor/replay/flowise
+ * Re-send caller messages from a trace through Flowise and compare tool calls
+ */
+export async function replayThroughFlowise(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const { traceId, flowiseConfigId } = req.body;
+
+    if (!traceId || typeof traceId !== 'string') {
+      res.status(400).json({ success: false, error: 'Missing or invalid traceId' });
+      return;
+    }
+
+    console.log(`[Replay] Flowise replay - traceId: ${traceId}, configId: ${flowiseConfigId || 'default'}`);
+
+    const { replayThroughFlowise: doReplay } = await import('../services/flowiseReplayService');
+    const result = await doReplay(traceId, flowiseConfigId);
+
+    res.json({ success: true, data: result });
+  } catch (error: any) {
+    if (error.message?.includes('not found') || error.message?.includes('No caller messages')) {
+      res.status(400).json({ success: false, error: error.message });
+      return;
+    }
+    next(error);
+  }
+}
+
+/**
+ * POST /api/test-monitor/replay/cloud9-direct
+ * Test Cloud9 API directly with parameters from a trace observation
+ */
+export async function testCloud9Direct(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const { observationId } = req.body;
+
+    if (!observationId || typeof observationId !== 'string') {
+      res.status(400).json({ success: false, error: 'Missing or invalid observationId' });
+      return;
+    }
+
+    console.log(`[Replay] Cloud9 direct test - observationId: ${observationId}`);
+
+    const { testCloud9Direct: doTest } = await import('../services/cloud9DirectService');
+    const result = await doTest(observationId);
+
+    res.json({ success: true, data: result });
+  } catch (error: any) {
+    if (error.message?.includes('not found') || error.message?.includes('No action') || error.message?.includes('No Cloud9')) {
+      res.status(400).json({ success: false, error: error.message });
+      return;
+    }
+    next(error);
+  }
+}
+
+/**
+ * GET /api/test-monitor/replay/modes
+ * List all available replay modes
+ */
+export async function getReplayModes(
+  _req: Request,
+  res: Response,
+  _next: NextFunction
+): Promise<void> {
+  res.json({
+    success: true,
+    data: {
+      modes: [
+        { id: 'live', name: 'Live Replay', endpoint: '/replay', description: 'Replay tool call against live Node-RED' },
+        { id: 'mock', name: 'Mock Replay', endpoint: '/replay/mock', description: 'Replay with captured Cloud9 responses' },
+        { id: 'flowise', name: 'Flowise Replay', endpoint: '/replay/flowise', description: 'Re-send caller messages through Flowise' },
+        { id: 'cloud9-direct', name: 'Cloud9 Direct', endpoint: '/replay/cloud9-direct', description: 'Test Cloud9 API directly with trace parameters' },
+      ],
+    },
+  });
+}
+
+// ============================================================================
 // QUEUE ACTIVITY
 // ============================================================================
 
