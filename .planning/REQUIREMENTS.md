@@ -126,9 +126,9 @@
 | REPLAY-01 | Phase 5 | Complete |
 | REPLAY-02 | Phase 5 | Complete |
 | REPLAY-03 | Phase 5 | Complete |
-| MON-01 | Phase 6 | Pending |
-| MON-02 | Phase 6 | Pending |
-| MON-03 | Phase 6 | Pending |
+| MON-01 | Phase 6 | Complete |
+| MON-02 | Phase 6 | Complete |
+| MON-03 | Phase 6 | Complete |
 
 **Coverage:**
 - v1 requirements: 33 total
