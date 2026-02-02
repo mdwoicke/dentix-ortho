@@ -16,4 +16,7 @@ router.get('/:sessionId', traceAnalysisController.analyzeSession);
 // GET /api/trace-analysis/:sessionId/intent - Intent classification only
 router.get('/:sessionId/intent', traceAnalysisController.getIntent);
 
+// GET /api/trace-analysis/:sessionId/verify - Fulfillment verification
+router.get('/:sessionId/verify', traceAnalysisController.verifySession);
+
 export default router;

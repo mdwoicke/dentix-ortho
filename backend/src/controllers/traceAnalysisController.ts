@@ -15,6 +15,7 @@ import {
   transformToConversationTurns,
   filterInternalTraces,
 } from './testMonitorController';
+import { verifyFulfillment, FulfillmentVerdict } from '../services/fulfillmentVerifier';
 
 // Path to test-agent database
 const TEST_AGENT_DB_PATH = path.resolve(__dirname, '../../../test-agent/data/test-results.db');
@@ -39,6 +40,19 @@ function getDb(): BetterSqlite3.Database {
     CREATE INDEX IF NOT EXISTS idx_session_analysis_session ON session_analysis(session_id);
     CREATE INDEX IF NOT EXISTS idx_session_analysis_intent ON session_analysis(caller_intent_type);
   `);
+  // Add verification columns if missing (ALTER TABLE is idempotent with try/catch)
+  const verificationColumns = [
+    'verification_status TEXT',
+    'verification_json TEXT',
+    'verified_at TEXT',
+  ];
+  for (const col of verificationColumns) {
+    try {
+      db.exec(`ALTER TABLE session_analysis ADD COLUMN ${col}`);
+    } catch {
+      // Column already exists - ignore
+    }
+  }
   return db;
 }
 
@@ -55,6 +69,7 @@ export async function analyzeSession(req: Request, res: Response): Promise<void>
   const { sessionId } = req.params;
   const configId = req.query.configId ? parseInt(req.query.configId as string) : 1;
   const force = req.query.force === 'true';
+  const verify = req.query.verify === 'true';
 
   let db: BetterSqlite3.Database | null = null;
 
@@ -88,6 +103,29 @@ export async function analyzeSession(req: Request, res: Response): Promise<void>
           // Rebuild transcript from traces
           const transcript = buildTranscript(sessionData.traces, sessionData.observations);
 
+          // Include cached verification if available
+          let verification: FulfillmentVerdict | null = null;
+          if (verify && cached.verification_json) {
+            verification = JSON.parse(cached.verification_json);
+          } else if (verify) {
+            // Run verification on demand even for cached analysis
+            const allObs = filterInternalTraces(sessionData.observations);
+            const cachedIntent = {
+              type: cached.caller_intent_type as any,
+              confidence: cached.caller_intent_confidence,
+              summary: cached.caller_intent_summary,
+              bookingDetails: cached.booking_details_json ? JSON.parse(cached.booking_details_json) : undefined,
+            };
+            try {
+              verification = await verifyFulfillment(sessionId, allObs, cachedIntent);
+              // Cache verification result
+              db.prepare(`UPDATE session_analysis SET verification_status = ?, verification_json = ?, verified_at = ? WHERE session_id = ?`)
+                .run(verification.status, JSON.stringify(verification), verification.verifiedAt, sessionId);
+            } catch (verifyErr: any) {
+              console.error(`Verification failed for cached session ${sessionId}:`, verifyErr.message);
+            }
+          }
+
           res.json({
             sessionId,
             traces,
@@ -99,6 +137,7 @@ export async function analyzeSession(req: Request, res: Response): Promise<void>
               bookingDetails: cached.booking_details_json ? JSON.parse(cached.booking_details_json) : undefined,
             },
             toolSequence: cached.tool_sequence_json ? JSON.parse(cached.tool_sequence_json) : null,
+            ...(verify && verification ? { verification } : {}),
             analyzedAt: cached.analyzed_at,
             cached: true,
           });
@@ -151,14 +190,26 @@ export async function analyzeSession(req: Request, res: Response): Promise<void>
       toolSequence = mapToolSequence(intent, allObservations);
     }
 
+    // Run fulfillment verification if requested
+    let verification: FulfillmentVerdict | null = null;
+    if (verify && intent) {
+      try {
+        const allObs = filterInternalTraces(sessionData.observations);
+        verification = await verifyFulfillment(sessionId, allObs, intent);
+      } catch (verifyErr: any) {
+        console.error(`Verification failed for session ${sessionId}:`, verifyErr.message);
+      }
+    }
+
     const analyzedAt = new Date().toISOString();
 
     // Cache results
     db.prepare(`
       INSERT OR REPLACE INTO session_analysis
         (session_id, caller_intent_type, caller_intent_confidence, caller_intent_summary,
-         booking_details_json, tool_sequence_json, completion_rate, analyzed_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         booking_details_json, tool_sequence_json, completion_rate, analyzed_at,
+         verification_status, verification_json, verified_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       sessionId,
       intent?.type ?? null,
@@ -168,6 +219,9 @@ export async function analyzeSession(req: Request, res: Response): Promise<void>
       toolSequence ? JSON.stringify(toolSequence) : null,
       toolSequence?.completionRate ?? null,
       analyzedAt,
+      verification?.status ?? null,
+      verification ? JSON.stringify(verification) : null,
+      verification?.verifiedAt ?? null,
     );
 
     res.json({
@@ -176,6 +230,7 @@ export async function analyzeSession(req: Request, res: Response): Promise<void>
       transcript,
       intent,
       toolSequence,
+      ...(verify && verification ? { verification } : {}),
       analyzedAt,
       cached: false,
     });
@@ -280,6 +335,99 @@ export async function getIntent(req: Request, res: Response): Promise<void> {
     });
   } catch (err: any) {
     console.error(`Error getting intent for session ${sessionId}:`, err);
+    res.status(500).json({ error: err.message });
+  } finally {
+    if (db) db.close();
+  }
+}
+
+/**
+ * GET /api/trace-analysis/:sessionId/verify
+ *
+ * Dedicated verification endpoint. Runs fulfillment verification against Cloud9.
+ * Uses cached analysis data if available, otherwise runs full analysis first.
+ */
+export async function verifySession(req: Request, res: Response): Promise<void> {
+  const { sessionId } = req.params;
+  const configId = req.query.configId ? parseInt(req.query.configId as string) : 1;
+  const force = req.query.force === 'true';
+
+  let db: BetterSqlite3.Database | null = null;
+
+  try {
+    db = getDb();
+
+    // Check for cached verification (unless force)
+    if (!force) {
+      const cached = db.prepare(
+        'SELECT verification_status, verification_json, verified_at FROM session_analysis WHERE session_id = ? AND verification_json IS NOT NULL'
+      ).get(sessionId) as any;
+
+      if (cached?.verification_json) {
+        res.json({
+          sessionId,
+          verification: JSON.parse(cached.verification_json),
+          cached: true,
+        });
+        return;
+      }
+    }
+
+    // Get session data
+    const service = new LangfuseTraceService(db);
+    let sessionData = service.getSession(sessionId, configId);
+
+    if (!sessionData) {
+      try {
+        sessionData = await service.importSessionTraces(sessionId, configId);
+      } catch (importErr: any) {
+        res.status(404).json({ error: `Session not found: ${importErr.message}` });
+        return;
+      }
+    }
+
+    if (!sessionData || !sessionData.traces || sessionData.traces.length === 0) {
+      res.status(404).json({ error: 'Session not found or has no traces' });
+      return;
+    }
+
+    // Get or compute intent
+    let intent: any = null;
+    const cachedAnalysis = db.prepare(
+      'SELECT caller_intent_type, caller_intent_confidence, caller_intent_summary, booking_details_json FROM session_analysis WHERE session_id = ?'
+    ).get(sessionId) as any;
+
+    if (cachedAnalysis?.caller_intent_type) {
+      intent = {
+        type: cachedAnalysis.caller_intent_type,
+        confidence: cachedAnalysis.caller_intent_confidence,
+        summary: cachedAnalysis.caller_intent_summary,
+        bookingDetails: cachedAnalysis.booking_details_json ? JSON.parse(cachedAnalysis.booking_details_json) : undefined,
+      };
+    } else {
+      const transcript = buildTranscript(sessionData.traces, sessionData.observations);
+      try {
+        intent = await classifyCallerIntent(transcript);
+      } catch (err: any) {
+        res.status(500).json({ error: `Intent classification failed: ${err.message}` });
+        return;
+      }
+    }
+
+    const allObs = filterInternalTraces(sessionData.observations);
+    const verification = await verifyFulfillment(sessionId, allObs, intent);
+
+    // Cache verification
+    db.prepare(`UPDATE session_analysis SET verification_status = ?, verification_json = ?, verified_at = ? WHERE session_id = ?`)
+      .run(verification.status, JSON.stringify(verification), verification.verifiedAt, sessionId);
+
+    res.json({
+      sessionId,
+      verification,
+      cached: false,
+    });
+  } catch (err: any) {
+    console.error(`Error verifying session ${sessionId}:`, err);
     res.status(500).json({ error: err.message });
   } finally {
     if (db) db.close();
