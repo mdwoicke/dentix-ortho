@@ -12,7 +12,7 @@ Build an end-to-end call trace analysis system that starts with deterministic tr
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Trace Foundation** - Deterministic trace parsing, transcript extraction, and intent classification
+- [x] **Phase 1: Trace Foundation** - Deterministic trace parsing, transcript extraction, and intent classification
 - [ ] **Phase 2: Fulfillment Verification** - Cross-reference intent against live Cloud9 records
 - [ ] **Phase 3: Trace Analysis UI** - Dedicated page for interactive trace investigation
 - [ ] **Phase 4: Expert Agents & Diagnostics** - LLM-powered root cause analysis with domain expert agents
@@ -34,9 +34,9 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: 3 plans
 
 Plans:
-- [ ] 01-01-PLAN.md -- Caller intent classifier and tool sequence mapper services
-- [ ] 01-02-PLAN.md -- Database schema for analysis cache and verify existing trace infrastructure
-- [ ] 01-03-PLAN.md -- Trace analysis API endpoint (orchestration)
+- [x] 01-01-PLAN.md -- Caller intent classifier and tool sequence mapper services
+- [x] 01-02-PLAN.md -- Database schema for analysis cache and verify existing trace infrastructure
+- [x] 01-03-PLAN.md -- Trace analysis API endpoint (orchestration)
 
 ### Phase 2: Fulfillment Verification
 **Goal**: User can see whether a call actually achieved its goal by comparing trace claims against live Cloud9 records
@@ -121,7 +121,7 @@ Note: Phase 3 and Phase 5 can proceed in parallel with Phase 2 and Phase 4 respe
 
 | Phase | Plans Complete | Status | Completed |
 |-------|---------------|--------|-----------|
-| 1. Trace Foundation | 0/3 | Planned | - |
+| 1. Trace Foundation | 3/3 | Complete | 2026-02-02 |
 | 2. Fulfillment Verification | 0/2 | Not started | - |
 | 3. Trace Analysis UI | 0/2 | Not started | - |
 | 4. Expert Agents & Diagnostics | 0/3 | Not started | - |
