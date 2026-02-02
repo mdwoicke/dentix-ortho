@@ -10258,6 +10258,102 @@ export async function getReplayEndpoints(
 }
 
 // ============================================================================
+// MOCK HARNESS & MOCK REPLAY
+// ============================================================================
+
+/**
+ * POST /api/test-monitor/replay/mock-harness
+ * Generate a mock harness from a trace's captured observations
+ */
+export async function generateMockHarness(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const { traceId } = req.body;
+
+    if (!traceId || typeof traceId !== 'string') {
+      res.status(400).json({ success: false, error: 'Missing or invalid traceId' });
+      return;
+    }
+
+    console.log(`[MockHarness] Generating mock harness for trace: ${traceId}`);
+    const harness = replayService.generateMockHarness(traceId);
+
+    res.json({
+      success: true,
+      data: harness,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('No observations found')) {
+      res.status(404).json({ success: false, error: error.message });
+      return;
+    }
+    next(error);
+  }
+}
+
+/**
+ * POST /api/test-monitor/replay/mock
+ * Execute a mock replay using captured trace data instead of live endpoints
+ */
+export async function executeMockReplay(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const { toolName, action, input, traceId } = req.body;
+
+    if (!traceId || typeof traceId !== 'string') {
+      res.status(400).json({ success: false, error: 'Missing or invalid traceId' });
+      return;
+    }
+    if (!toolName || typeof toolName !== 'string') {
+      res.status(400).json({ success: false, error: 'Missing or invalid toolName' });
+      return;
+    }
+    if (!action || typeof action !== 'string') {
+      res.status(400).json({ success: false, error: 'Missing or invalid action' });
+      return;
+    }
+    if (!input || typeof input !== 'object') {
+      res.status(400).json({ success: false, error: 'Missing or invalid input object' });
+      return;
+    }
+
+    console.log(`[MockReplay] Executing mock replay - tool: ${toolName}, action: ${action}, trace: ${traceId}`);
+
+    // Generate mock harness from trace
+    const harness = replayService.generateMockHarness(traceId);
+
+    // Execute replay with mock data
+    const result = await replayService.executeMockReplay(
+      { toolName, action, input },
+      harness.mockMap
+    );
+
+    res.json({
+      ...result,
+      mockMode: true,
+      mockHarness: {
+        traceId: harness.traceId,
+        observationCount: harness.observations.length,
+        mockKeys: Object.keys(harness.mockMap),
+        createdAt: harness.createdAt,
+      },
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('No observations found')) {
+      res.status(404).json({ success: false, error: error.message });
+      return;
+    }
+    next(error);
+  }
+}
+
+// ============================================================================
 // FLOWISE REPLAY & CLOUD9 DIRECT TEST
 // ============================================================================
 
