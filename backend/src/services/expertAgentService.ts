@@ -5,6 +5,7 @@
  */
 
 import BetterSqlite3 from 'better-sqlite3';
+import { createTwoFilesPatch } from 'diff';
 import { getLLMProvider } from '../../../shared/services/llm-provider';
 
 // ============================================================================
@@ -210,7 +211,9 @@ export class ExpertAgentService {
         return this.fallbackResult(agentType, version, response.error || 'LLM returned no content');
       }
 
-      return this.parseAnalysis(agentType, version, response.content);
+      const result = this.parseAnalysis(agentType, version, response.content);
+      this.attachDiff(result, artifact);
+      return result;
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[ExpertAgent] analyze() failed for ${agentType}: ${message}`);
@@ -230,6 +233,56 @@ export class ExpertAgentService {
       traceContext: { transcript: '', apiErrors: [], stepStatuses: [] },
       freeformContext: context,
     });
+  }
+
+  /**
+   * Attach a unified diff to the analysis result when suggestedCode is present.
+   * If the suggestion is partial (less than 50% of original or missing file-level markers),
+   * wrap it in a formatted comment block instead.
+   */
+  private attachDiff(result: ExpertAnalysisResult, currentArtifact: string): void {
+    if (!result.suggestedCode || !currentArtifact) return;
+
+    const suggested = result.suggestedCode;
+    const fileKey = result.affectedArtifact.fileKey;
+
+    // Detect partial: too short or lacks file-level markers
+    const isPartial =
+      suggested.length < currentArtifact.length * 0.5 ||
+      !(
+        /^(import |require\(|const |let |var |export |function |\/\/ |\/\*|#|\<)/.test(suggested.trim())
+      );
+
+    if (isPartial) {
+      result.isPartialDiff = true;
+      result.unifiedDiff = [
+        `--- Suggested change for ${fileKey} (partial) ---`,
+        '```',
+        suggested,
+        '```',
+        '--- End suggested change ---',
+      ].join('\n');
+    } else {
+      result.isPartialDiff = false;
+      try {
+        result.unifiedDiff = createTwoFilesPatch(
+          fileKey,
+          fileKey,
+          currentArtifact,
+          suggested,
+          'current',
+          'proposed'
+        );
+      } catch {
+        // Fallback if diff generation fails
+        result.unifiedDiff = [
+          `--- ${fileKey} (current)`,
+          `+++ ${fileKey} (proposed)`,
+          '',
+          suggested,
+        ].join('\n');
+      }
+    }
   }
 
   // --------------------------------------------------------------------------

@@ -25,6 +25,7 @@
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^9.4.0",
     "cors": "^2.8.5",
+    "diff": "^8.0.3",
     "dotenv": "^16.4.1",
     "express": "^4.18.2",
     "js-yaml": "^4.1.1",

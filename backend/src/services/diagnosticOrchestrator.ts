@@ -223,6 +223,14 @@ export class DiagnosticOrchestrator {
       }
       sections.push('');
       sections.push(agent.diagnosticMarkdown);
+      if (agent.unifiedDiff) {
+        sections.push('');
+        sections.push(`#### Suggested Changes${agent.isPartialDiff ? ' (partial)' : ''}`);
+        sections.push('');
+        sections.push('```diff');
+        sections.push(agent.unifiedDiff);
+        sections.push('```');
+      }
       sections.push('');
       sections.push('---');
       sections.push('');
