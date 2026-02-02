@@ -13,6 +13,7 @@ import authRoutes from './routes/auth';
 import adminRoutes from './routes/admin';
 import skillsRunnerRoutes from './routes/skillsRunner';
 import heartbeatRoutes from './routes/heartbeat';
+import traceAnalysisRoutes from './routes/traceAnalysis';
 
 /**
  * Express Application Setup
@@ -70,6 +71,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/skills-runner', skillsRunnerRoutes);
 app.use('/api/heartbeat', heartbeatRoutes);
+app.use('/api/trace-analysis', traceAnalysisRoutes);
 
 // ===========================================
 // Error Handling
