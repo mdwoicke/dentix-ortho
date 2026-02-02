@@ -20,7 +20,26 @@ import {
 const TEST_AGENT_DB_PATH = path.resolve(__dirname, '../../../test-agent/data/test-results.db');
 
 function getDb(): BetterSqlite3.Database {
-  return new BetterSqlite3(TEST_AGENT_DB_PATH);
+  const db = new BetterSqlite3(TEST_AGENT_DB_PATH);
+  // Ensure session_analysis table exists
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS session_analysis (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL,
+      caller_intent_type TEXT,
+      caller_intent_confidence REAL,
+      caller_intent_summary TEXT,
+      booking_details_json TEXT,
+      tool_sequence_json TEXT,
+      completion_rate REAL,
+      analyzed_at TEXT NOT NULL DEFAULT (datetime('now')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(session_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_session_analysis_session ON session_analysis(session_id);
+    CREATE INDEX IF NOT EXISTS idx_session_analysis_intent ON session_analysis(caller_intent_type);
+  `);
+  return db;
 }
 
 // Cache TTL: 1 hour in milliseconds
