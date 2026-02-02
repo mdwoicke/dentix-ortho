@@ -11,7 +11,14 @@
  * - GUID validation and defaults
  * - Response formatting
  * - Error detection
+ *
+ * Mock Harness mode:
+ * - Generates mock data from captured Langfuse observations
+ * - Replays tool logic against captured responses instead of live endpoints
  */
+
+import BetterSqlite3 from 'better-sqlite3';
+import path from 'path';
 
 // ============================================================================
 // TYPES
@@ -22,6 +29,13 @@ export interface ReplayRequest {
   action: string;
   input: Record<string, unknown>;
   originalObservationId?: string;
+}
+
+export interface MockHarness {
+  traceId: string;
+  observations: Array<{ observationId: string; name: string; input: any; output: any }>;
+  mockMap: Record<string, any>;
+  createdAt: string;
 }
 
 export interface ReplayResponse {
@@ -481,12 +495,50 @@ const SCHEDULING_ACTIONS: Record<string, SchedulingActionConfig> = {
 // HTTP REQUEST EXECUTION
 // ============================================================================
 
+/**
+ * Extract mock key from endpoint URL.
+ * E.g. "https://.../chord/ortho-prd/getPatientByFilter" -> "getPatientByFilter"
+ */
+function extractMockKey(endpoint: string): string {
+  const segments = endpoint.split('/');
+  return segments[segments.length - 1] || endpoint;
+}
+
 async function executeHttpRequest(
   endpoint: string,
   method: string,
   body: Record<string, unknown>,
-  logs: string[]
+  logs: string[],
+  mockMap?: Record<string, any>
 ): Promise<{ ok: boolean; status: number; statusText: string; data: unknown }> {
+  // Mock mode: return captured response instead of hitting live endpoint
+  if (mockMap) {
+    const mockKey = extractMockKey(endpoint);
+    logs.push(`[MOCK] ${method} ${endpoint} (key: ${mockKey})`);
+    logs.push(`[MOCK] Body: ${JSON.stringify(body, null, 2)}`);
+
+    if (mockKey in mockMap) {
+      const mockData = mockMap[mockKey];
+      logs.push(`[MOCK] Found captured response for key "${mockKey}"`);
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK (Mock)',
+        data: mockData,
+      };
+    }
+
+    // No mock match - return error, don't fall through to live
+    logs.push(`[MOCK] WARNING: No captured response for key "${mockKey}" - available keys: ${Object.keys(mockMap).join(', ')}`);
+    return {
+      ok: false,
+      status: 404,
+      statusText: 'Mock Not Found',
+      data: { error: `No mock data for endpoint key "${mockKey}"` },
+    };
+  }
+
+  // Live mode
   logs.push(`[HTTP] ${method} ${endpoint}`);
   logs.push(`[HTTP] Body: ${JSON.stringify(body, null, 2)}`);
 
@@ -525,7 +577,8 @@ async function searchSlotsWithExpansion(
   action: 'slots' | 'grouped_slots',
   params: Record<string, unknown>,
   uui: string,
-  logs: string[]
+  logs: string[],
+  mockMap?: Record<string, any>
 ): Promise<{ success: boolean; data: Record<string, unknown>; endpoint: string; statusCode: number }> {
   const config = SCHEDULING_ACTIONS[action];
   let lastError: string | null = null;
@@ -549,7 +602,7 @@ async function searchSlotsWithExpansion(
     logs.push(`[v50] Tier ${tierIndex} search: ${corrected.startDate} to ${corrected.endDate} (${expansionDays} days)`);
 
     try {
-      const response = await executeHttpRequest(config.endpoint, config.method, body, logs);
+      const response = await executeHttpRequest(config.endpoint, config.method, body, logs, mockMap);
       lastEndpoint = config.endpoint;
       lastStatusCode = response.status;
 
@@ -626,7 +679,8 @@ async function searchSlotsWithExpansion(
 async function executePatientTool(
   action: string,
   params: Record<string, unknown>,
-  logs: string[]
+  logs: string[],
+  mockMap?: Record<string, any>
 ): Promise<{ success: boolean; data: unknown; endpoint: string; statusCode: number }> {
   const config = PATIENT_ACTIONS[action];
   if (!config) {
@@ -650,7 +704,7 @@ async function executePatientTool(
   logs.push(`[chord_ortho_patient] Endpoint: ${config.method} ${config.endpoint}`);
 
   // Execute request
-  const response = await executeHttpRequest(config.endpoint, config.method, body, logs);
+  const response = await executeHttpRequest(config.endpoint, config.method, body, logs, mockMap);
 
   if (!response.ok) {
     const bodyError = checkForError(response.data);
@@ -691,7 +745,8 @@ async function executePatientTool(
 async function executeSchedulingTool(
   action: string,
   params: Record<string, unknown>,
-  logs: string[]
+  logs: string[],
+  mockMap?: Record<string, any>
 ): Promise<{ success: boolean; data: unknown; endpoint: string; statusCode: number }> {
   const config = SCHEDULING_ACTIONS[action];
   if (!config) {
@@ -703,7 +758,7 @@ async function executeSchedulingTool(
 
   // Use progressive expansion for slots/grouped_slots
   if (config.usesDateExpansion) {
-    const result = await searchSlotsWithExpansion(action as 'slots' | 'grouped_slots', params, uui, logs);
+    const result = await searchSlotsWithExpansion(action as 'slots' | 'grouped_slots', params, uui, logs, mockMap);
 
     if (!result.success) {
       return result;
@@ -771,7 +826,7 @@ async function executeSchedulingTool(
   }
 
   const body = config.buildBody(params, uui);
-  const response = await executeHttpRequest(config.endpoint, config.method, body, logs);
+  const response = await executeHttpRequest(config.endpoint, config.method, body, logs, mockMap);
 
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -896,6 +951,150 @@ export async function executeReplay(request: ReplayRequest): Promise<ReplayRespo
         preCallLogs: logs,
       },
       error: `Tool execution failed: ${errorMessage}`,
+    };
+  }
+}
+
+// ============================================================================
+// MOCK HARNESS - Generate mock data from captured Langfuse observations
+// ============================================================================
+
+const TEST_AGENT_DB_PATH = path.resolve(__dirname, '../../../test-agent/data/test-results.db');
+
+/**
+ * Generate a mock harness from a trace's captured observations.
+ * Extracts tool-call observations and builds a mock map keyed by endpoint action name.
+ */
+export function generateMockHarness(traceId: string): MockHarness {
+  const db = new BetterSqlite3(TEST_AGENT_DB_PATH, { readonly: true });
+
+  try {
+    const rows = db.prepare(`
+      SELECT observation_id, name, type, input, output
+      FROM production_trace_observations
+      WHERE trace_id = ? AND output IS NOT NULL
+    `).all(traceId) as Array<{ observation_id: string; name: string; type: string; input: string | null; output: string }>;
+
+    if (!rows || rows.length === 0) {
+      throw new Error(`No observations found for trace ${traceId}`);
+    }
+
+    const observations: MockHarness['observations'] = [];
+    const mockMap: Record<string, any> = {};
+
+    for (const row of rows) {
+      let parsedInput: any = null;
+      let parsedOutput: any = null;
+
+      try { parsedInput = row.input ? JSON.parse(row.input) : null; } catch { parsedInput = row.input; }
+      try { parsedOutput = JSON.parse(row.output); } catch { parsedOutput = row.output; }
+
+      observations.push({
+        observationId: row.observation_id,
+        name: row.name,
+        input: parsedInput,
+        output: parsedOutput,
+      });
+
+      // Build mock map: key by observation name (tool/endpoint name)
+      // For tool observations like "chord_ortho_patient" or "schedule_appointment_ortho",
+      // extract the action endpoint from the input if available
+      if (parsedInput && typeof parsedInput === 'object') {
+        // Try to extract endpoint action from the input URL or action field
+        const inputObj = parsedInput as Record<string, any>;
+        if (inputObj.url) {
+          const key = extractMockKey(inputObj.url);
+          mockMap[key] = parsedOutput;
+        }
+        if (inputObj.endpoint) {
+          const key = extractMockKey(inputObj.endpoint);
+          mockMap[key] = parsedOutput;
+        }
+      }
+
+      // Always also key by observation name for broader matching
+      if (row.name && parsedOutput) {
+        mockMap[row.name] = parsedOutput;
+      }
+    }
+
+    return {
+      traceId,
+      observations,
+      mockMap,
+      createdAt: new Date().toISOString(),
+    };
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Execute a replay using mock data from captured observations instead of live endpoints.
+ */
+export async function executeMockReplay(
+  request: ReplayRequest,
+  mockMap: Record<string, any>
+): Promise<ReplayResponse> {
+  const { toolName, action, input } = request;
+  const logs: string[] = [];
+  const startTime = Date.now();
+
+  const params = cleanParams(input);
+  logs.push(`[MOCK Replay] Tool: ${toolName}, Action: ${action}`);
+  logs.push(`[MOCK Replay] Mock map keys: ${Object.keys(mockMap).join(', ')}`);
+  logs.push(`[MOCK Replay] Input params: ${JSON.stringify(params, null, 2)}`);
+
+  try {
+    let result: { success: boolean; data: unknown; endpoint: string; statusCode: number };
+
+    if (toolName === 'chord_ortho_patient') {
+      result = await executePatientTool(action, params, logs, mockMap);
+    } else if (toolName === 'schedule_appointment_ortho') {
+      result = await executeSchedulingTool(action, params, logs, mockMap);
+    } else {
+      return {
+        success: false,
+        error: `Unknown tool: ${toolName}. Available tools: chord_ortho_patient, schedule_appointment_ortho`,
+      };
+    }
+
+    const durationMs = Date.now() - startTime;
+
+    return {
+      success: result.success,
+      data: {
+        response: result.data,
+        durationMs,
+        endpoint: result.endpoint,
+        statusCode: result.statusCode,
+        timestamp: new Date().toISOString(),
+        toolVersion: toolName === 'chord_ortho_patient' ? PATIENT_TOOL_VERSION : SCHEDULING_TOOL_VERSION,
+        preCallLogs: logs,
+      },
+      error: result.success ? undefined : 'Mock replay returned error (see response for details)',
+    };
+  } catch (error) {
+    const durationMs = Date.now() - startTime;
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    logs.push(`[MOCK Replay] ERROR: ${errorMessage}`);
+
+    return {
+      success: false,
+      data: {
+        response: {
+          success: false,
+          error: errorMessage,
+          _debug_error: errorMessage,
+        },
+        durationMs,
+        endpoint: getEndpointForAction(toolName, action) || 'unknown',
+        statusCode: 0,
+        timestamp: new Date().toISOString(),
+        toolVersion: toolName === 'chord_ortho_patient' ? PATIENT_TOOL_VERSION : SCHEDULING_TOOL_VERSION,
+        preCallLogs: logs,
+      },
+      error: `Mock replay failed: ${errorMessage}`,
     };
   }
 }
