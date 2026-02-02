@@ -57,10 +57,10 @@
 
 ### UI
 
-- [ ] **UI-01**: Dedicated trace analysis page in App UI for interactive investigation
-- [ ] **UI-02**: Page displays trace tree, transcript, intent classification, and fulfillment verdict
-- [ ] **UI-03**: Page shows diagnostic report when available (root cause, affected artifact, proposed diff)
-- [ ] **UI-04**: Page allows manual trigger of deep analysis on any trace
+- [x] **UI-01**: Dedicated trace analysis page in App UI for interactive investigation
+- [x] **UI-02**: Page displays trace tree, transcript, intent classification, and fulfillment verdict
+- [x] **UI-03**: Page shows diagnostic report when available (root cause, affected artifact, proposed diff)
+- [x] **UI-04**: Page allows manual trigger of deep analysis on any trace
 
 ## v2 Requirements
 
@@ -109,10 +109,10 @@
 | VERIFY-03 | Phase 2 | Pending |
 | VERIFY-04 | Phase 2 | Pending |
 | VERIFY-05 | Phase 2 | Pending |
-| UI-01 | Phase 3 | Pending |
-| UI-02 | Phase 3 | Pending |
-| UI-03 | Phase 3 | Pending |
-| UI-04 | Phase 3 | Pending |
+| UI-01 | Phase 3 | Complete |
+| UI-02 | Phase 3 | Complete |
+| UI-03 | Phase 3 | Complete |
+| UI-04 | Phase 3 | Complete |
 | EXPERT-01 | Phase 4 | Pending |
 | EXPERT-02 | Phase 4 | Pending |
 | EXPERT-03 | Phase 4 | Pending |
