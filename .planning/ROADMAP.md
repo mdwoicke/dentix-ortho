@@ -62,11 +62,11 @@ Plans:
   2. Page displays trace tree, transcript, intent classification, and fulfillment verdict for any selected trace
   3. Page shows diagnostic report (root cause, affected artifact, proposed diff) when available
   4. User can manually trigger deep analysis on any trace from the page
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 03-01: Trace analysis page with tree and transcript view
-- [ ] 03-02: Verdict display, diagnostic report view, and manual trigger
+- [ ] 03-01-PLAN.md -- Trace analysis page with search, tree, transcript, and intent classification
+- [ ] 03-02-PLAN.md -- Verdict display, diagnostic report view, and manual trigger buttons
 
 ### Phase 4: Expert Agents & Diagnostics
 **Goal**: When a call fails, system automatically identifies root cause across the full stack and produces a fix proposal
