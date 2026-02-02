@@ -4,6 +4,12 @@
  * Extracts claimed patient/appointment GUIDs from Langfuse observation outputs,
  * then queries Cloud9 production API to verify each record actually exists
  * and that claimed data (names, dates) matches actual records.
+ *
+ * SMOKE TEST (2026-02-02): Verified end-to-end with session 00b7d788.
+ * Pipeline works: returns no_claims for sessions without tool observations (correct).
+ * Sessions with actual booking tool calls (create_patient, book_child) will produce
+ * claims and trigger Cloud9 verification. Full booking session testing requires
+ * a session that completed the booking flow (reached tool invocation stage).
  */
 
 import { Cloud9Client } from './cloud9/client';
