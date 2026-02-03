@@ -128,6 +128,12 @@ const Icons = {
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 14l2 2 4-4" />
     </svg>
   ),
+  PhoneForward: () => (
+    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 3h6m0 0v6m0-6l-7 7" />
+    </svg>
+  ),
   Flow: () => (
     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
@@ -236,12 +242,13 @@ function formatSpanDuration(seconds: number | null): string {
 interface TraceModalProps {
   traceId: string;
   timezone: string;
+  langfuseProjectId?: string;
   onClose: () => void;
 }
 
 type TraceModalTab = 'transcript' | 'performance' | 'flow';
 
-function TraceModal({ traceId, timezone, onClose }: TraceModalProps) {
+function TraceModal({ traceId, timezone, langfuseProjectId, onClose }: TraceModalProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [traceDetail, setTraceDetail] = useState<ProductionTraceDetail | null>(null);
@@ -381,6 +388,11 @@ function TraceModal({ traceId, timezone, onClose }: TraceModalProps) {
               transcript={traceDetail.transcript}
               apiCalls={traceDetail.apiCalls}
               loading={false}
+              dbId={traceDetail.trace.id}
+              langfuseTraceId={traceDetail.trace.traceId}
+              langfuseHost={traceDetail.trace.langfuseHost}
+              langfuseProjectId={langfuseProjectId}
+              flowiseSessionId={traceDetail.trace.sessionId || undefined}
             />
           )}
 
@@ -702,6 +714,9 @@ function SessionModal({ sessionId, configId, timezone, langfuseProjectId, onClos
               transcript={sessionDetail.transcript}
               apiCalls={sessionDetail.apiCalls}
               loading={false}
+              langfuseHost={sessionDetail.session.langfuseHost}
+              langfuseProjectId={langfuseProjectId}
+              flowiseSessionId={sessionDetail.session.sessionId}
             />
           )}
 
@@ -783,7 +798,7 @@ export default function CallTracePage() {
   const [timezone, setTimezone] = useState<string>(getStoredTimezone);
   const [configs, setConfigs] = useState<LangfuseConfigProfile[]>([]);
   const [selectedConfigId, setSelectedConfigId] = useState<number | null>(null);
-  const [fromDate, setFromDate] = useState(getDateDaysAgo(7));
+  const [fromDate, setFromDate] = useState(getDateDaysAgo(1)); // Default to 24 hours
   const [traces, setTraces] = useState<ProductionTrace[]>([]);
   const [sessions, setSessions] = useState<ProductionSession[]>([]);
   const [total, setTotal] = useState(0);
@@ -798,10 +813,10 @@ export default function CallTracePage() {
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [rebuildingSessions, setRebuildingessions] = useState(false);
-  const [hasImported, setHasImported] = useState(false); // Track if user has run import
+  const [hasImported, setHasImported] = useState(true); // Auto-load cached data on page load
 
-  // Filter state
-  const [filterFromDate, setFilterFromDate] = useState('');
+  // Filter state - default to last 24 hours
+  const [filterFromDate, setFilterFromDate] = useState(() => getDateDaysAgo(1));
   const [filterToDate, setFilterToDate] = useState('');
   const [filterSessionId, setFilterSessionId] = useState('');
   const [showFilters, setShowFilters] = useState(false);
@@ -1440,15 +1455,38 @@ export default function CallTracePage() {
               </svg>
             </button>
 
-            {hasActiveFilters && (
+            <div className="flex items-center gap-2">
+              {/* Quick filter buttons */}
               <button
-                onClick={clearFilters}
-                className="flex items-center gap-1 text-sm text-gray-500 hover:text-red-600 dark:text-gray-400 dark:hover:text-red-400"
+                onClick={() => {
+                  setFilterFromDate(getDateDaysAgo(1));
+                  setFilterToDate('');
+                  applyFilters();
+                }}
+                className="px-2 py-1 text-xs bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 rounded hover:bg-blue-200 dark:hover:bg-blue-800"
               >
-                <Icons.XCircle />
-                Clear Filters
+                Last 24h
               </button>
-            )}
+              <button
+                onClick={() => {
+                  setFilterFromDate(getDateDaysAgo(7));
+                  setFilterToDate('');
+                  applyFilters();
+                }}
+                className="px-2 py-1 text-xs bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-600"
+              >
+                Last 7d
+              </button>
+              {hasActiveFilters && (
+                <button
+                  onClick={clearFilters}
+                  className="flex items-center gap-1 text-sm text-gray-500 hover:text-red-600 dark:text-gray-400 dark:hover:text-red-400"
+                >
+                  <Icons.XCircle />
+                  Clear
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Expandable Filter Fields */}
@@ -1641,6 +1679,9 @@ export default function CallTracePage() {
                   <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                     Booked
                   </th>
+                  <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    Transfer
+                  </th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                     Last Activity
                   </th>
@@ -1652,7 +1693,7 @@ export default function CallTracePage() {
               <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                 {!hasImported ? (
                   <tr>
-                    <td colSpan={9} className="px-4 py-12 text-center">
+                    <td colSpan={10} className="px-4 py-12 text-center">
                       <div className="flex flex-col items-center gap-3 text-gray-500 dark:text-gray-400">
                         <Icons.Download />
                         <div className="text-lg font-medium">Select a date and run Import to load data</div>
@@ -1662,13 +1703,13 @@ export default function CallTracePage() {
                   </tr>
                 ) : loading && sessions.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="px-4 py-8 text-center">
+                    <td colSpan={10} className="px-4 py-8 text-center">
                       <Spinner size="lg" />
                     </td>
                   </tr>
                 ) : sessions.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="px-4 py-8 text-center text-gray-500 dark:text-gray-400">
+                    <td colSpan={10} className="px-4 py-8 text-center text-gray-500 dark:text-gray-400">
                       No conversations found. Try adjusting the date range or import more traces.
                     </td>
                   </tr>
@@ -1713,6 +1754,16 @@ export default function CallTracePage() {
                             title="Appointment successfully booked"
                           >
                             <Icons.CalendarCheck />
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        {session.hasTransfer && (
+                          <span
+                            className="inline-flex items-center justify-center text-orange-600 dark:text-orange-400"
+                            title="Call was transferred to human agent"
+                          >
+                            <Icons.PhoneForward />
                           </span>
                         )}
                       </td>
@@ -2116,6 +2167,7 @@ export default function CallTracePage() {
         <TraceModal
           traceId={selectedTraceId}
           timezone={timezone}
+          langfuseProjectId={langfuseProjectId}
           onClose={() => setSelectedTraceId(null)}
         />
       )}

@@ -31,6 +31,13 @@ export interface ImportResult {
   tracesSkipped: number;
   status: 'completed' | 'failed';
   errorMessage?: string;
+  // Effective date used for API call (may differ from user's fromDate if we already have data)
+  effectiveFromDate?: string;
+  // Prod Tracer auto-import results (if any bookings were found)
+  prodTracerImported?: {
+    patientsFound: number;
+    appointmentsFound: number;
+  };
 }
 
 interface LangfuseTrace {
@@ -82,6 +89,13 @@ export class LangfuseTraceService {
 
   constructor(db: BetterSqlite3.Database) {
     this.db = db;
+
+    // Ensure has_transfer column exists on production_sessions (migration for existing databases)
+    try {
+      this.db.exec(`ALTER TABLE production_sessions ADD COLUMN has_transfer INTEGER DEFAULT 0`);
+    } catch {
+      // Column already exists, ignore
+    }
   }
 
   /**
@@ -196,6 +210,8 @@ export class LangfuseTraceService {
   /**
    * Import traces from Langfuse
    * Uses pagination to handle large datasets
+   * OPTIMIZATION: Calculates effective fromDate based on latest trace in DB
+   * to avoid re-fetching traces we already have from the Langfuse API
    */
   async importTraces(options: ImportOptions): Promise<ImportResult> {
     const { configId, fromDate, toDate, limit = 50 } = options;
@@ -213,6 +229,20 @@ export class LangfuseTraceService {
 
     if (!config.secretKey) {
       throw new Error(`Langfuse config ${configId} is missing secret key`);
+    }
+
+    // OPTIMIZATION: Calculate effective fromDate to avoid re-fetching traces we already have
+    // Use the LATER of: user's fromDate OR latest existing trace timestamp + 1ms
+    let effectiveFromDate = fromDate;
+    const latestExisting = this.getLastImportDate(configId);
+    if (latestExisting) {
+      const latestTime = new Date(latestExisting).getTime();
+      const userFromTime = new Date(fromDate).getTime();
+      if (latestTime >= userFromTime) {
+        // Add 1ms to avoid re-fetching the exact same trace
+        effectiveFromDate = new Date(latestTime + 1).toISOString();
+        console.log(`[LangfuseTraceService] Optimizing fromDate: ${fromDate} → ${effectiveFromDate.split('T')[0]} (already have data up to ${latestExisting})`);
+      }
     }
 
     // Create import history record
@@ -237,7 +267,7 @@ export class LangfuseTraceService {
         // Build URL with query params
         // Langfuse API orderBy format: [field].[asc/desc] e.g., "timestamp.desc"
         const params = new URLSearchParams();
-        params.append('fromTimestamp', new Date(fromDate).toISOString());
+        params.append('fromTimestamp', new Date(effectiveFromDate).toISOString());
         if (toDate) {
           params.append('toTimestamp', new Date(toDate).toISOString());
         }
@@ -352,7 +382,7 @@ export class LangfuseTraceService {
 
       console.log(`[LangfuseTraceService] Import complete: ${tracesImported} imported, ${tracesSkipped} skipped`);
 
-      return { importId, tracesImported, tracesSkipped, status: 'completed' };
+      return { importId, tracesImported, tracesSkipped, status: 'completed', effectiveFromDate };
     } catch (error: any) {
       console.error(`[LangfuseTraceService] Import failed:`, error);
 
@@ -450,10 +480,27 @@ export class LangfuseTraceService {
           SELECT COUNT(*) > 0 FROM production_trace_observations pto
           JOIN production_traces pt ON pto.trace_id = pt.trace_id
           WHERE pt.session_id = ? AND pt.langfuse_config_id = ?
-            AND pto.output LIKE '%Appointment GUID Added%'
+            AND (
+              pto.output LIKE '%Appointment GUID Added%'
+              OR (pto.name = 'schedule_appointment_ortho' AND (pto.output LIKE '%"booked":true%' OR pto.output LIKE '%"booked": true%'))
+            )
+        ),
+        has_transfer = (
+          SELECT COUNT(*) > 0 FROM production_trace_observations pto
+          JOIN production_traces pt ON pto.trace_id = pt.trace_id
+          WHERE pt.session_id = ? AND pt.langfuse_config_id = ?
+            AND (
+              -- Check Call_Final_Disposition in the payload (most reliable)
+              -- Note: Output contains escaped JSON so we match \"Transfer\" pattern
+              pto.output LIKE '%\\"Call_Final_Disposition\\": \\"Transfer\\"%'
+              OR pto.output LIKE '%\\"Call_Final_Disposition\\":\\"Transfer\\"%'
+              -- Also check caller_intent for backward compatibility
+              OR pto.output LIKE '%\\"caller_intent\\": \\"transfer\\"%'
+              OR pto.output LIKE '%\\"caller_intent\\":\\"transfer\\"%'
+            )
         )
       WHERE session_id = ? AND langfuse_config_id = ?
-    `).run(sessionId, configId, sessionId, configId, sessionId, configId);
+    `).run(sessionId, configId, sessionId, configId, sessionId, configId, sessionId, configId);
   }
 
   /**
@@ -1081,7 +1128,23 @@ export class LangfuseTraceService {
          JOIN production_traces pt ON pto.trace_id = pt.trace_id
          WHERE pt.session_id = ps.session_id
            AND pt.langfuse_config_id = ps.langfuse_config_id
-           AND pto.output LIKE '%Appointment GUID Added%') as has_successful_booking
+           AND (
+             pto.output LIKE '%Appointment GUID Added%'
+             OR (pto.name = 'schedule_appointment_ortho' AND (pto.output LIKE '%"booked":true%' OR pto.output LIKE '%"booked": true%'))
+           )) as has_successful_booking,
+        (SELECT COUNT(*) > 0 FROM production_trace_observations pto
+         JOIN production_traces pt ON pto.trace_id = pt.trace_id
+         WHERE pt.session_id = ps.session_id
+           AND pt.langfuse_config_id = ps.langfuse_config_id
+           AND (
+             -- Check Call_Final_Disposition in the payload (most reliable)
+             -- Note: Output contains escaped JSON so we match \"Transfer\" pattern
+             pto.output LIKE '%\\"Call_Final_Disposition\\": \\"Transfer\\"%'
+             OR pto.output LIKE '%\\"Call_Final_Disposition\\":\\"Transfer\\"%'
+             -- Also check caller_intent for backward compatibility
+             OR pto.output LIKE '%\\"caller_intent\\": \\"transfer\\"%'
+             OR pto.output LIKE '%\\"caller_intent\\":\\"transfer\\"%'
+           )) as has_transfer
       FROM production_sessions ps
       JOIN langfuse_configs lc ON ps.langfuse_config_id = lc.id
       WHERE ps.session_id = ?
@@ -1256,6 +1319,9 @@ export class LangfuseTraceService {
         `).run(conversationId, trace.trace_id);
         tracesUpdated++;
       }
+
+      // Update cached stats (has_transfer, has_successful_booking, error_count) for this session
+      this.updateSessionCachedStats(conversationId, firstTrace.langfuse_config_id);
     }
 
     console.log(`[LangfuseTraceService] Rebuilt sessions: ${sessionsCreated} conversations from ${tracesUpdated} traces`);

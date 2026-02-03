@@ -65,7 +65,7 @@ function isBusinessHours(): boolean {
 // ============================================================================
 
 export function CacheHealthPage() {
-  const [activeTab, setActiveTab] = useState<'tiers' | 'slots' | 'history' | 'operations'>('tiers');
+  const [activeTab, setActiveTab] = useState<'tiers' | 'slots' | 'history' | 'scheduler' | 'operations'>('tiers');
   const [data, setData] = useState<CacheHealthResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -80,6 +80,12 @@ export function CacheHealthPage() {
 
   // Modal state for viewing tier slots
   const [viewSlotsModal, setViewSlotsModal] = useState<{ isOpen: boolean; tier: number; tierDays: number } | null>(null);
+
+  // Auto cache refresh (triggers actual cache refresh, not just UI refresh)
+  const [autoCacheRefreshEnabled, setAutoCacheRefreshEnabled] = useState(false);
+  const [autoCacheRefreshInterval, setAutoCacheRefreshInterval] = useState(5); // minutes
+  const [nextCacheRefreshIn, setNextCacheRefreshIn] = useState<number | null>(null);
+  const [autoCacheRefreshCount, setAutoCacheRefreshCount] = useState(0);
 
   // ============================================================================
   // DATA FETCHING
@@ -108,6 +114,48 @@ export function CacheHealthPage() {
     const interval = setInterval(fetchData, 30000); // Refresh every 30s
     return () => clearInterval(interval);
   }, [autoRefresh, fetchData]);
+
+  // Auto cache refresh - triggers actual purge & refresh at interval
+  useEffect(() => {
+    if (!autoCacheRefreshEnabled || autoCacheRefreshInterval <= 0) {
+      setNextCacheRefreshIn(null);
+      return;
+    }
+
+    const intervalMs = autoCacheRefreshInterval * 60 * 1000;
+    let countdown = autoCacheRefreshInterval * 60;
+    setNextCacheRefreshIn(countdown);
+
+    // Countdown timer (updates every second)
+    const countdownInterval = setInterval(() => {
+      countdown -= 1;
+      setNextCacheRefreshIn(countdown);
+    }, 1000);
+
+    // Actual refresh timer
+    const refreshInterval = setInterval(async () => {
+      console.log('[AutoCacheRefresh] Triggering cache refresh...');
+      try {
+        setPurging(true);
+        await purgeAndRefreshCache();
+        setAutoCacheRefreshCount(prev => prev + 1);
+        await fetchData();
+        console.log('[AutoCacheRefresh] Cache refresh complete');
+      } catch (err: any) {
+        console.error('[AutoCacheRefresh] Failed:', err.message);
+        setError(`Auto refresh failed: ${err.message}`);
+      } finally {
+        setPurging(false);
+        countdown = autoCacheRefreshInterval * 60;
+        setNextCacheRefreshIn(countdown);
+      }
+    }, intervalMs);
+
+    return () => {
+      clearInterval(countdownInterval);
+      clearInterval(refreshInterval);
+    };
+  }, [autoCacheRefreshEnabled, autoCacheRefreshInterval, fetchData]);
 
   // ============================================================================
   // OPERATIONS
@@ -316,7 +364,7 @@ export function CacheHealthPage() {
 
       {/* Summary Stats Cards */}
       {data && (
-        <div className="grid grid-cols-5 gap-4">
+        <div className="grid grid-cols-6 gap-4">
           {/* Overall Health */}
           <div className="bg-white dark:bg-gray-800 rounded-lg p-4 shadow-sm">
             <div className="text-sm text-gray-500 dark:text-gray-400">Overall Health</div>
@@ -374,6 +422,20 @@ export function CacheHealthPage() {
               {data.config?.businessHours || 'Mon-Fri 7am-5pm CST'}
             </div>
           </div>
+
+          {/* Backend Scheduler Status */}
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-4 shadow-sm">
+            <div className="text-sm text-gray-500 dark:text-gray-400">Backend Scheduler</div>
+            <div className="flex items-center space-x-2 mt-1">
+              <span className={`w-2 h-2 rounded-full ${data.backendScheduler?.running ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></span>
+              <span className="text-lg font-medium text-gray-900 dark:text-white">
+                {data.backendScheduler?.running ? 'Running' : 'Stopped'}
+              </span>
+            </div>
+            <div className="text-xs text-gray-500">
+              {data.backendScheduler?.config ? `Every ${data.backendScheduler.config.refreshIntervalMs / 60000}min` : 'N/A'}
+            </div>
+          </div>
         </div>
       )}
 
@@ -383,7 +445,8 @@ export function CacheHealthPage() {
           {[
             { id: 'tiers', label: 'Tier Details' },
             { id: 'slots', label: 'Slots by Date' },
-            { id: 'history', label: 'Refresh History' },
+            { id: 'history', label: 'Node-RED History' },
+            { id: 'scheduler', label: 'Scheduler' },
             { id: 'operations', label: 'Operations' },
           ].map((tab) => (
             <button
@@ -526,8 +589,210 @@ export function CacheHealthPage() {
         </div>
       )}
 
+      {activeTab === 'scheduler' && data && (
+        <div className="space-y-6">
+          {/* Scheduler Configuration */}
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-6">
+            <h2 className="text-lg font-medium text-gray-900 dark:text-white mb-4">Backend Scheduler Configuration</h2>
+            {data.backendScheduler ? (
+              <div className="grid grid-cols-2 gap-6">
+                <div className="space-y-3">
+                  <div className="flex justify-between">
+                    <span className="text-sm text-gray-500">Status:</span>
+                    <span className={`text-sm font-medium ${data.backendScheduler.running ? 'text-green-600' : 'text-red-600'}`}>
+                      {data.backendScheduler.running ? 'Running' : 'Stopped'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-sm text-gray-500">Refresh Interval:</span>
+                    <span className="text-sm font-medium text-gray-900 dark:text-white">
+                      {data.backendScheduler.config?.refreshIntervalMs ? `${data.backendScheduler.config.refreshIntervalMs / 60000} minutes` : 'N/A'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-sm text-gray-500">Business Hours:</span>
+                    <span className="text-sm font-medium text-gray-900 dark:text-white">
+                      {data.backendScheduler.config ? `${data.backendScheduler.config.businessHoursStart}:00 - ${data.backendScheduler.config.businessHoursEnd}:00 ${data.backendScheduler.config.timezone}` : 'N/A'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-sm text-gray-500">Currently Business Hours:</span>
+                    <span className={`text-sm font-medium ${data.backendScheduler.isBusinessHours ? 'text-green-600' : 'text-gray-500'}`}>
+                      {data.backendScheduler.isBusinessHours ? 'Yes' : 'No'}
+                    </span>
+                  </div>
+                </div>
+                <div className="space-y-3">
+                  <div className="flex justify-between">
+                    <span className="text-sm text-gray-500">Last Refresh:</span>
+                    <span className="text-sm font-medium text-gray-900 dark:text-white">
+                      {data.backendScheduler.lastRefreshTime ? formatTime(data.backendScheduler.lastRefreshTime) : 'Never'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-sm text-gray-500">Last Result:</span>
+                    <span className={`text-sm font-medium ${data.backendScheduler.lastRefreshResult?.success ? 'text-green-600' : 'text-red-600'}`}>
+                      {data.backendScheduler.lastRefreshResult?.success ? 'Success' : data.backendScheduler.lastRefreshResult?.message || 'N/A'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-sm text-gray-500">Next Refresh In:</span>
+                    <span className="text-sm font-medium text-gray-900 dark:text-white">
+                      {data.backendScheduler.nextRefreshIn ? formatDuration(data.backendScheduler.nextRefreshIn) : 'N/A'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="text-gray-500">Scheduler information not available</div>
+            )}
+          </div>
+
+          {/* Scheduler Refresh History */}
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
+              <h2 className="text-lg font-medium text-gray-900 dark:text-white">Backend Scheduler History (Last 20)</h2>
+            </div>
+            <div className="max-h-[400px] overflow-y-auto">
+              <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                <thead className="bg-gray-50 dark:bg-gray-900 sticky top-0">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Timestamp</th>
+                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Status</th>
+                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Duration</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Message</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                  {(!data.backendScheduler?.history || data.backendScheduler.history.length === 0) ? (
+                    <tr>
+                      <td colSpan={4} className="px-6 py-8 text-center text-gray-500">
+                        No scheduler history available yet
+                      </td>
+                    </tr>
+                  ) : (
+                    data.backendScheduler.history.map((entry, idx) => (
+                      <tr key={idx} className={`hover:bg-gray-50 dark:hover:bg-gray-700 ${entry.success ? '' : 'bg-red-50 dark:bg-red-900/20'}`}>
+                        <td className="px-6 py-3 text-sm text-gray-900 dark:text-white whitespace-nowrap">
+                          {formatTime(entry.timestamp)}
+                        </td>
+                        <td className="px-6 py-3 text-center">
+                          {entry.skipped ? (
+                            <span className="px-2 py-1 text-xs font-medium rounded bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200">
+                              SKIPPED
+                            </span>
+                          ) : entry.success ? (
+                            <span className="px-2 py-1 text-xs font-medium rounded bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
+                              SUCCESS
+                            </span>
+                          ) : (
+                            <span className="px-2 py-1 text-xs font-medium rounded bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200">
+                              FAILED
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-6 py-3 text-sm text-center text-gray-900 dark:text-white">
+                          {entry.durationMs ? `${entry.durationMs}ms` : '-'}
+                        </td>
+                        <td className="px-6 py-3 text-sm text-gray-600 dark:text-gray-400 max-w-md truncate" title={entry.message}>
+                          {entry.skipped ? entry.skipReason : entry.message || '-'}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
       {activeTab === 'operations' && (
         <div className="space-y-6 max-w-2xl">
+          {/* Auto Cache Refresh Panel */}
+          <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-lg font-medium text-blue-900 dark:text-blue-100">Auto Cache Refresh</h3>
+                <p className="text-sm text-blue-700 dark:text-blue-300">
+                  Automatically refresh cache while this page is open
+                </p>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={autoCacheRefreshEnabled}
+                  onChange={(e) => setAutoCacheRefreshEnabled(e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+                <span className="ml-3 text-sm font-medium text-gray-900 dark:text-gray-300">
+                  {autoCacheRefreshEnabled ? 'ON' : 'OFF'}
+                </span>
+              </label>
+            </div>
+
+            <div className="flex items-center gap-4">
+              <div className="flex-1">
+                <label className="block text-sm font-medium text-blue-800 dark:text-blue-200 mb-1">
+                  Refresh Interval (minutes)
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min="1"
+                    max="60"
+                    value={autoCacheRefreshInterval}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value) || 1;
+                      setAutoCacheRefreshInterval(Math.max(1, Math.min(60, val)));
+                    }}
+                    disabled={autoCacheRefreshEnabled}
+                    className="w-20 px-3 py-2 border border-blue-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-blue-600 dark:text-white disabled:opacity-50 text-center"
+                  />
+                  <div className="flex gap-1">
+                    {[1, 3, 5, 10].map((mins) => (
+                      <button
+                        key={mins}
+                        onClick={() => setAutoCacheRefreshInterval(mins)}
+                        disabled={autoCacheRefreshEnabled}
+                        className={`px-2 py-1 text-xs rounded ${
+                          autoCacheRefreshInterval === mins
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-800 dark:text-blue-200'
+                        } disabled:opacity-50`}
+                      >
+                        {mins}m
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {autoCacheRefreshEnabled && nextCacheRefreshIn !== null && (
+                <div className="text-center">
+                  <div className="text-2xl font-mono font-bold text-blue-600 dark:text-blue-400">
+                    {Math.floor(nextCacheRefreshIn / 60)}:{(nextCacheRefreshIn % 60).toString().padStart(2, '0')}
+                  </div>
+                  <div className="text-xs text-blue-600 dark:text-blue-400">until next refresh</div>
+                </div>
+              )}
+            </div>
+
+            {autoCacheRefreshEnabled && (
+              <div className="mt-4 flex items-center gap-2 text-sm text-blue-700 dark:text-blue-300">
+                <svg className="animate-pulse h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
+                  <circle cx="10" cy="10" r="10" />
+                </svg>
+                Auto-refresh active
+                {autoCacheRefreshCount > 0 && (
+                  <span className="text-blue-500">({autoCacheRefreshCount} refresh{autoCacheRefreshCount !== 1 ? 'es' : ''} completed)</span>
+                )}
+                {purging && <span className="text-green-600 font-medium ml-2">Refreshing now...</span>}
+              </div>
+            )}
+          </div>
+
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-6 space-y-6">
             {/* Tier Selector */}
             <div>

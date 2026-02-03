@@ -19,6 +19,7 @@ import * as comparisonService from '../services/comparisonService';
 import { aiEnhancementService } from '../services/aiEnhancementService';
 import * as documentParserService from '../services/documentParserService';
 import { LangfuseTraceService } from '../services/langfuseTraceService';
+import { ProdTestRecordService } from '../services/prodTestRecordService';
 import { QueueActivityService } from '../services/queueActivityService';
 import { getLLMProvider } from '../../../shared/services/llm-provider';
 import { DiagnosticOrchestrator, DiagnosticRequest, ToolIOSummary } from '../services/diagnosticOrchestrator';
@@ -8452,41 +8453,81 @@ export function transformToConversationTurns(trace: any, _observations: any[]): 
   const turns: any[] = [];
 
   // Parse input/output from trace
-  const input = trace.input ? JSON.parse(trace.input) : null;
-  const output = trace.output ? JSON.parse(trace.output) : null;
+  let input: any = null;
+  let output: any = null;
+
+  try {
+    input = trace.input ? (typeof trace.input === 'string' ? JSON.parse(trace.input) : trace.input) : null;
+  } catch {
+    // If input is not valid JSON, treat it as a string message
+    if (typeof trace.input === 'string' && trace.input.trim()) {
+      input = { question: trace.input };
+    }
+  }
+
+  try {
+    output = trace.output ? (typeof trace.output === 'string' ? JSON.parse(trace.output) : trace.output) : null;
+  } catch {
+    // If output is not valid JSON, treat it as a string response
+    if (typeof trace.output === 'string' && trace.output.trim()) {
+      output = trace.output;
+    }
+  }
 
   // Extract chat history from Flowise-style input
   if (input?.history && Array.isArray(input.history)) {
     for (const msg of input.history) {
+      // Handle various role names: apiMessage, assistant, ai -> assistant; userMessage, user, human -> user
+      const role = (msg.role === 'apiMessage' || msg.role === 'assistant' || msg.role === 'ai')
+        ? 'assistant'
+        : 'user';
       turns.push({
-        role: msg.role === 'apiMessage' ? 'assistant' : 'user',
-        content: stripPayload(msg.content || ''),
+        role,
+        content: stripPayload(msg.content || msg.message || msg.text || ''),
         timestamp: trace.started_at,
       });
     }
   }
 
-  // Add current question if present
-  if (input?.question) {
+  // Extract user message from various possible input formats
+  // Flowise uses: question, message, input, text, content
+  const userMessage = input?.question || input?.message ||
+    (typeof input?.input === 'string' ? input.input : null) ||
+    input?.text ||
+    (typeof input?.content === 'string' ? input.content : null);
+
+  if (userMessage && typeof userMessage === 'string' && userMessage.trim()) {
     turns.push({
       role: 'user',
-      content: input.question,
+      content: userMessage.trim(),
       timestamp: trace.started_at,
     });
   }
 
   // Add final response
   if (output) {
-    // Handle Flowise returnValues structure
-    const rawContent = typeof output === 'string'
-      ? output
-      : output.returnValues?.output || output.text || output.content || output.output || JSON.stringify(output);
-    turns.push({
-      role: 'assistant',
-      content: stripPayload(rawContent),
-      timestamp: trace.ended_at || trace.started_at,
-      responseTimeMs: trace.latency_ms,
-    });
+    // Handle Flowise returnValues structure and various output formats
+    let rawContent: string;
+    if (typeof output === 'string') {
+      rawContent = output;
+    } else {
+      rawContent = output.returnValues?.output ||
+        output.text ||
+        output.content ||
+        output.output ||
+        output.response ||
+        output.message ||
+        (typeof output === 'object' ? JSON.stringify(output) : String(output));
+    }
+
+    if (rawContent && rawContent.trim()) {
+      turns.push({
+        role: 'assistant',
+        content: stripPayload(rawContent),
+        timestamp: trace.ended_at || trace.started_at,
+        responseTimeMs: trace.latency_ms,
+      });
+    }
   }
 
   return turns;
@@ -9548,6 +9589,7 @@ export async function getSessionFixes(
 /**
  * POST /api/test-monitor/production-calls/import
  * Start trace import from Langfuse
+ * Automatically imports booking records to Prod Tracer after successful trace import
  */
 export async function importProductionTraces(
   req: Request,
@@ -9576,6 +9618,29 @@ export async function importProductionTraces(
       toDate,
       refreshObservations: refreshObservations === true,
     });
+
+    // Auto-import booking records to Prod Tracer after successful trace import
+    if (result.status === 'completed' && result.tracesImported > 0) {
+      try {
+        const prodTestService = new ProdTestRecordService(db);
+        const prodResult = await prodTestService.importFromLangfuse({
+          configId: parseInt(configId),
+          fromDate: result.effectiveFromDate || fromDate,  // Use the same effective date range
+          toDate,
+        });
+
+        console.log(`[importProductionTraces] Auto-imported to Prod Tracer: ${prodResult.patientsFound} patients, ${prodResult.appointmentsFound} appointments`);
+
+        // Include Prod Tracer results in response
+        result.prodTracerImported = {
+          patientsFound: prodResult.patientsFound,
+          appointmentsFound: prodResult.appointmentsFound,
+        };
+      } catch (err: any) {
+        console.error('[importProductionTraces] Failed to auto-import to Prod Tracer:', err.message);
+        // Don't fail the main import - just log the error
+      }
+    }
 
     res.json({ success: true, data: result });
   } catch (error) {
@@ -9668,6 +9733,7 @@ function transformSessionRow(row: any): any {
     importedAt: row.imported_at,
     errorCount: row.error_count || 0,
     hasSuccessfulBooking: Boolean(row.has_successful_booking),
+    hasTransfer: Boolean(row.has_transfer),
   };
 }
 
@@ -10031,6 +10097,7 @@ export async function getTraceInsights(
 
 import * as noderedDeployService from '../services/noderedDeployService';
 import * as replayService from '../services/replayService';
+import { getCacheSchedulerStatus, getCacheRefreshHistory } from '../services/cacheRefreshScheduler';
 
 /**
  * GET /api/test-monitor/nodered/status
@@ -10681,9 +10748,18 @@ export async function getCacheHealth(
     // If we got valid cache health data (has tiers array), return it as success
     // Node-RED returns 503 when cache is unhealthy but data is still valid
     if (data && Array.isArray(data.tiers)) {
+      // Add backend scheduler status and history to the response
+      const schedulerStatus = getCacheSchedulerStatus();
+      const refreshHistory = getCacheRefreshHistory(20); // Last 20 refreshes
       res.json({
         success: true,
-        data,
+        data: {
+          ...data,
+          backendScheduler: {
+            ...schedulerStatus,
+            history: refreshHistory,
+          },
+        },
       });
       return;
     }

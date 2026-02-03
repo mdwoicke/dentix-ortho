@@ -1072,6 +1072,12 @@ export interface ImportResult {
   tracesSkipped: number;
   status: 'completed' | 'failed';
   errorMessage?: string;
+  effectiveFromDate?: string;
+  // Prod Tracer auto-import results (if any bookings were found)
+  prodTracerImported?: {
+    patientsFound: number;
+    appointmentsFound: number;
+  };
 }
 
 /**
@@ -1126,6 +1132,7 @@ export interface ProductionSession {
   importedAt: string;
   errorCount: number;
   hasSuccessfulBooking: boolean;
+  hasTransfer?: boolean;
 }
 
 /**
@@ -1405,6 +1412,44 @@ export interface CacheHealthConfig {
 /**
  * Full cache health response from Node-RED endpoint
  */
+/**
+ * Backend scheduler history entry
+ */
+export interface BackendSchedulerHistoryEntry {
+  id: number;
+  timestamp: string;
+  source: string;
+  success: boolean;
+  message: string;
+  skipped: boolean;
+  skipReason: string | null;
+  durationMs: number | null;
+}
+
+/**
+ * Backend scheduler configuration
+ */
+export interface BackendSchedulerConfig {
+  refreshIntervalMs: number;
+  startupDelayMs: number;
+  businessHoursStart: number;
+  businessHoursEnd: number;
+  timezone: string;
+}
+
+/**
+ * Backend scheduler status
+ */
+export interface BackendSchedulerStatus {
+  running: boolean;
+  config: BackendSchedulerConfig;
+  lastRefreshTime: string | null;
+  lastRefreshResult: { success: boolean; message: string } | null;
+  nextRefreshIn: number;
+  isBusinessHours: boolean;
+  history: BackendSchedulerHistoryEntry[];
+}
+
 export interface CacheHealthResponse {
   status: 'healthy' | 'degraded' | 'unhealthy';
   timestamp: string;
@@ -1413,6 +1458,7 @@ export interface CacheHealthResponse {
   refreshStats: CacheRefreshStats;
   refreshHistory: CacheRefreshHistoryEntry[];
   config: CacheHealthConfig;
+  backendScheduler?: BackendSchedulerStatus;
 }
 
 /**
