@@ -11,7 +11,7 @@ export default defineConfig({
     proxy: {
       // Proxy backend API calls - enables network access via any IP
       '/api': {
-        target: 'http://localhost:3002',
+        target: 'http://localhost:3003',
         changeOrigin: true,
       },
       // Proxy Node Red API calls to the production server

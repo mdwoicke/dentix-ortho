@@ -10,7 +10,9 @@ import { SkillSelector } from '../../components/features/skillsRunner/SkillSelec
 import { TerminalEmulator } from '../../components/features/skillsRunner/TerminalEmulator';
 import { SSHConfigModal } from '../../components/features/skillsRunner/SSHConfigModal';
 import { SkillBrowser } from '../../components/features/skillsRunner/SkillBrowser';
+import { AgentReportModal } from '../../components/features/skillsRunner/AgentReportModal';
 import type { Skill } from '../../components/features/skillsRunner/SkillSelector';
+import type { AgentReportData } from '../../components/features/skillsRunner/TerminalEmulator';
 import {
   fetchSkills,
   fetchSSHTargets,
@@ -54,6 +56,10 @@ export function SkillsRunnerPage() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [lastExitCode, setLastExitCode] = useState<number | null>(null);
+
+  // Agent report state
+  const [agentReport, setAgentReport] = useState<AgentReportData | null>(null);
+  const [showReportModal, setShowReportModal] = useState(false);
 
   // Filter skills based on auth mode
   // - Non-AI skills are always shown
@@ -135,6 +141,11 @@ export function SkillsRunnerPage() {
     setInputs(prev => ({ ...prev, [name]: value }));
   }, []);
 
+  // Handle report ready
+  const handleReportReady = useCallback((report: AgentReportData) => {
+    setAgentReport(report);
+  }, []);
+
   // Handle run
   const handleRun = async () => {
     if (!selectedSkill || !selectedTarget) return;
@@ -142,6 +153,7 @@ export function SkillsRunnerPage() {
     try {
       setIsRunning(true);
       setLastExitCode(null);
+      setAgentReport(null);
       const result = await executeSkill(selectedSkill.id, selectedTarget, inputs);
       setSessionId(result.sessionId);
     } catch (error) {
@@ -363,6 +375,15 @@ export function SkillsRunnerPage() {
                   Terminal Output
                 </h3>
                 <div className="flex items-center gap-2">
+                  {agentReport && !isRunning && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => setShowReportModal(true)}
+                    >
+                      View Report
+                    </Button>
+                  )}
                   {lastExitCode !== null && (
                     <span className={`text-sm ${lastExitCode === 0 ? 'text-green-600' : 'text-red-600'}`}>
                       Exit code: {lastExitCode}
@@ -380,6 +401,7 @@ export function SkillsRunnerPage() {
                 <TerminalEmulator
                   sessionId={sessionId}
                   onSessionEnd={handleSessionEnd}
+                  onReportReady={handleReportReady}
                   className="h-full"
                 />
               </Card.Body>
@@ -398,6 +420,13 @@ export function SkillsRunnerPage() {
         onDelete={handleDeleteTarget}
         onSetDefault={handleSetDefaultTarget}
         onTest={handleTestConnection}
+      />
+
+      {/* Agent Report Modal */}
+      <AgentReportModal
+        isOpen={showReportModal}
+        onClose={() => setShowReportModal(false)}
+        report={agentReport}
       />
     </div>
   );

@@ -38,6 +38,7 @@ export interface ExpertAgentRequest {
     transcript: string;
     apiErrors: string[];
     stepStatuses: Array<{ step: string; status: string; detail?: string }>;
+    toolIO?: Array<{ toolName: string; action: string; input: string; output: string; status: string }>;
   };
   freeformContext?: string;
 }
@@ -312,6 +313,13 @@ export class ExpertAgentService {
         .map(s => `| ${s.step} | ${s.status} | ${s.detail || ''} |`)
         .join('\n');
       sections.push(`## Step Statuses\n| Step | Status | Detail |\n|------|--------|--------|\n${rows}`);
+    }
+
+    if (traceContext.toolIO && traceContext.toolIO.length > 0) {
+      const toolRows = traceContext.toolIO.map(t =>
+        `### ${t.toolName} → ${t.action} [${t.status}]\n**Input:**\n\`\`\`json\n${t.input}\n\`\`\`\n**Output:**\n\`\`\`json\n${t.output}\n\`\`\``
+      ).join('\n\n');
+      sections.push(`## Tool Call Inputs/Outputs\n${toolRows}`);
     }
 
     if (freeformContext) {

@@ -169,6 +169,8 @@ export const getAlerts = async (_req: Request, res: Response) => {
       slackChannel: row.slack_channel,
       cooldownMinutes: row.cooldown_minutes,
       environment: row.environment,
+      checkIntervalMinutes: row.check_interval_minutes || 5,
+      lastCheckedAt: row.last_checked_at,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     }));
@@ -200,7 +202,14 @@ export const createAlert = async (req: Request, res: Response): Promise<void> =>
       slackChannel,
       cooldownMinutes = 30,
       environment,
+      checkIntervalMinutes,
     } = req.body;
+
+    // Default check interval based on severity
+    const resolvedCheckInterval = checkIntervalMinutes ?? (
+      severity === 'critical' ? 2 :
+      severity === 'warning' ? 5 : 15
+    );
 
     if (!name || !metricType || !conditionOperator || thresholdValue === undefined) {
       res.status(400).json({ error: 'Missing required fields: name, metricType, conditionOperator, thresholdValue' });
@@ -211,8 +220,8 @@ export const createAlert = async (req: Request, res: Response): Promise<void> =>
     const result = db.prepare(`
       INSERT INTO heartbeat_alerts
       (name, description, metric_type, condition_operator, threshold_value, threshold_unit,
-       lookback_minutes, severity, enabled, slack_channel, cooldown_minutes, environment)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       lookback_minutes, severity, enabled, slack_channel, cooldown_minutes, environment, check_interval_minutes)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       name,
       description,
@@ -225,7 +234,8 @@ export const createAlert = async (req: Request, res: Response): Promise<void> =>
       enabled ? 1 : 0,
       slackChannel,
       cooldownMinutes,
-      environment
+      environment,
+      resolvedCheckInterval
     );
 
     const newAlert = db.prepare(`SELECT * FROM heartbeat_alerts WHERE id = ?`).get(result.lastInsertRowid) as any;
@@ -285,6 +295,7 @@ export const updateAlert = async (req: Request, res: Response): Promise<void> =>
     if (updates.slackChannel !== undefined) { fields.push('slack_channel = ?'); values.push(updates.slackChannel); }
     if (updates.cooldownMinutes !== undefined) { fields.push('cooldown_minutes = ?'); values.push(updates.cooldownMinutes); }
     if (updates.environment !== undefined) { fields.push('environment = ?'); values.push(updates.environment); }
+    if (updates.checkIntervalMinutes !== undefined) { fields.push('check_interval_minutes = ?'); values.push(updates.checkIntervalMinutes); }
 
     if (fields.length === 0) {
       db.close();
@@ -423,6 +434,7 @@ export const getAlertHistory = async (req: Request, res: Response) => {
       suppressed: row.suppressed === 1,
       suppressionReason: row.suppression_reason,
       sampleTraceIds: row.sample_trace_ids ? JSON.parse(row.sample_trace_ids) : null,
+      additionalInfo: row.additional_info ? JSON.parse(row.additional_info) : null,
       resolvedAt: row.resolved_at,
       alertName: row.alert_name,
       alertDescription: row.alert_description,
@@ -467,6 +479,7 @@ export const getAllAlertHistory = async (req: Request, res: Response) => {
       suppressed: row.suppressed === 1,
       suppressionReason: row.suppression_reason,
       sampleTraceIds: row.sample_trace_ids ? JSON.parse(row.sample_trace_ids) : null,
+      additionalInfo: row.additional_info ? JSON.parse(row.additional_info) : null,
       resolvedAt: row.resolved_at,
       alertName: row.alert_name,
       alertDescription: row.alert_description,
@@ -599,6 +612,80 @@ export const updateSlackConfig = async (req: Request, res: Response) => {
 };
 
 // ============================================================================
+// LANGFUSE CONFIG
+// ============================================================================
+
+/**
+ * PUT /api/heartbeat/langfuse-config
+ * Set the Langfuse config to use for alert monitoring
+ */
+export const setLangfuseConfig = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { configId } = req.body;
+
+    if (configId === undefined || configId === null) {
+      res.status(400).json({ error: 'configId is required' });
+      return;
+    }
+
+    const db = getDb();
+
+    // Verify the config exists
+    const config = db.prepare(`SELECT id, name, is_default FROM langfuse_configs WHERE id = ?`).get(configId) as any;
+    if (!config) {
+      db.close();
+      res.status(404).json({ error: 'Langfuse config not found' });
+      return;
+    }
+
+    // Update the heartbeat service
+    const service = getHeartbeatService(db);
+    service.setConfigId(configId);
+
+    db.close();
+
+    res.json({
+      success: true,
+      configId: config.id,
+      configName: config.name,
+      isDefault: config.is_default === 1,
+    });
+  } catch (error: any) {
+    console.error('[HeartbeatController] setLangfuseConfig error:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+/**
+ * GET /api/heartbeat/langfuse-configs
+ * Get available Langfuse configs for selection
+ */
+export const getLangfuseConfigs = async (_req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const configs = db.prepare(`
+      SELECT id, name, host, is_default
+      FROM langfuse_configs
+      ORDER BY is_default DESC, name ASC
+    `).all() as any[];
+
+    db.close();
+
+    // Check if name contains 'sandbox' to determine if it's a sandbox config
+    res.json(configs.map(c => ({
+      id: c.id,
+      name: c.name,
+      host: c.host,
+      isDefault: c.is_default === 1,
+      isSandbox: c.name.toLowerCase().includes('sandbox'),
+    })));
+  } catch (error: any) {
+    console.error('[HeartbeatController] getLangfuseConfigs error:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// ============================================================================
 // METRIC UTILITIES
 // ============================================================================
 
@@ -614,20 +701,36 @@ export const getAvailableMetrics = async (_req: Request, res: Response) => {
     db.close();
 
     // Add descriptions for each metric
-    const metricInfo = {
-      api_errors: { name: 'API Errors', description: 'Count of 502/500 errors from Cloud9 API', unit: 'count' },
-      avg_latency: { name: 'Average Latency', description: 'Average tool call latency', unit: 'ms' },
-      slot_failures: { name: 'Slot Fetch Failures', description: 'Percentage of failed slot fetches', unit: 'percent' },
-      abandonment_rate: { name: 'Abandonment Rate', description: 'Percentage of sessions abandoned (1-3 turns)', unit: 'percent' },
-      empty_guid_errors: { name: 'Empty GUID Errors', description: 'Booking attempts with empty patient GUID', unit: 'count' },
-      escalation_count: { name: 'Escalation Count', description: 'Number of escalations to human agent', unit: 'count' },
-      cost_per_session: { name: 'Cost Per Session', description: 'Average cost per conversation session', unit: 'dollars' },
-      booking_conversion: { name: 'Booking Conversion', description: 'Patient creation to booking conversion rate', unit: 'percent' },
+    // source: 'production' = real-time production trace data
+    // source: 'langfuse' = Langfuse-sourced production metrics (incremental alerting)
+    // source: 'goal_testing' = Goal test results from test runs
+    const metricInfo: Record<string, { name: string; description: string; unit: string; source?: string }> = {
+      // Production metrics (real-time window)
+      api_errors: { name: 'API Errors', description: 'Count of 502/500 errors from Cloud9 API', unit: 'count', source: 'production' },
+      avg_latency: { name: 'Average Latency', description: 'Average tool call latency', unit: 'ms', source: 'production' },
+      slot_failures: { name: 'Slot Fetch Failures', description: 'Percentage of failed slot fetches', unit: 'percent', source: 'production' },
+      abandonment_rate: { name: 'Abandonment Rate', description: 'Percentage of sessions abandoned (1-3 turns)', unit: 'percent', source: 'production' },
+      empty_guid_errors: { name: 'Empty GUID Errors', description: 'Booking attempts with empty patient GUID', unit: 'count', source: 'production' },
+      escalation_count: { name: 'Escalation Count', description: 'Number of escalations to human agent', unit: 'count', source: 'production' },
+      cost_per_session: { name: 'Cost Per Session', description: 'Average cost per conversation session', unit: 'dollars', source: 'production' },
+      booking_conversion: { name: 'Booking Conversion', description: 'Patient creation to booking conversion rate', unit: 'percent', source: 'production' },
+
+      // Langfuse-sourced metrics (aligned with trace skill error patterns, incremental alerting)
+      langfuse_api_failure: { name: 'API Failure', description: 'Cloud9 API returned success:false (non-slot operations)', unit: 'count', source: 'langfuse' },
+      langfuse_payload_leak: { name: 'PAYLOAD Leakage', description: 'Raw JSON exposed to caller (PAYLOAD: in response)', unit: 'count', source: 'langfuse' },
+      langfuse_empty_guid: { name: 'Empty Patient GUID', description: 'Empty patientGUID in booking call', unit: 'count', source: 'langfuse' },
+      langfuse_gateway_errors: { name: 'Gateway Errors', description: 'HTTP 502/500 errors from Cloud9', unit: 'count', source: 'langfuse' },
+      langfuse_slot_failures: { name: 'Slot Failures', description: 'Slot fetch returned success:false', unit: 'count', source: 'langfuse' },
+      langfuse_escalations: { name: 'Escalations', description: 'Human escalation requests (premature transfer)', unit: 'count', source: 'langfuse' },
+      langfuse_conversation_loop: { name: 'Conversation Loop', description: 'Bot stuck in loop (19+ turns)', unit: 'count', source: 'langfuse' },
+
+      // Goal testing metrics
+      goal_test_failures: { name: 'Goal Test Failures', description: 'Failed goal tests from test runs (incremental)', unit: 'count', source: 'goal_testing' },
     };
 
     res.json(metrics.map(m => ({
       id: m,
-      ...metricInfo[m as keyof typeof metricInfo] || { name: m, description: '', unit: '' },
+      ...metricInfo[m] || { name: m, description: '', unit: '', source: 'unknown' },
     })));
   } catch (error: any) {
     console.error('[HeartbeatController] getAvailableMetrics error:', error);

@@ -98,6 +98,10 @@ export interface ProdTestRecordInput {
   // Langfuse trace context for note extraction
   traceId?: string;
   sessionId?: string;
+  // Family grouping for sibling booking
+  familyId?: string;
+  isChild?: boolean;
+  parentPatientGuid?: string;
 }
 
 // ============================================================================
@@ -1671,6 +1675,17 @@ export class Database {
         cooldown_minutes: 60,
       },
       {
+        name: 'cache_staleness',
+        description: 'Slot cache data is stale (auto-refresh may have stopped)',
+        metric_type: 'cache_staleness',
+        condition_operator: 'gt',
+        threshold_value: 10,
+        threshold_unit: 'minutes',
+        lookback_minutes: 5,
+        severity: 'critical',
+        cooldown_minutes: 15,
+      },
+      {
         name: 'low_conversion',
         description: 'Alert when patient to booking conversion rate drops',
         metric_type: 'booking_conversion',
@@ -2347,8 +2362,9 @@ export class Database {
           patient_first_name, patient_last_name, patient_birthdate, patient_phone, patient_email,
           appointment_datetime, schedule_view_guid, schedule_column_guid,
           appointment_type_guid, appointment_minutes, location_guid, note,
-          status, cleanup_notes, trace_id, session_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          status, cleanup_notes, trace_id, session_id,
+          family_id, is_child, parent_patient_guid
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         record.recordType,
         record.patientGuid,
@@ -2368,7 +2384,10 @@ export class Database {
         'active',
         record.runId && record.testId ? `Goal Test: ${record.testId} (Run: ${record.runId})` : null,
         record.traceId || null,
-        record.sessionId || null
+        record.sessionId || null,
+        record.familyId || null,
+        record.isChild ? 1 : null,
+        record.parentPatientGuid || null
       );
 
       console.log(`[Database] Saved ${record.recordType} to prod_test_records: ${record.recordType === 'patient' ? record.patientGuid : record.appointmentGuid}`);

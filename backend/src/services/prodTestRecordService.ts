@@ -70,6 +70,11 @@ export interface ProdTestRecord {
 
   // Family linkage note (parent info, insurance, etc.)
   note: string | null;
+
+  // v72 Individual Patient Model fields
+  family_id: string | null;         // Links all family members together
+  is_child: boolean;                // True if this is a child record
+  parent_patient_guid: string | null; // For child records, references parent
 }
 
 export interface ImportOptions {
@@ -405,8 +410,9 @@ export class ProdTestRecordService {
         patient_first_name, patient_last_name, patient_email, patient_phone, patient_birthdate,
         location_guid, location_name, provider_guid, provider_name,
         trace_id, observation_id, session_id, langfuse_config_id,
-        status, cloud9_created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        status, cloud9_created_at,
+        family_id, is_child, parent_patient_guid
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       'patient',
       patientGuid,
@@ -425,10 +431,14 @@ export class ProdTestRecordService {
       obs.session_id,
       obs.langfuse_config_id,
       'active',
-      obs.started_at
+      obs.started_at,
+      // v72 Individual Patient Model fields
+      patientData.familyId || patientData.family_id || null,
+      patientData.isChild || patientData.is_child ? 1 : 0,
+      patientData.parentPatientGuid || patientData.parent_patient_guid || null
     );
 
-    console.log(`[ProdTestRecordService] Imported patient: ${patientGuid}`);
+    console.log(`[ProdTestRecordService] Imported patient: ${patientGuid} (isChild: ${patientData.isChild || false})`);
     return true;
   }
 
@@ -525,8 +535,9 @@ export class ProdTestRecordService {
         location_guid, location_name, provider_guid, provider_name,
         schedule_view_guid, schedule_column_guid,
         trace_id, observation_id, session_id, langfuse_config_id,
-        status, cloud9_created_at, note
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        status, cloud9_created_at, note,
+        family_id, is_child, parent_patient_guid
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       'appointment',
       patientGuid,
@@ -549,10 +560,14 @@ export class ProdTestRecordService {
       obs.langfuse_config_id,
       'active',
       obs.started_at,
-      appointmentNote
+      appointmentNote,
+      // v72 Individual Patient Model fields
+      apptData.familyId || apptData.family_id || null,
+      apptData.isChild || apptData.is_child ? 1 : 0,
+      apptData.parentPatientGuid || apptData.parent_patient_guid || null
     );
 
-    console.log(`[ProdTestRecordService] Imported appointment: ${appointmentGuid} (patient: ${patientFirstName || 'Unknown'} ${patientLastName || ''})${appointmentNote ? ' with note' : ''}`);
+    console.log(`[ProdTestRecordService] Imported appointment: ${appointmentGuid} (patient: ${patientFirstName || 'Unknown'} ${patientLastName || ''}, isChild: ${apptData.isChild || false})${appointmentNote ? ' with note' : ''}`);
     return true;
   }
 
@@ -1143,8 +1158,9 @@ export class ProdTestRecordService {
         location_guid, location_name, provider_guid, provider_name,
         schedule_view_guid, schedule_column_guid,
         trace_id, observation_id, session_id, langfuse_config_id,
-        status, cleanup_notes
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        status, cleanup_notes,
+        family_id, is_child, parent_patient_guid
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       record.record_type || 'patient',
       record.patient_guid || '',
@@ -1170,7 +1186,11 @@ export class ProdTestRecordService {
       record.session_id || null,
       record.langfuse_config_id || null,
       record.status || 'active',
-      record.cleanup_notes || null
+      record.cleanup_notes || null,
+      // v72 Individual Patient Model fields
+      record.family_id || null,
+      record.is_child ? 1 : 0,
+      record.parent_patient_guid || null
     );
 
     return Number(result.lastInsertRowid);

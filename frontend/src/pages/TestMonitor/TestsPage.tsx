@@ -59,8 +59,8 @@ import {
 } from '../../store/slices/testMonitorSlice';
 import { subscribeToExecution } from '../../services/api/testMonitorApi';
 import type { ExecutionStreamEvent } from '../../services/api/testMonitorApi';
-import { getTestEnvironmentPresets } from '../../services/api/appSettingsApi';
-import type { TestEnvironmentPresetWithNames } from '../../types/appSettings.types';
+import { getTestEnvironmentPresets, getFlowiseConfigs } from '../../services/api/appSettingsApi';
+import type { TestEnvironmentPresetWithNames, FlowiseConfigProfile } from '../../types/appSettings.types';
 
 import type {
   GoalTestCaseRecord,
@@ -616,9 +616,9 @@ function ExecutionConfigPanel({
   onStopExecution,
   testCount,
   selectedCount,
-  environmentPresets,
-  selectedPresetId,
-  onPresetChange,
+  flowiseConfigs,
+  selectedFlowiseConfigId,
+  onFlowiseConfigChange,
 }: {
   concurrency: number;
   setConcurrency: (v: number) => void;
@@ -635,13 +635,13 @@ function ExecutionConfigPanel({
   onStopExecution: () => void;
   testCount: number;
   selectedCount: number;
-  environmentPresets: TestEnvironmentPresetWithNames[];
-  selectedPresetId: number | null;
-  onPresetChange: (presetId: number) => void;
+  flowiseConfigs: FlowiseConfigProfile[];
+  selectedFlowiseConfigId: number | null;
+  onFlowiseConfigChange: (configId: number) => void;
 }) {
   const effectiveCount = selectedCount > 0 ? selectedCount : testCount;
   const totalRuns = effectiveCount * runCount;
-  const selectedPreset = environmentPresets.find(p => p.id === selectedPresetId);
+  const selectedConfig = flowiseConfigs.find(c => c.id === selectedFlowiseConfigId);
 
   return (
     <div className="space-y-3">
@@ -650,26 +650,26 @@ function ExecutionConfigPanel({
         Execution Config
       </h4>
 
-      {/* Environment Preset Selector */}
+      {/* Flowise Config Selector */}
       <div>
         <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">
-          Environment
+          Flowise Config
         </label>
         <select
-          value={selectedPresetId || ''}
-          onChange={(e) => onPresetChange(parseInt(e.target.value))}
+          value={selectedFlowiseConfigId || ''}
+          onChange={(e) => onFlowiseConfigChange(parseInt(e.target.value))}
           className="w-full px-2 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-white font-medium"
           disabled={isExecuting}
         >
-          {environmentPresets.map((preset) => (
-            <option key={preset.id} value={preset.id}>
-              {preset.name}{preset.isDefault ? ' (Default)' : ''}
+          {flowiseConfigs.map((config) => (
+            <option key={config.id} value={config.id}>
+              {config.name}{config.isDefault ? ' (Default)' : ''}
             </option>
           ))}
         </select>
-        {selectedPreset && (
+        {selectedConfig && (
           <div className="mt-1 text-[10px] text-gray-500 dark:text-gray-400 truncate">
-            {selectedPreset.flowiseConfigName || 'No Flowise'} / {selectedPreset.langfuseConfigName || 'No Langfuse'}
+            {selectedConfig.url ? selectedConfig.url.replace(/^https?:\/\//, '').substring(0, 40) + '...' : 'No URL'}
           </div>
         )}
       </div>
@@ -836,10 +836,13 @@ export function TestsPage() {
   });
   const [popoutSaving, setPopoutSaving] = useState(false);
 
-  // Environment presets state
+  // Environment presets state (kept for run history filtering)
   const [environmentPresets, setEnvironmentPresets] = useState<TestEnvironmentPresetWithNames[]>([]);
   const [selectedPresetId, setSelectedPresetId] = useState<number | null>(null);
   const [presetsLoading, setPresetsLoading] = useState(true);
+  // Flowise configs state (for execution config dropdown)
+  const [flowiseConfigs, setFlowiseConfigs] = useState<FlowiseConfigProfile[]>([]);
+  const [selectedFlowiseConfigId, setSelectedFlowiseConfigId] = useState<number | null>(null);
   // Filter for runs by environment preset
   const [runFilterPresetId, setRunFilterPresetId] = useState<number | null | 'all'>(null);
 
@@ -889,20 +892,16 @@ export function TestsPage() {
     dispatch(fetchTestRuns({}));
   }, [dispatch]);
 
-  // Fetch environment presets on mount
+  // Fetch environment presets on mount (for run history filtering)
   useEffect(() => {
     const fetchPresets = async () => {
       setPresetsLoading(true);
       try {
         const presets = await getTestEnvironmentPresets();
         setEnvironmentPresets(presets);
-        // Set the default preset as selected (Prod is default)
         const defaultPreset = presets.find(p => p.isDefault) || presets[0];
         if (defaultPreset) {
           setSelectedPresetId(defaultPreset.id);
-          console.log('[TestsPage] Default preset selected:', defaultPreset.name, '(id:', defaultPreset.id, ')');
-        } else {
-          console.warn('[TestsPage] No default preset found!');
         }
       } catch (error) {
         console.error('[TestsPage] Failed to fetch environment presets:', error);
@@ -911,6 +910,24 @@ export function TestsPage() {
       }
     };
     fetchPresets();
+  }, []);
+
+  // Fetch Flowise configs on mount (for execution config dropdown)
+  useEffect(() => {
+    const fetchConfigs = async () => {
+      try {
+        const configs = await getFlowiseConfigs();
+        setFlowiseConfigs(configs);
+        const defaultConfig = configs.find(c => c.isDefault) || configs[0];
+        if (defaultConfig) {
+          setSelectedFlowiseConfigId(defaultConfig.id);
+          console.log('[TestsPage] Default Flowise config selected:', defaultConfig.name, '(id:', defaultConfig.id, ')');
+        }
+      } catch (error) {
+        console.error('[TestsPage] Failed to fetch Flowise configs:', error);
+      }
+    };
+    fetchConfigs();
   }, []);
 
   // Auto-poll test runs when any run is "running"
@@ -978,10 +995,9 @@ export function TestsPage() {
   // Handlers
   const handleStartExecution = async () => {
     try {
-      // Ensure a preset is selected
-      if (!selectedPresetId) {
-        console.error('[TestsPage] No environment preset selected! Cannot run tests.');
-        alert('Please select an environment preset before running tests.');
+      if (!selectedFlowiseConfigId) {
+        console.error('[TestsPage] No Flowise config selected! Cannot run tests.');
+        alert('Please select a Flowise config before running tests.');
         return;
       }
 
@@ -993,14 +1009,8 @@ export function TestsPage() {
         ? Array.from({ length: runCount }, () => baseCaseIds).flat()
         : baseCaseIds;
 
-      // Get the selected environment preset's config IDs
-      const selectedPreset = environmentPresets.find(p => p.id === selectedPresetId);
-
       console.log('[TestsPage] Starting execution with:', {
-        presetId: selectedPresetId,
-        presetName: selectedPreset?.name,
-        flowiseConfigId: selectedPreset?.flowiseConfigId,
-        langfuseConfigId: selectedPreset?.langfuseConfigId,
+        flowiseConfigId: selectedFlowiseConfigId,
         testCount: caseIds.length,
       });
 
@@ -1010,9 +1020,7 @@ export function TestsPage() {
           concurrency,
           timeout: testTimeout,
           retryFailedTests: retryFailed,
-          environmentPresetId: selectedPresetId,
-          flowiseConfigId: selectedPreset?.flowiseConfigId || undefined,
-          langfuseConfigId: selectedPreset?.langfuseConfigId || undefined,
+          flowiseConfigId: selectedFlowiseConfigId,
         },
       })).unwrap();
 
@@ -1062,18 +1070,13 @@ export function TestsPage() {
 
   const handleRunSelectedTest = async () => {
     if (!selectedTestCase) return;
-    if (!selectedPresetId) {
-      console.error('[TestsPage] No environment preset selected! Cannot run tests.');
-      alert('Please select an environment preset before running tests.');
+    if (!selectedFlowiseConfigId) {
+      alert('Please select a Flowise config before running tests.');
       return;
     }
     try {
-      // Get the selected environment preset's config IDs
-      const selectedPreset = environmentPresets.find(p => p.id === selectedPresetId);
-
       console.log('[TestsPage] Running single test with:', {
-        presetId: selectedPresetId,
-        presetName: selectedPreset?.name,
+        flowiseConfigId: selectedFlowiseConfigId,
         testId: selectedTestCase.caseId,
       });
 
@@ -1081,9 +1084,7 @@ export function TestsPage() {
         caseIds: [selectedTestCase.caseId],
         config: {
           concurrency: 1,
-          environmentPresetId: selectedPresetId,
-          flowiseConfigId: selectedPreset?.flowiseConfigId || undefined,
-          langfuseConfigId: selectedPreset?.langfuseConfigId || undefined,
+          flowiseConfigId: selectedFlowiseConfigId,
         },
       })).unwrap();
 
@@ -1219,19 +1220,16 @@ export function TestsPage() {
 
   const handleRunFromPopout = async () => {
     if (!popoutTestCase) return;
-    if (!selectedPresetId) {
-      alert('Please select an environment preset before running tests.');
+    if (!selectedFlowiseConfigId) {
+      alert('Please select a Flowise config before running tests.');
       return;
     }
     try {
-      const selectedPreset = environmentPresets.find(p => p.id === selectedPresetId);
       const result = await dispatch(runGoalTests({
         caseIds: [popoutTestCase.caseId],
         config: {
           concurrency: 1,
-          environmentPresetId: selectedPresetId,
-          flowiseConfigId: selectedPreset?.flowiseConfigId || undefined,
-          langfuseConfigId: selectedPreset?.langfuseConfigId || undefined,
+          flowiseConfigId: selectedFlowiseConfigId,
         },
       })).unwrap();
 
@@ -1376,9 +1374,9 @@ export function TestsPage() {
               onStopExecution={handleStopExecution}
               testCount={filteredTestCases.length}
               selectedCount={selectedTestCount}
-              environmentPresets={environmentPresets}
-              selectedPresetId={selectedPresetId}
-              onPresetChange={setSelectedPresetId}
+              flowiseConfigs={flowiseConfigs}
+              selectedFlowiseConfigId={selectedFlowiseConfigId}
+              onFlowiseConfigChange={setSelectedFlowiseConfigId}
             />
           </Card>
         </div>

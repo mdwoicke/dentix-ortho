@@ -509,9 +509,14 @@ const PATTERN_RULES: PatternRule[] = [
       /\b(first\s+|second\s+)?(child|son|daughter|kid)('?s)? (first\s+)?(and\s+last\s+)?(full\s+)?name\b/i,
       /\b(your\s+)?(first\s+|second\s+)?(son'?s?|daughter'?s?|child'?s?|kid'?s?)\s+(first\s+)?(and\s+last\s+)?(full\s+)?name\b/i,
       /\bwhat'?s\s+(your\s+)?(first\s+|second\s+)?(son'?s?|daughter'?s?|child'?s?)\s+(first\s+)?(and\s+last\s+)?name\b/i,
+      // "their" as child reference: "What is their first and last name?" (asked after establishing child context)
+      /\bwhat('s| is) their (first\s+)?(and\s+last\s+)?(full\s+)?name\b/i,
+      /\bmay i have their (first\s+)?(and\s+last\s+)?(full\s+)?name\b/i,
       // More specific patterns to capture child name questions with "first and last name"
-      /\b(first\s+|second\s+)?(child'?s?|kid'?s?|patient'?s?|son'?s?|daughter'?s?).*(first\s+)?and\s+last\s+name\b/i,
-      /\byour (first\s+|second\s+)?(child|kid|patient|son|daughter).*(first\s+)?(and\s+last\s+)?name\b/i,
+      // IMPORTANT: Use [^.?!]{0,40} instead of .* to prevent matching across sentence boundaries
+      // (e.g., "consultations for your children. May I have your first and last name?" was matching "children...name")
+      /\b(first\s+|second\s+)?(child'?s?|kid'?s?|patient'?s?|son'?s?|daughter'?s?)\b[^.?!]{0,40}(first\s+)?and\s+last\s+name\b/i,
+      /\byour (first\s+|second\s+)?(child|kid|patient|son|daughter)\b[^.?!]{0,40}(first\s+)?(and\s+last\s+)?name\b/i,
     ],
     confidence: 0.90,
     priority: 62, // MUST be higher than caller_name (60) to correctly classify child name questions

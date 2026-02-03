@@ -570,6 +570,15 @@ export class GoalTestRunner {
                   console.log(`[GoalTestRunner] ✓ Booking completed - appointmentGUID: ${output.appointmentGUID.substring(0, 8)}...`);
                   break;
                 }
+                // Check for book_child atomic response with children array
+                if (output.success === true && output.children && Array.isArray(output.children)) {
+                  const bookedChildren = output.children.filter((c: any) => c.appointment?.booked || c.appointmentGUID);
+                  if (bookedChildren.length > 0) {
+                    bookingCompleted = true;
+                    console.log(`[GoalTestRunner] ✓ Booking completed - ${bookedChildren.length} children booked via book_child`);
+                    break;
+                  }
+                }
               } catch (e) {
                 // Ignore JSON parse errors
               }
@@ -1265,6 +1274,89 @@ export class GoalTestRunner {
           sessionId,
         });
         console.log(`[GoalTestRunner] Saved appointment to Prod Tracker: ${output.appointmentGUID}${note ? ' with note' : ''}`);
+      }
+
+      // book_child atomic response: children array with patient + appointment data
+      if (toolCall.toolName === 'schedule_appointment_ortho' && output.success && output.children && Array.isArray(output.children)) {
+        // Generate a family ID from session to group siblings together
+        const familyId = sessionId ? `session-${sessionId.substring(0, 8)}` : `run-${runId.substring(0, 8)}`;
+        const parentLastName = input.parentLastName || input.lastName || '';
+
+        // Parse input children to get schedule GUIDs (not returned in output)
+        let inputChildren: any[] = [];
+        if (input.children) {
+          inputChildren = typeof input.children === 'string' ? (() => { try { return JSON.parse(input.children); } catch { return []; } })() : input.children;
+        }
+
+        for (let ci = 0; ci < output.children.length; ci++) {
+          const child = output.children[ci];
+          // Save patient record for each child created
+          if (child.patientGUID && child.created) {
+            this.database.saveProdTestRecord({
+              recordType: 'patient',
+              patientGuid: child.patientGUID,
+              patientFirstName: child.firstName,
+              patientLastName: parentLastName,
+              patientBirthdate: child.dateOfBirth || child.dob,
+              familyId,
+              isChild: true,
+              parentPatientGuid: output.parentGUID || undefined,
+              runId,
+              testId,
+              traceId,
+              sessionId,
+            });
+            console.log(`[GoalTestRunner] Saved child patient to Prod Tracker: ${child.firstName} (${child.patientGUID.substring(0, 8)}...) family=${familyId}`);
+          }
+
+          // Save appointment record for each child booked
+          const apptGuid = child.appointment?.appointmentGUID || child.appointmentGUID;
+          if (apptGuid) {
+            const apptTime = child.appointment?.startTime || child.startTime;
+            const note = `Child: ${child.firstName || 'unknown'}${child.dateOfBirth ? ' | DOB: ' + child.dateOfBirth : ''}`;
+
+            // Match input child by index to get schedule GUIDs (not in output)
+            const inputChild = inputChildren[ci] || {};
+
+            this.database.saveProdTestRecord({
+              recordType: 'appointment',
+              patientGuid: child.patientGUID || '',
+              appointmentGuid: apptGuid,
+              appointmentDatetime: apptTime,
+              scheduleViewGuid: inputChild.scheduleViewGUID || undefined,
+              scheduleColumnGuid: inputChild.scheduleColumnGUID || undefined,
+              appointmentTypeGuid: inputChild.appointmentTypeGUID || undefined,
+              appointmentMinutes: inputChild.minutes ? Number(inputChild.minutes) : undefined,
+              note,
+              familyId,
+              isChild: true,
+              parentPatientGuid: output.parentGUID || undefined,
+              runId,
+              testId,
+              traceId,
+              sessionId,
+            });
+            this.appointmentCountInRun++;
+            console.log(`[GoalTestRunner] Saved child appointment to Prod Tracker: ${child.firstName} → ${apptGuid.substring(0, 8)}... family=${familyId}`);
+          }
+        }
+
+        // Also save parent patient if present
+        if (output.parentGUID) {
+          this.database.saveProdTestRecord({
+            recordType: 'patient',
+            patientGuid: output.parentGUID,
+            patientFirstName: input.parentFirstName,
+            patientLastName: parentLastName,
+            patientPhone: input.parentPhone || input.phone,
+            familyId,
+            runId,
+            testId,
+            traceId,
+            sessionId,
+          });
+          console.log(`[GoalTestRunner] Saved parent patient to Prod Tracker: ${output.parentGUID.substring(0, 8)}... family=${familyId}`);
+        }
       }
     } catch (error: any) {
       console.error(`[GoalTestRunner] Failed to save to Prod Tracker: ${error.message}`);

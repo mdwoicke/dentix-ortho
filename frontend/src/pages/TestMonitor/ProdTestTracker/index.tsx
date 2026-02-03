@@ -316,24 +316,28 @@ export function ProdTestTrackerPage() {
     return `${ROUTES.TEST_MONITOR_ANALYSIS}?traceId=${record.trace_id}${configParam}`;
   };
 
-  // Group records by FAMILY (last name) with children nested underneath
-  // This groups siblings together under the same family
+  // Group records by FAMILY (family_id or last name) with parent + children nested underneath
+  // v72 model: Each child has their own patient record with is_child=true
   interface ChildRecord {
     firstName: string;
     patientGuid: string;
+    isChild: boolean;                    // v72: true if this is a child record
+    parentPatientGuid: string | null;    // v72: reference to parent's patient_guid
     patientRecord: ProdTestRecord | null;
     appointments: ProdTestRecord[];
   }
 
   interface FamilyGroup {
-    familyKey: string; // Unique key for grouping (last name or guid:xxx)
-    familyName: string; // Display name (last name or 'Unknown')
-    children: ChildRecord[]; // Individual children in this family
-    patientGuids: string[]; // All GUIDs for this family
+    familyKey: string;           // Unique key for grouping (family_id, last name, or guid:xxx)
+    familyName: string;          // Display name (last name or 'Unknown')
+    familyId: string | null;     // v72: actual family_id from DB (null for legacy records)
+    parent: ProdTestRecord | null; // v72: parent record (is_child=false)
+    children: ChildRecord[];     // Individual children in this family
+    patientGuids: string[];      // All GUIDs for this family
     totalPatients: number;
     totalAppointments: number;
     latestCreatedAt: string;
-    parentCreatedAt: string; // First patient record's created date (for sorting by created)
+    parentCreatedAt: string;     // First patient record's created date (for sorting by created)
   }
 
   const groupedRecords = useMemo(() => {
@@ -342,9 +346,14 @@ export function ProdTestTrackerPage() {
     const families = new Map<string, FamilyGroup>();
 
     // Helper to get family key
-    // When last name is present, use it to group siblings together
-    // When last name is missing, fall back to patient_guid to keep records separate
+    // v72: Prefer family_id when available for accurate grouping
+    // Fallback to last name, then patient_guid for ungroupable records
     const getFamilyKey = (record: ProdTestRecord): string => {
+      // v72: Use family_id when available (most reliable for new records)
+      if (record.family_id) {
+        return `family:${record.family_id}`;
+      }
+      // Fallback to last name for legacy records
       const lastName = (record.patient_last_name || '').trim().toLowerCase();
       if (lastName) {
         return lastName;
@@ -361,56 +370,137 @@ export function ProdTestTrackerPage() {
       return `${firstName}:${record.patient_guid}`;
     };
 
-    // First pass: organize records by family (last name), then by child (first name + guid)
+    // First pass: organize records by family, then by individual
     for (const record of records) {
       const familyKey = getFamilyKey(record);
       const childKey = getChildKey(record);
 
       if (!families.has(familyKey)) {
-        // For GUID-based keys (no last name), use a shorter display name
+        // Determine display name based on key type
+        const isFamilyIdKey = familyKey.startsWith('family:');
         const isGuidKey = familyKey.startsWith('guid:');
         families.set(familyKey, {
-          familyKey, // Store the unique key for expansion tracking
-          familyName: isGuidKey ? 'Unknown' : (record.patient_last_name || 'Unknown'),
+          familyKey,
+          familyName: (isFamilyIdKey || isGuidKey) ? (record.patient_last_name || 'Unknown') : (record.patient_last_name || 'Unknown'),
+          familyId: record.family_id || null,  // v72: actual family_id
+          parent: null,  // v72: will be set if we find a parent record
           children: [],
           patientGuids: [],
           totalPatients: 0,
           totalAppointments: 0,
           latestCreatedAt: record.cloud9_created_at || record.created_at,
-          parentCreatedAt: '', // Will be set to earliest patient record's date
+          parentCreatedAt: '',
         });
       }
 
       const family = families.get(familyKey)!;
 
-      // Find or create child record (by childKey which includes patient_guid)
-      let child = family.children.find(c => `${c.firstName.toLowerCase()}:${c.patientGuid}` === childKey);
-      if (!child) {
-        child = {
-          firstName: record.patient_first_name || 'Unknown',
-          patientGuid: record.patient_guid,
-          patientRecord: null,
-          appointments: [],
-        };
-        family.children.push(child);
-      }
-
-      // Track unique patient GUIDs for the family
-      if (!family.patientGuids.includes(record.patient_guid)) {
-        family.patientGuids.push(record.patient_guid);
-      }
-
-      if (record.record_type === 'patient') {
-        child.patientRecord = record;
+      // v72: Check if this is a parent record (is_child=false and record_type='patient')
+      if (record.record_type === 'patient' && !record.is_child) {
+        // This is the parent patient record
+        family.parent = record;
         family.totalPatients++;
-        // Track earliest patient record's created date for sorting
         const patientDate = record.cloud9_created_at || record.created_at;
         if (!family.parentCreatedAt || patientDate < family.parentCreatedAt) {
           family.parentCreatedAt = patientDate;
         }
-      } else {
+        // Track parent's GUID
+        if (!family.patientGuids.includes(record.patient_guid)) {
+          family.patientGuids.push(record.patient_guid);
+        }
+      } else if (record.record_type === 'patient' && record.is_child) {
+        // v72: This is a child's patient record
+        let child = family.children.find(c => c.patientGuid === record.patient_guid);
+        if (!child) {
+          child = {
+            firstName: record.patient_first_name || 'Unknown',
+            patientGuid: record.patient_guid,
+            isChild: true,
+            parentPatientGuid: record.parent_patient_guid,
+            patientRecord: null,
+            appointments: [],
+          };
+          family.children.push(child);
+        }
+        child.patientRecord = record;
+        family.totalPatients++;
+        if (!family.patientGuids.includes(record.patient_guid)) {
+          family.patientGuids.push(record.patient_guid);
+        }
+      } else if (record.record_type === 'appointment') {
+        // Check if this appointment is booked under the parent's GUID (parent-as-patient model)
+        const isParentGuid = family.parent && record.patient_guid === family.parent.patient_guid;
+
+        // For parent-as-patient appointments, use child name from note as the grouping key
+        let childName: string | null = null;
+        if (isParentGuid && record.note) {
+          const match = record.note.match(/^Child:\s*([^|]+)/i);
+          if (match) childName = match[1].trim();
+        }
+
+        // Find existing child entry: by child name (parent-as-patient) or by patient_guid
+        let child: ChildRecord | undefined;
+        if (childName) {
+          child = family.children.find(c => c.firstName.toLowerCase() === childName!.toLowerCase());
+        } else {
+          child = family.children.find(c => c.patientGuid === record.patient_guid);
+        }
+
+        if (!child) {
+          const isChildAppointment = !!childName || record.is_child ||
+            (family.parent && record.patient_guid !== family.parent.patient_guid);
+          child = {
+            firstName: childName || record.patient_first_name || 'Unknown',
+            patientGuid: record.patient_guid,
+            isChild: !!isChildAppointment,
+            parentPatientGuid: record.parent_patient_guid,
+            patientRecord: null,
+            appointments: [],
+          };
+          family.children.push(child);
+          if (!family.patientGuids.includes(record.patient_guid)) {
+            family.patientGuids.push(record.patient_guid);
+          }
+        }
         child.appointments.push(record);
         family.totalAppointments++;
+      } else {
+        // Legacy behavior: patient record without is_child flag (old parent-as-patient model)
+        // Check if this is a duplicate of the existing parent (same name, different GUID)
+        const isDuplicateParent = record.record_type === 'patient' && family.parent &&
+          (record.patient_first_name || '').trim().toLowerCase() === (family.parent.patient_first_name || '').trim().toLowerCase() &&
+          record.patient_guid !== family.parent.patient_guid;
+
+        if (isDuplicateParent) {
+          // Merge: track the extra GUID but don't create a separate child row
+          if (!family.patientGuids.includes(record.patient_guid)) {
+            family.patientGuids.push(record.patient_guid);
+          }
+        } else {
+          let child = family.children.find(c => c.patientGuid === record.patient_guid);
+          if (!child) {
+            child = {
+              firstName: record.patient_first_name || 'Unknown',
+              patientGuid: record.patient_guid,
+              isChild: false,
+              parentPatientGuid: null,
+              patientRecord: null,
+              appointments: [],
+            };
+            family.children.push(child);
+          }
+          if (record.record_type === 'patient') {
+            child.patientRecord = record;
+            family.totalPatients++;
+            const patientDate = record.cloud9_created_at || record.created_at;
+            if (!family.parentCreatedAt || patientDate < family.parentCreatedAt) {
+              family.parentCreatedAt = patientDate;
+            }
+          }
+          if (!family.patientGuids.includes(record.patient_guid)) {
+            family.patientGuids.push(record.patient_guid);
+          }
+        }
       }
 
       // Track latest cloud9_created_at for sorting
@@ -421,8 +511,6 @@ export function ProdTestTrackerPage() {
     }
 
     // Convert to array and sort families
-    // When sorting by created date, use the parent/earliest patient record's date
-    // Fall back to latestCreatedAt for families with only appointments
     const sortedFamilies = Array.from(families.values()).sort((a, b) => {
       let dateA: string;
       let dateB: string;
@@ -804,15 +892,21 @@ export function ProdTestTrackerPage() {
               </thead>
               <tbody className="divide-y divide-gray-200 dark:divide-gray-600">
                 {groupByPatient && groupedRecords ? (
-                  // Grouped view: families with children and their appointments
+                  // Grouped view: families with parent + children and their appointments
                   groupedRecords.map((family) => {
                     const isExpanded = expandedPatients.has(family.familyKey);
                     // Get all record IDs for this family (for bulk selection)
                     const allFamilyIds: number[] = [];
+                    if (family.parent) allFamilyIds.push(family.parent.id);
                     family.children.forEach(child => {
                       if (child.patientRecord) allFamilyIds.push(child.patientRecord.id);
                       child.appointments.forEach(a => allFamilyIds.push(a.id));
                     });
+
+                    // v72: Determine if this is a v72 family (has family_id) or legacy
+                    const isV72Family = !!family.familyId;
+                    const childCount = family.children.filter(c => c.isChild).length;
+                    const hasParent = !!family.parent;
 
                     return (
                       <React.Fragment key={family.familyKey}>
@@ -844,13 +938,19 @@ export function ProdTestTrackerPage() {
                           <td className="px-4 py-3" colSpan={2}>
                             <div className="flex items-center gap-2">
                               <Badge variant="default">Family</Badge>
+                              {isV72Family && <Badge variant="info" className="text-xs">v72</Badge>}
                               <span className="text-sm font-bold text-gray-900 dark:text-gray-100">
                                 {family.familyName || 'Unknown'}
                               </span>
                               <span className="text-xs text-gray-500">
-                                ({family.children.length} child{family.children.length !== 1 ? 'ren' : ''}, {family.totalAppointments} appt{family.totalAppointments !== 1 ? 's' : ''})
+                                ({hasParent ? '1 parent + ' : ''}{childCount > 0 ? `${childCount} child${childCount !== 1 ? 'ren' : ''}` : `${family.children.length} patient${family.children.length !== 1 ? 's' : ''}`}, {family.totalAppointments} appt{family.totalAppointments !== 1 ? 's' : ''})
                               </span>
                             </div>
+                            {family.familyId && (
+                              <div className="text-xs text-gray-400 font-mono mt-1">
+                                Family ID: {family.familyId}
+                              </div>
+                            )}
                           </td>
                           <td className="px-4 py-3 text-sm text-gray-500">-</td>
                           <td className="px-4 py-3 text-sm text-gray-500">-</td>
@@ -860,11 +960,83 @@ export function ProdTestTrackerPage() {
                           </td>
                           <td className="px-4 py-3">-</td>
                         </tr>
+
+                        {/* v72: Parent Row (if exists) */}
+                        {isExpanded && family.parent && (
+                          <tr className="bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/30">
+                            <td className="px-4 py-2 pl-8">
+                              <input
+                                type="checkbox"
+                                checked={selectedIds.has(family.parent.id)}
+                                onChange={() => toggleSelect(family.parent!.id)}
+                                className="rounded"
+                              />
+                            </td>
+                            <td className="px-4 py-2 pl-8">
+                              <span className="text-gray-400">├</span>
+                            </td>
+                            <td className="px-4 py-2" colSpan={2}>
+                              <div className="flex items-center gap-2">
+                                <Badge variant="info">Parent</Badge>
+                                <span className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                                  {family.parent.patient_first_name} {family.parent.patient_last_name}
+                                </span>
+                              </div>
+                              <div className="text-xs text-gray-500 font-mono mt-1 flex items-center gap-2">
+                                <span>{family.parent.patient_guid}</span>
+                                {family.parent.note && (
+                                  <span className="relative group cursor-help">
+                                    <svg className="w-4 h-4 text-gray-400 hover:text-blue-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                    </svg>
+                                    <span className="absolute left-0 bottom-full mb-2 px-4 py-3 bg-gray-800 text-gray-100 text-xs rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 w-80 z-50 shadow-xl border border-gray-700">
+                                      <span className="block font-semibold text-blue-400 mb-2">Note</span>
+                                      <span className="block leading-relaxed">{family.parent.note.split('|').map((part: string, i: number) => <span key={i} className="block">{part.trim()}</span>)}</span>
+                                      <span className="absolute left-4 top-full border-4 border-transparent border-t-gray-800"></span>
+                                    </span>
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="px-4 py-2 text-sm text-gray-500">
+                              {family.parent.location_name || '-'}
+                            </td>
+                            <td className="px-4 py-2 text-sm text-gray-500">-</td>
+                            <td className="px-4 py-2">
+                              {getStatusBadge(family.parent.status)}
+                            </td>
+                            <td className="px-4 py-2 text-sm text-gray-500">
+                              {formatInTimezone(family.parent.cloud9_created_at || family.parent.created_at)}
+                            </td>
+                            <td className="px-4 py-2">
+                              <div className="flex gap-2">
+                                <Link
+                                  to={`${ROUTES.PATIENTS}/${family.parent.patient_guid}?environment=production`}
+                                  className="text-blue-600 hover:text-blue-800 text-sm"
+                                >
+                                  View
+                                </Link>
+                                {getTraceUrl(family.parent) && (
+                                  <Link
+                                    to={getTraceUrl(family.parent)!}
+                                    className="text-blue-500 hover:text-blue-700 text-sm"
+                                    title="View call trace"
+                                  >
+                                    Trace
+                                  </Link>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+
                         {/* Nested Child Rows */}
-                        {isExpanded && family.children.map((child) => (
+                        {isExpanded && family.children.map((child, childIndex) => (
                           <React.Fragment key={child.patientGuid}>
-                            {/* Parent (Patient) Row - Parent-as-Patient model */}
-                            <tr className="bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/30">
+                            {/* Child (Patient) Row */}
+                            <tr className={child.isChild
+                              ? "bg-green-50 dark:bg-green-900/20 hover:bg-green-100 dark:hover:bg-green-900/30"
+                              : "bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/30"}>
                               <td className="px-4 py-2 pl-8">
                                 {child.patientRecord && (
                                   <input
@@ -876,11 +1048,13 @@ export function ProdTestTrackerPage() {
                                 )}
                               </td>
                               <td className="px-4 py-2 pl-8">
-                                <span className="text-gray-400">├</span>
+                                <span className="text-gray-400">{childIndex === family.children.length - 1 && child.appointments.length === 0 ? '└' : '├'}</span>
                               </td>
                               <td className="px-4 py-2" colSpan={2}>
                                 <div className="flex items-center gap-2">
-                                  <Badge variant="info">Parent</Badge>
+                                  <Badge variant={child.isChild ? 'success' : 'info'}>
+                                    {child.isChild ? 'Child' : 'Patient'}
+                                  </Badge>
                                   <span className="text-sm font-medium text-gray-900 dark:text-gray-100">
                                     {child.firstName} {family.familyName}
                                   </span>
@@ -939,8 +1113,9 @@ export function ProdTestTrackerPage() {
                               </td>
                             </tr>
                             {/* Nested Appointment Rows for this child */}
-                            {child.appointments.map((appt) => {
+                            {child.appointments.map((appt, apptIndex) => {
                               const childName = parseChildNameFromNote(appt.note);
+                              const isLastAppt = apptIndex === child.appointments.length - 1;
                               return (
                               <tr key={appt.id} className="bg-gray-50 dark:bg-gray-800/50 hover:bg-gray-100 dark:hover:bg-gray-700/50">
                                 <td className="px-4 py-2 pl-12">
@@ -952,11 +1127,11 @@ export function ProdTestTrackerPage() {
                                   />
                                 </td>
                                 <td className="px-4 py-2 pl-12">
-                                  <span className="text-gray-400">└</span>
+                                  <span className="text-gray-400">{isLastAppt ? '└' : '├'}</span>
                                 </td>
                                 <td className="px-4 py-2" colSpan={2}>
                                   <div className="flex items-center gap-2">
-                                    <Badge variant="success">Appt</Badge>
+                                    <Badge variant="warning">Appt</Badge>
                                     {childName && (
                                       <span className="text-sm font-medium text-purple-600 dark:text-purple-400">
                                         {childName}

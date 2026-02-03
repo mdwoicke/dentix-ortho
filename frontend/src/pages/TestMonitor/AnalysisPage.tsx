@@ -48,7 +48,9 @@ import {
   selectEnvironmentLoading,
 } from '../../store/slices/testMonitorSlice';
 import * as testMonitorApi from '../../services/api/testMonitorApi';
+import * as appSettingsApi from '../../services/api/appSettingsApi';
 import type { GeneratedFix, VerificationSummary, PromptContext, ProductionTraceDetail, ProductionSessionDetailResponse } from '../../types/testMonitor.types';
+import type { LangfuseConfigProfile } from '../../types/appSettings.types';
 
 // Workflow phase types
 type WorkflowPhase = 'diagnose' | 'apply' | 'verify' | 'deploy';
@@ -140,12 +142,15 @@ export function AnalysisPage() {
   const [sessionSearchResult, setSessionSearchResult] = useState<ProductionSessionDetailResponse | null>(null);
   const [previousSessionResult, setPreviousSessionResult] = useState<ProductionSessionDetailResponse | null>(null); // For "Back to Session" navigation
   const [traceSearchError, setTraceSearchError] = useState<string | null>(null);
+  const [traceSearchStatus, setTraceSearchStatus] = useState<string | null>(null);
   const [traceAnalysisResult, setTraceAnalysisResult] = useState<testMonitorApi.TraceAnalysisResult | null>(null);
   const [traceAnalysisLoading, setTraceAnalysisLoading] = useState(false);
   const [traceDiagnosisLoading, setTraceDiagnosisLoading] = useState(false);
   const [traceDiagnosisResult, setTraceDiagnosisResult] = useState<testMonitorApi.DiagnosisResult | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
   const initialTraceIdHandled = useRef(false);
+  const [langfuseConfigs, setLangfuseConfigs] = useState<LangfuseConfigProfile[]>([]);
+  const [selectedLangfuseConfigId, setSelectedLangfuseConfigId] = useState<number | undefined>(undefined);
 
   // Computed values
   const latestRun = testRuns.length > 0 ? testRuns[0] : null;
@@ -184,6 +189,9 @@ export function AnalysisPage() {
   // Fetch data on mount
   useEffect(() => {
     dispatch(fetchTestRuns({}));
+    appSettingsApi.getLangfuseConfigs()
+      .then(configs => setLangfuseConfigs(configs))
+      .catch(err => console.error('Failed to fetch Langfuse configs:', err));
   }, [dispatch]);
 
   // Handle traceId or sessionId from URL params (e.g., from Call Tracing page link)
@@ -385,28 +393,47 @@ export function AnalysisPage() {
 
     setTraceSearchLoading(true);
     setTraceSearchError(null);
+    setTraceSearchStatus(null);
     setTraceSearchResult(null);
     setSessionSearchResult(null);
 
     try {
-      // Detect if input is a sessionId (starts with "conv_") or a traceId
-      const isSessionId = trimmedId.startsWith('conv_');
+      // Detect input type:
+      // - "conv_..." prefix → session ID
+      // - UUID format (8-4-4-4-12 hex) → session ID (Flowise session IDs are UUIDs)
+      // - "run-..." prefix → trace ID (test run trace)
+      // - anything else → try as trace first, fall back to session
+      const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const isSessionId = trimmedId.startsWith('conv_') || uuidPattern.test(trimmedId);
+      const isTraceId = trimmedId.startsWith('run-');
 
-      if (isSessionId) {
-        // Fetch session with all its traces
-        const result = await testMonitorApi.getProductionSession(trimmedId);
+      if (isSessionId && !isTraceId) {
+        setTraceSearchStatus('Searching locally... importing from Langfuse if needed');
+        const result = await testMonitorApi.getProductionSession(trimmedId, selectedLangfuseConfigId);
         setSessionSearchResult(result);
-      } else {
-        // Fetch single trace
-        const result = await testMonitorApi.getProductionTrace(trimmedId);
+      } else if (isTraceId) {
+        setTraceSearchStatus('Searching locally... importing from Langfuse if needed');
+        const result = await testMonitorApi.getProductionTrace(trimmedId, { configId: selectedLangfuseConfigId });
         setTraceSearchResult(result);
+      } else {
+        // Unknown format: try trace first, then session
+        setTraceSearchStatus('Searching as trace...');
+        try {
+          const result = await testMonitorApi.getProductionTrace(trimmedId, { configId: selectedLangfuseConfigId });
+          setTraceSearchResult(result);
+        } catch {
+          setTraceSearchStatus('Not found as trace, trying as session...');
+          const result = await testMonitorApi.getProductionSession(trimmedId, selectedLangfuseConfigId);
+          setSessionSearchResult(result);
+        }
       }
     } catch (error: any) {
       setTraceSearchError(error?.message || 'Not found');
     } finally {
       setTraceSearchLoading(false);
+      setTraceSearchStatus(null);
     }
-  }, [traceIdSearch]);
+  }, [traceIdSearch, selectedLangfuseConfigId]);
 
   const handleRunAnalysis = useCallback(async (traceId: string) => {
     setTraceAnalysisLoading(true);
@@ -666,12 +693,24 @@ export function AnalysisPage() {
             Trace/Session ID:
           </label>
           <div className="flex items-center gap-2">
+            <select
+              value={selectedLangfuseConfigId ?? ''}
+              onChange={(e) => setSelectedLangfuseConfigId(e.target.value ? parseInt(e.target.value, 10) : undefined)}
+              className="w-44 px-2 py-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+            >
+              <option value="">All Sources</option>
+              {langfuseConfigs.map((config) => (
+                <option key={config.id} value={config.id}>
+                  {config.name}
+                </option>
+              ))}
+            </select>
             <input
               type="text"
               value={traceIdSearch}
               onChange={(e) => setTraceIdSearch(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleTraceSearch()}
-              placeholder="Enter trace or session ID (conv_...)..."
+              placeholder="Enter trace ID (run-...) or session ID (UUID / conv_...)..."
               className="w-72 px-3 py-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
             />
             <Button
@@ -689,6 +728,12 @@ export function AnalysisPage() {
               )}
             </Button>
           </div>
+          {traceSearchStatus && (
+            <span className="text-sm text-blue-400 flex items-center gap-1">
+              <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-blue-400" />
+              {traceSearchStatus}
+            </span>
+          )}
           {traceSearchError && (
             <span className="text-sm text-red-500">{traceSearchError}</span>
           )}
@@ -1259,7 +1304,7 @@ export function AnalysisPage() {
                   variant="outline"
                   onClick={() => {
                     // Open in Call Tracing page
-                    window.open(`/test-monitor/call-tracing?traceId=${traceSearchResult.trace.traceId}`, '_blank');
+                    window.open(`/test-monitor/call-trace?traceId=${traceSearchResult.trace.traceId}`, '_blank');
                   }}
                 >
                   Open in Call Tracing
@@ -1596,7 +1641,7 @@ export function AnalysisPage() {
                   variant="outline"
                   onClick={() => {
                     // Open in Call Tracing page
-                    window.open(`/test-monitor/call-tracing?sessionId=${sessionSearchResult.session.sessionId}`, '_blank');
+                    window.open(`/test-monitor/call-trace?sessionId=${sessionSearchResult.session.sessionId}`, '_blank');
                   }}
                 >
                   Open in Call Tracing

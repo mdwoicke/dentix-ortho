@@ -44,17 +44,11 @@ const SMART_FALLBACK_PATTERNS: SmartFallbackPattern[] = [
     },
   },
   {
-    pattern: /\bfirst\s+name\b/i,
+    // Only match when preceded by child/kid/son/daughter context — NOT generic "first name"
+    pattern: /\b(child'?s?|kid'?s?|son'?s?|daughter'?s?)\b[^.?!]{0,40}\bname\b/i,
     getResponse: (inv, idx) => {
       const child = inv.children[idx] || inv.children[0];
-      return child?.firstName || inv.parentFirstName;
-    },
-  },
-  {
-    pattern: /\blast\s+name\b/i,
-    getResponse: (inv, idx) => {
-      const child = inv.children[idx] || inv.children[0];
-      return child?.lastName || inv.parentLastName;
+      return child ? `${child.firstName} ${child.lastName}` : inv.parentFirstName;
     },
   },
   // Date of birth patterns - CRITICAL for avoiding "Yes" loops
@@ -473,10 +467,20 @@ export class ResponseStrategyEngine {
 
     // For most confirmations, persona should agree
     switch (subject) {
-      case 'information_correct':
+      case 'phone_number_correct':
+      case 'information_correct': {
+        // Check if the agent read back an unresolved variable instead of a real phone number
+        const phoneVarPattern = /c1mg_variable|caller_id_number|\$vars/i;
+        if (phoneVarPattern.test(lastAgentMessage)) {
+          // Agent read a variable name, not a real phone — provide the actual number
+          const actualPhone = persona.inventory.parentPhone || '5551234567';
+          console.log(`[ResponseStrategyEngine] Agent read unresolved phone variable, correcting with actual phone: ${actualPhone}`);
+          return `Actually, my number is ${actualPhone}`;
+        }
         // Always confirm information as correct (we're the simulated user)
         answer = 'yes';
         break;
+      }
 
       case 'proceed_anyway':
         // Usually proceed even with out-of-network insurance, etc.

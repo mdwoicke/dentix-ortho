@@ -3,8 +3,10 @@
  *
  * Analyzes orthodontic appointment scheduling call transcripts to classify
  * the caller's primary intent and extract relevant booking details.
- * Uses Anthropic Claude 3.5 Haiku via direct HTTP fetch.
+ * Uses the shared LLM provider abstraction (CLI or API).
  */
+
+import { getLLMProvider } from '../../../shared/services/llm-provider';
 
 // ============================================================================
 // TYPE DEFINITIONS
@@ -83,13 +85,13 @@ export async function classifyCallerIntent(transcript: ConversationTurn[]): Prom
     };
   }
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    console.warn('[CallerIntentClassifier] ANTHROPIC_API_KEY not set, returning fallback');
+  const provider = getLLMProvider();
+  if (!provider.isAvailable()) {
+    console.warn('[CallerIntentClassifier] LLM provider unavailable, returning fallback');
     return {
       type: 'info_lookup',
       confidence: 0,
-      summary: 'Classification unavailable - no API key configured',
+      summary: 'Classification unavailable - no LLM provider configured',
     };
   }
 
@@ -99,45 +101,40 @@ export async function classifyCallerIntent(transcript: ConversationTurn[]): Prom
     .join('\n');
 
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: 'claude-3-5-haiku-20241022',
-        max_tokens: 512,
-        temperature: 0,
-        system: SYSTEM_PROMPT,
-        messages: [
-          {
-            role: 'user',
-            content: transcriptText,
-          },
-        ],
-      }),
+    const response = await provider.execute({
+      prompt: transcriptText,
+      systemPrompt: SYSTEM_PROMPT,
+      maxTokens: 512,
+      temperature: 0,
+      purpose: 'generic-llm-call',
+      metadata: { service: 'callerIntentClassifier' },
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`[CallerIntentClassifier] Anthropic API error: ${response.status} - ${errorText}`);
-      return createFallbackIntent('LLM API error');
+    if (!response.success || !response.content) {
+      console.error(`[CallerIntentClassifier] LLM provider error: ${response.error}`);
+      return createFallbackIntent(response.error || 'LLM provider error');
     }
 
-    const data = (await response.json()) as {
-      content: Array<{ type: string; text?: string }>;
-    };
+    const result = parseLlmResponse(response.content);
 
-    const textBlock = data.content?.find((b) => b.type === 'text');
-    if (!textBlock?.text) {
-      return createFallbackIntent('No text in LLM response');
+    // If LLM returned a low-confidence fallback, try transcript-based classification
+    if (result.confidence === 0 || (result.type === 'info_lookup' && result.confidence < 0.3)) {
+      const transcriptResult = classifyFromTranscript(transcript);
+      if (transcriptResult && transcriptResult.confidence > result.confidence) {
+        console.log('[CallerIntentClassifier] LLM fallback triggered, using transcript-based classification');
+        return transcriptResult;
+      }
     }
 
-    return parseLlmResponse(textBlock.text);
+    return result;
   } catch (error: any) {
     console.error('[CallerIntentClassifier] Classification failed:', error.message);
+    // Try transcript-based fallback before giving up
+    const transcriptResult = classifyFromTranscript(transcript);
+    if (transcriptResult) {
+      console.log('[CallerIntentClassifier] LLM error, using transcript-based classification');
+      return transcriptResult;
+    }
     return createFallbackIntent('Classification error');
   }
 }
@@ -195,6 +192,130 @@ function parseLlmResponse(text: string): CallerIntent {
     console.warn('[CallerIntentClassifier] Failed to parse LLM response:', error);
     return createFallbackIntent('Parse error');
   }
+}
+
+/**
+ * Transcript-based intent classification fallback.
+ * Scans conversation turns for booking signals and extracts details
+ * when the LLM fails to return valid JSON.
+ */
+function classifyFromTranscript(transcript: ConversationTurn[]): CallerIntent | null {
+  const bookingSignals = /\b(appointment|schedule|book|consultation|come in|visit|opening|slot|available)\b/i;
+  const dobPattern = /\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b/;
+
+  let signalCount = 0;
+  const childNames: string[] = [];
+  let parentName: string | null = null;
+  const dates: string[] = [];
+
+  for (let i = 0; i < transcript.length; i++) {
+    const turn = transcript[i];
+    const content = turn.content;
+
+    if (bookingSignals.test(content)) signalCount++;
+
+    // Extract child names from various patterns
+    const childNameDirect = content.match(/child(?:'s)?\s+name\s+is\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i);
+    if (childNameDirect) {
+      const name = childNameDirect[1].trim();
+      if (!childNames.includes(name)) childNames.push(name);
+    }
+
+    // Pattern: assistant asks "child's name" -> next user turn is the name
+    if (turn.role === 'assistant' && /what(?:'s| is)\s+(?:your\s+)?child(?:'s)?\s+name/i.test(content)) {
+      const next = transcript[i + 1];
+      if (next?.role === 'user') {
+        const nameMatch = next.content.trim().match(/^([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})/);
+        if (nameMatch) {
+          const name = nameMatch[1].trim();
+          if (!childNames.includes(name)) childNames.push(name);
+        }
+      }
+    }
+
+    // Pattern: assistant spells back name "first name is I-S-A-I-A-H, and the last name is C-A-V-E"
+    if (turn.role === 'assistant') {
+      const spellMatch = content.match(/first name is ([A-Z](?:-[A-Z])+).*last name is ([A-Z](?:-[A-Z])+)/i);
+      if (spellMatch) {
+        const firstName = spellMatch[1].replace(/-/g, '');
+        const lastName = spellMatch[2].replace(/-/g, '');
+        // Capitalize properly
+        const name = firstName.charAt(0).toUpperCase() + firstName.slice(1).toLowerCase()
+          + ' ' + lastName.charAt(0).toUpperCase() + lastName.slice(1).toLowerCase();
+        if (!childNames.includes(name)) childNames.push(name);
+      }
+
+      // Pattern: assistant mentions child by name in context like "Isaiah's date of birth" or "scheduled the consultation for Isaiah"
+      const childRefMatch = content.match(/(?:for|either)\s+([A-Z][a-z]+)(?:\s+(?:and|or)\s+([A-Z][a-z]+))?/);
+      if (childRefMatch) {
+        for (const m of [childRefMatch[1], childRefMatch[2]]) {
+          if (m && m.length > 2) {
+            // Only add if it matches an already-found child first name or looks like a child name in scheduling context
+            const existing = childNames.find(n => n.toLowerCase().startsWith(m.toLowerCase()));
+            if (!existing && /schedul|consult|appointment|birth/i.test(content)) {
+              // Check it's not a common non-name word
+              if (!/^(the|that|this|your|our|any)$/i.test(m)) {
+                // Just track first name — we may already have the full name
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Extract parent name: "Thanks, Leanne" pattern at start of conversation
+    if (turn.role === 'assistant' && !parentName) {
+      const thanksMatch = content.match(/^Thanks,\s+([A-Z][a-z]+)/);
+      if (thanksMatch && i < 5) {
+        parentName = thanksMatch[1].trim();
+      }
+    }
+
+    // Pattern: assistant asks "What's your name?" -> next user turn
+    if (turn.role === 'assistant' && /what(?:'s| is)\s+your\s+(?:first\s+and\s+last\s+|full\s+)?name/i.test(content) && !parentName) {
+      const next = transcript[i + 1];
+      if (next?.role === 'user') {
+        const nameMatch = next.content.trim().match(/^([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})/);
+        if (nameMatch) parentName = nameMatch[1].trim();
+      }
+    }
+
+    // "my name is X" from user
+    const myNameMatch = content.match(/my name is\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i);
+    if (myNameMatch && turn.role === 'user' && !parentName) {
+      parentName = myNameMatch[1].trim();
+    }
+
+    // Extract dates
+    const dateMatch = content.match(dobPattern);
+    if (dateMatch) dates.push(dateMatch[1]);
+  }
+
+  // Extract child count from "is it two?" or "scheduling consultations for 2 children"
+  let explicitChildCount = 0;
+  for (const turn of transcript) {
+    const countMatch = turn.content.match(/is it (two|three|four|2|3|4)\b/i)
+      || turn.content.match(/(\d+)\s+child/i);
+    if (countMatch) {
+      const numMap: Record<string, number> = { two: 2, three: 3, four: 4 };
+      explicitChildCount = numMap[countMatch[1].toLowerCase()] || parseInt(countMatch[1], 10) || 0;
+    }
+  }
+
+  if (signalCount < 2) return null;
+
+  return {
+    type: 'booking',
+    confidence: Math.min(0.85, 0.5 + signalCount * 0.1),
+    bookingDetails: {
+      childCount: Math.max(childNames.length, explicitChildCount, 1),
+      childNames,
+      parentName,
+      parentPhone: null,
+      requestedDates: dates,
+    },
+    summary: `Transcript-based: booking intent detected (${childNames.length} child${childNames.length !== 1 ? 'ren' : ''} identified)`,
+  };
 }
 
 /**

@@ -69,6 +69,16 @@ router.post('/slack/test', heartbeatController.testSlack);
 router.put('/slack/config', heartbeatController.updateSlackConfig);
 
 // ============================================================================
+// LANGFUSE CONFIG
+// ============================================================================
+
+// GET /api/heartbeat/langfuse-configs - Get available Langfuse configs
+router.get('/langfuse-configs', heartbeatController.getLangfuseConfigs);
+
+// PUT /api/heartbeat/langfuse-config - Set Langfuse config for monitoring
+router.put('/langfuse-config', heartbeatController.setLangfuseConfig);
+
+// ============================================================================
 // METRIC UTILITIES
 // ============================================================================
 

@@ -1,9 +1,82 @@
 /**
  * ============================================================================
  * CHORD SCHEDULING DSO - Appointment Scheduling Tool (Node Red Version)
- * Version: v69 | Updated: 2026-01-22
+ * Version: v91 | Updated: 2026-02-02
  * ============================================================================
  * Actions: slots, grouped_slots, book_child, cancel
+ *
+ * v91: FIX numberOfPatients FLOWISE BUG - Change schema type from integer to string
+ *      - Flowise drops integer-typed params as undefined causing cleanParams to strip them
+ *      - Schema now types numberOfPatients and timeWindowMinutes as string
+ *      - parseInt() already handles string to number conversion in tool code
+ *      - ROOT CAUSE of sibling booking failures (Ted Test session 8e82e784)
+ *
+ * v89: FIX CRITICAL SIBLING BOOKING BUG - Remove v80 redirect + fix numberOfPatients
+ *      - REMOVED v80 redirect that sent grouped_slots to getApptSlots (wrong endpoint!)
+ *      - Flowise integer schema params may arrive as undefined - now defaults numberOfPatients=2
+ *      - Derive numberOfPatients from children array length as backup
+ *      - INSUFFICIENT mode: warn LLM when fewer slots than children found
+ *      - Added endpoint logging to trace which Node-RED URL is actually called
+ *
+ * v88: BULLETPROOF slot-to-child mapping (still active)
+ *      - Consecutive mode: data.slots = groups[0].slots (exactly N for N children)
+ *      - Individual mode: data.slots = first N slots
+ *      - Top-level booking_plan maps child_number → slot
+ *
+ * v87: SIMPLIFY for Node-RED v22 - grouped_slots now always returns 'slots' array
+ *      - hasResults now true when grouped_slots returns slots (not just groups)
+ *      - Removed v86 recursive fallback (no longer needed - Node-RED handles it)
+ *      - Removed v82 bestIndividualSlots tracking (dead code)
+ *      - Booking plan comes directly from Node-RED response
+ *
+ * v86: FIX GROUPED_SLOTS FALLBACK - Node-RED returns no 'slots' field, so v82 was dead code
+ *      - When grouped_slots has 0 groups, now calls regular 'slots' endpoint as fallback
+ *      - Returns individual slots so LLM can book children at separate times
+ *      - MAX_SLOTS_RETURNED exemption: grouped_slots fallback needs >=numberOfPatients slots
+ *      - Fixes the #1 sibling booking failure where 0 groups led to immediate transfer
+ *
+  * v85: ENFORCE UNIQUE SLOTS PER CHILD - Server-side duplicate slot rejection
+ *      - book_child.validate() checks each child has unique startTime+scheduleColumnGUID
+ *      - Atomic bookConsultation path also validates unique slots before calling Node-RED
+ *      - Prevents the #1 sibling booking failure: both children assigned same slot
+ *
+ * v84: PRESERVE BOOKING_PLAN - Stop overwriting Node-RED's child→slot mapping
+ *      - Save booking_plan and SLOT_USAGE_RULE before guidance override
+ *      - Merge them back into standard guidance so LLM sees explicit slot assignments
+ *      - Added "each child MUST use DIFFERENT startTime" to BOOKING_SEQUENCE_MANDATORY
+ *
+ * v78: FIX CHILDREN PARSING - Handle both string and array input from Flowise
+ *      - Flowise schema types children as "string" but LLM may send native array
+ *      - Tool now parses $children whether it arrives as JSON string or array
+ *      - Fixes "Received tool input did not match expected schema" error
+ *
+ * v76: ATOMIC BOOK CONSULTATION - book_child expanded for atomic create+book
+ *      - When parentFirstName is present, routes to /ortho-prd/bookConsultation
+ *      - Node-RED creates parent + children + books all appointments in one call
+ *      - LLM makes exactly 2 tool calls: (1) slots/grouped_slots, (2) book_child with parent+children info
+ *      - Eliminates duplicate patient bug (LLM can't call create twice)
+ *      - Eliminates skipped booking bug (booking is inside same call as creation)
+ *      - Backward compatible: without parentFirstName, existing behavior unchanged
+ *
+ * v75: BULLETPROOF SIBLING BOOKING - Time window set to 40 minutes (matches appointment spacing)
+ *      - Exactly matches 40-minute appointment slot spacing
+ *      - Works with Node-RED v17 which maintains Chair 8 filter requirement
+ *      - Enables successful booking for 2+ children at all locations
+ *
+ * v73: PENDING RESPONSE SUPPORT - Handle getApptSlots v9 cold cache timeout
+ *      - Added _pending response handling in searchSlotsWithExpansion
+ *      - When Node-RED returns _pending (cache cold, quick-sync timed out), return guidance to retry
+ *      - Prevents LLM from treating pending as "no slots"
+ *      - Works with Node-RED getApptSlots v9 (Bulletproof)
+ *
+ * v72: FIX - Each child uses their OWN bookingAuthToken from child create (not parent's)
+ *      - Updated LLM guidance in BOOKING_SEQUENCE_MANDATORY, error messages, sibling_workflow
+ *      - Works with patient tool v12 which clarifies child token generation
+ *
+ * v71: ENFORCE PER-CHILD PATIENTGUID + REQUIRE bookingAuthToken
+ *      - book_child.validate now REQUIRES bookingAuthToken (forces create-before-book sequence)
+ *      - Per-child patientGUID validation in children array (each child must have own GUID)
+ *      - Missing bookingAuthToken returns BOOKING_AUTH_REQUIRED with step-by-step guidance
  *
  * v69: ENHANCED SESSION ID FALLBACK LOGGING
  *      - Added explicit WARNING when using uui as sessionId fallback
@@ -81,7 +154,7 @@
 
 const fetch = require('node-fetch');
 
-const TOOL_VERSION = 'v69';
+const TOOL_VERSION = 'v91';
 const MAX_SLOTS_RETURNED = 1;
 const BASE_URL = 'https://c1-aicoe-nodered-lb.prod.c1conversations.io/FabricWorkflow/api/chord';
 const DEFAULT_SCHEDULE_COLUMN_GUID = '07687884-7e37-49aa-8028-d43b751c9034';
@@ -176,8 +249,8 @@ const ACTIONS = {
                 uui: uui,
                 startDate: params.startDate,
                 endDate: params.endDate,
-                numberOfPatients: params.numberOfPatients || 2,
-                timeWindowMinutes: params.timeWindowMinutes || 30,
+                numberOfPatients: params.numberOfPatients || 1,  // v90: Default to 1, dynamically set upstream
+                timeWindowMinutes: params.timeWindowMinutes || 40,  // v75: Set to 40 to match appointment spacing for 40-min appointment spacing
                 // v68: Pass sessionId for cross-session reservation filtering
                 sessionId: sessionId
             };
@@ -196,16 +269,17 @@ const ACTIONS = {
 
             const body = {
                 uui: uui,
-                patientGUID: params.patientGUID,  // Parent's GUID - reused for all siblings
+                patientGUID: params.patientGUID,  // v71: Child's own GUID (INDIVIDUAL_PATIENT_PER_PERSON) or parent GUID (legacy batch)
                 // v55: Booking auth token - validates patientGUID came from create response
                 bookingAuthToken: params.bookingAuthToken,
                 // v68: Pass sessionId for cross-session slot reservation
                 sessionId: sessionId
             };
 
-            // v63: If children array provided, pass it through for batch booking
+            // v63/v71: If children array provided, pass it through for batch booking
+            // v71: Each child now has their own patientGUID (INDIVIDUAL_PATIENT_PER_PERSON)
             if (params.children && Array.isArray(params.children) && params.children.length > 0) {
-                console.log('[book_child v63] Batch booking ' + params.children.length + ' children');
+                console.log('[book_child v71] Batch booking ' + params.children.length + ' children (INDIVIDUAL_PATIENT_PER_PERSON)');
                 body.children = params.children.map(child => {
                     // Build note for each child
                     let note = '';
@@ -217,6 +291,8 @@ const ACTIONS = {
                         if (child.memberID) note += ' | MemberID: ' + child.memberID;
                     }
                     return {
+                        // v71: Each child has their own patientGUID
+                        patientGUID: child.patientGUID,
                         childName: child.childName,
                         childDOB: child.childDOB,
                         startTime: child.startTime,
@@ -249,22 +325,60 @@ const ACTIONS = {
             return body;
         },
         validate: (params) => {
-            // v57: REMOVED bookingAuthToken validation - Node-RED handles this with session fallback
-            if (!params.patientGUID) throw new Error('BOOKING FAILED - Missing patientGUID (parent GUID)');
-            // v63: Either children array OR single child params required
+            // v71: patientGUID is now the CHILD's GUID (INDIVIDUAL_PATIENT_PER_PERSON model)
+            if (!params.patientGUID) throw new Error('BOOKING FAILED - Missing patientGUID (child GUID from create response)');
+            // v71: Require bookingAuthToken to force create-before-book sequence
+            if (!params.bookingAuthToken) {
+                throw new Error(JSON.stringify({
+                    success: false,
+                    error: 'BOOKING_AUTH_REQUIRED',
+                    llm_guidance: {
+                        error_type: 'missing_booking_token',
+                        action_required: 'create_patient_first',
+                        CRITICAL: 'You must call chord_ortho_patient action=create for each child FIRST. Each child gets their own patientGUID AND bookingAuthToken. Use BOTH values from the child create response.',
+                        steps: [
+                            '1. chord_ortho_patient action=create, isChild=true, parentPatientGUID, familyId -> returns child patientGUID + child bookingAuthToken',
+                            '2. book_child with child patientGUID + child bookingAuthToken (NOT parent token)'
+                        ]
+                    }
+                }));
+            }
+            // v63/v71: Either children array OR single child params required
             if (params.children && Array.isArray(params.children) && params.children.length > 0) {
+                const usedSlots = new Set(); // v85: Track used slot keys
                 // Validate each child has required fields
                 for (let i = 0; i < params.children.length; i++) {
                     const child = params.children[i];
                     if (!child.startTime) throw new Error('BOOKING FAILED - Child ' + (i+1) + ' missing startTime');
                     if (!child.scheduleViewGUID) throw new Error('BOOKING FAILED - Child ' + (i+1) + ' missing scheduleViewGUID');
-                    if (!child.childName) console.log('[book_child v63] WARNING: Child ' + (i+1) + ' has no childName');
+                    // v71: Require per-child patientGUID
+                    if (!child.patientGUID) throw new Error('BOOKING FAILED - Child ' + (i+1) + ' missing patientGUID. Each child must have their own patientGUID from chord_ortho_patient create.');
+                    if (!child.childName) console.log('[book_child v71] WARNING: Child ' + (i+1) + ' has no childName');
+                    // v85: ENFORCE UNIQUE SLOTS
+                    const slotKey = (child.startTime || '').trim().toLowerCase() + '|' + (child.scheduleColumnGUID || DEFAULT_SCHEDULE_COLUMN_GUID).toLowerCase();
+                    if (usedSlots.has(slotKey)) {
+                        console.error('[v85] DUPLICATE SLOT DETECTED: Child ' + (i+1) + ' has same slot as another child: ' + child.startTime);
+                        throw new Error(JSON.stringify({
+                            success: false,
+                            error: 'DUPLICATE_SLOT_ASSIGNMENT',
+                            llm_guidance: {
+                                error_type: 'duplicate_slot',
+                                voice_response: 'Let me find a separate appointment time for your other child.',
+                                action_required: 'use_different_slots_per_child',
+                                CRITICAL: 'v85: EACH child MUST have a DIFFERENT startTime. You assigned the same slot (' + child.startTime + ') to multiple children. Look at the booking_plan from grouped_slots - Child 1 uses slot 1, Child 2 uses slot 2. Call grouped_slots again if you lost the slot assignments.',
+                                duplicate_startTime: child.startTime,
+                                child_index: i + 1,
+                                fix: 'Re-read the booking_plan from the grouped_slots response. Each child has a unique startTime assigned. Use those exact values.'
+                            }
+                        }));
+                    }
+                    usedSlots.add(slotKey);
                 }
             } else {
                 // Single child validation
                 if (!params.startTime) throw new Error('BOOKING FAILED - Missing startTime');
                 if (!params.scheduleViewGUID) throw new Error('BOOKING FAILED - Missing scheduleViewGUID');
-                if (!params.childName) console.log('[book_child v63] WARNING: No childName provided');
+                if (!params.childName) console.log('[book_child v71] WARNING: No childName provided');
             }
         },
         successLog: (data) => data.results ? 'Booked ' + data.results.length + ' appointments' : 'Appointment booked successfully'
@@ -416,6 +530,8 @@ async function searchSlotsWithExpansion(action, params, uui, headers, sessionId)
     let lastError = null;
     let searchExpanded = false;
     let finalExpansionDays = DATE_EXPANSION_TIERS[0];
+            // v87: bestIndividualSlots removed - Node-RED v22 handles individual slot fallback natively
+
 
     for (let tierIndex = 0; tierIndex < DATE_EXPANSION_TIERS.length; tierIndex++) {
         const expansionDays = DATE_EXPANSION_TIERS[tierIndex];
@@ -425,28 +541,52 @@ async function searchSlotsWithExpansion(action, params, uui, headers, sessionId)
         const body = config.buildBody(searchParams, uui, sessionId);
         
         console.log('[v50] Tier ' + tierIndex + ' search: ' + corrected.startDate + ' to ' + corrected.endDate + ' (' + expansionDays + ' days)');
-        
+
         try {
             const response = await fetch(config.endpoint, { method: config.method, headers: headers, body: JSON.stringify(body) });
             const responseText = await response.text();
             let data;
             try { data = JSON.parse(responseText); } catch (e) { data = responseText; }
-            
+
             if (!response.ok) {
                 lastError = 'HTTP ' + response.status + ': ' + response.statusText;
                 continue;
             }
-            
+
             const errorMessage = checkForError(data);
             if (errorMessage) {
                 lastError = errorMessage;
                 continue;
             }
-            
-            // Check if we got slots/groups
-            const hasResults = (action === 'slots' && data.slots && data.slots.length > 0) ||
-                               (action === 'grouped_slots' && data.groups && data.groups.length > 0);
-            
+
+            // v73: Check for pending response from getApptSlots v9 (cold cache timeout)
+            if (data._pending) {
+                console.log('[v73] Node-RED returned _pending - cache cold, quick-sync timed out');
+                return {
+                    success: false,
+                    _pending: true,
+                    data: {
+                        slots: [],
+                        groups: [],
+                        count: 0,
+                        _pending: true,
+                        _toolVersion: TOOL_VERSION,
+                        llm_guidance: data.llm_guidance || {
+                            action_required: 'inform_caller_and_retry',
+                            voice_response: 'Let me check on that availability. One moment please.',
+                            retry_after_ms: 10000,
+                            CRITICAL: 'v73: Slots being fetched in background. Retry request in 10 seconds. If still pending after 2 retries, offer transfer.'
+                        }
+                    }
+                };
+            }
+
+            const hasGroups = data.groups && data.groups.length > 0;
+            const hasSlots = data.slots && data.slots.length > 0;
+            // v87: grouped_slots v22 now ALWAYS returns slots array alongside groups
+            // Success when we have groups OR individual slots (for either action)
+            const hasResults = hasSlots || hasGroups;
+
             if (hasResults) {
                 // v50: Add metadata about the search
                 data._searchExpanded = tierIndex > 0;
@@ -457,6 +597,8 @@ async function searchSlotsWithExpansion(action, params, uui, headers, sessionId)
                 }
                 return { success: true, data: data };
             }
+
+            // v87: No fallback tracking needed - Node-RED v22 always returns slots alongside groups
             
             // No results, try next tier
             searchExpanded = true;
@@ -469,8 +611,10 @@ async function searchSlotsWithExpansion(action, params, uui, headers, sessionId)
         }
     }
     
-    // v50: All tiers exhausted, no slots found
-    console.log('[v50] All expansion tiers exhausted, no slots found');
+    // v87: No fallback needed - Node-RED v22 returns individual slots in the response
+
+    // v50: All tiers exhausted, truly no slots found
+    console.log('[v50] All expansion tiers exhausted, no slots found. lastError=' + lastError);
     return {
         success: false,
         data: {
@@ -482,7 +626,6 @@ async function searchSlotsWithExpansion(action, params, uui, headers, sessionId)
             _searchExpanded: searchExpanded,
             _expansionTier: DATE_EXPANSION_TIERS.length - 1,
             _dateRange: { days: finalExpansionDays },
-            _debug_error: lastError || 'No slots available after searching ' + finalExpansionDays + ' days',
             llm_guidance: {
                 error_type: 'no_slots_after_expansion',
                 voice_response: 'I apologize, but I was not able to find any available appointments within the next ' + Math.round(finalExpansionDays / 7) + ' weeks. Let me connect you with someone who can help schedule your appointment.',
@@ -497,7 +640,7 @@ async function searchSlotsWithExpansion(action, params, uui, headers, sessionId)
 async function executeRequest() {
     const toolName = 'schedule_appointment_ortho';
     const action = $action;
-    console.log('[' + toolName + '] ' + TOOL_VERSION + ' - FLOW CONTEXT FALLBACK');
+    console.log('[' + toolName + '] ' + TOOL_VERSION + ' - INDIVIDUAL_PATIENT_PER_PERSON MODEL');
     console.log('[' + toolName + '] Action: ' + action);
 
     if (!action || !ACTIONS[action]) throw new Error('Invalid action. Valid: ' + Object.keys(ACTIONS).join(', '));
@@ -657,13 +800,48 @@ async function executeRequest() {
         // v55: Booking authorization token - validates patientGUID came from create response
         bookingAuthToken: typeof $bookingAuthToken !== 'undefined' ? $bookingAuthToken : null,
         // v63: Children array for batch booking
-        children: typeof $children !== 'undefined' ? $children : null
+        // v78: Parse children - may arrive as string (Flowise schema) or array (direct)
+        children: (() => {
+            if (typeof $children === 'undefined' || $children === null) return null;
+            if (Array.isArray($children)) return $children;
+            if (typeof $children === 'string') {
+                try { const parsed = JSON.parse($children); return Array.isArray(parsed) ? parsed : null; }
+                catch (e) { console.log('[v78] Failed to parse children string:', e.message); return null; }
+            }
+            return null;
+        })(),
+        // v76: Atomic book consultation - parent info triggers bookConsultation endpoint
+        parentFirstName: typeof $parentFirstName !== 'undefined' ? $parentFirstName : null,
+        parentLastName: typeof $parentLastName !== 'undefined' ? $parentLastName : null,
+        parentPhone: typeof $parentPhone !== 'undefined' ? $parentPhone : null,
+        parentEmail: typeof $parentEmail !== 'undefined' ? $parentEmail : null,
+        parentDOB: typeof $parentDOB !== 'undefined' ? $parentDOB : null
     };
     const params = cleanParams(rawParams);
 
     try {
         // v67: Always call Node-RED endpoints - Node-RED handles caching internally
         if (action === 'slots' || action === 'grouped_slots') {
+            // v89: REMOVED v80 redirect - always use the endpoint the LLM requested
+            // v80 redirect was the ROOT CAUSE of sibling booking failures:
+            // Flowise sometimes doesn't inject $numberOfPatients for integer-typed schema fields,
+            // causing it to be undefined → removed by cleanParams → v80 redirected to getApptSlots
+            // which returns only 1 slot instead of paired slots from getGroupedApptSlots
+            let effectiveAction = action;
+
+            // v90: Dynamically determine numberOfPatients from children array
+            // Priority: explicit params.numberOfPatients > children array length > default 1
+            if (action === 'grouped_slots' && !params.numberOfPatients) {
+                if (params.children && Array.isArray(params.children) && params.children.length > 0) {
+                    params.numberOfPatients = params.children.length;
+                    console.log('[v90] Derived numberOfPatients=' + params.numberOfPatients + ' from children array length');
+                } else {
+                    params.numberOfPatients = 1; // v90: Default to 1 — single child is the common case
+                    console.log('[v90] Defaulting numberOfPatients=1 for grouped_slots (no children array provided)');
+                }
+            }
+            console.log('[v89] effectiveAction=' + effectiveAction + ' numberOfPatients=' + params.numberOfPatients + ' endpoint=' + ACTIONS[effectiveAction].endpoint);
+
             const headers = { 'Content-Type': 'application/json' };
             const authHeader = getAuthHeader();
             if (authHeader) headers['Authorization'] = authHeader;
@@ -671,8 +849,8 @@ async function executeRequest() {
             // v67: Call Node-RED endpoint via searchSlotsWithExpansion
             // Node-RED handles Redis cache internally with correct data structure
             // v68: Pass sessionId for cross-session reservation filtering
-            console.log('[v68] Calling Node-RED endpoint for ' + action + ' with sessionId...');
-            const searchResult = await searchSlotsWithExpansion(action, params, uui, headers, sessionId);
+            console.log('[v68] Calling Node-RED endpoint for ' + effectiveAction + ' with sessionId...');
+            const searchResult = await searchSlotsWithExpansion(effectiveAction, params, uui, headers, sessionId);
 
             if (!searchResult.success) {
                 // Return the no-slots response with guidance
@@ -685,55 +863,216 @@ async function executeRequest() {
             
             // v52: Format slots with individual GUIDs for direct booking
             data = formatSlotsResponse(data);
-            
-            // Truncate to MAX_SLOTS_RETURNED
-            if (data && data.slots && data.slots.length > MAX_SLOTS_RETURNED) {
-                data.slots = data.slots.slice(0, MAX_SLOTS_RETURNED);
-                data.count = MAX_SLOTS_RETURNED;
-                data._truncated = true;
+
+            // v89: BULLETPROOF slot-to-child mapping
+            // Build final slots array to contain EXACTLY what LLM needs: one slot per child
+            // v90: numberOfPatients dynamically derived from children array upstream
+            const numberOfPatients = parseInt(params.numberOfPatients) || 1;
+            console.log('[v90] Processing response: numberOfPatients=' + numberOfPatients + ' action=' + action);
+            const bookingMode = data._bookingMode || (data.groups && data.groups.length > 0 ? 'consecutive' : (data.slots && data.slots.length > 0 ? 'individual' : 'none'));
+            const nodeRedBookingPlan = (data.llm_guidance && data.llm_guidance.booking_plan) ? data.llm_guidance.booking_plan : null;
+
+            if (bookingMode === 'consecutive' && data.groups && data.groups.length > 0) {
+                const bestGroup = data.groups[0];
+                const groupSlots = bestGroup.slots || [];
+                console.log('[v89] CONSECUTIVE: Using group[0] with ' + groupSlots.length + ' slots as data.slots');
+                data.slots = groupSlots;
+                data.count = groupSlots.length;
+                data._bookingMode = 'consecutive';
+                delete data.groups;
+                delete data.totalGroups;
+            } else if ((bookingMode === 'individual' || !data.groups || data.groups.length === 0) && data.slots && data.slots.length >= numberOfPatients) {
+                console.log('[v89] INDIVIDUAL: Keeping first ' + numberOfPatients + ' of ' + data.slots.length + ' slots');
+                data.slots = data.slots.slice(0, numberOfPatients);
+                data.count = data.slots.length;
+                data._bookingMode = 'individual';
+                delete data.groups;
+                delete data.totalGroups;
+            } else {
+                console.log('[v89] INSUFFICIENT: mode=' + bookingMode + ' slots=' + (data.slots ? data.slots.length : 0) + ' groups=' + (data.groups ? data.groups.length : 0) + ' needed=' + numberOfPatients);
+                // v89: If we need N slots but have fewer, return what we have with a warning
+                // This prevents the LLM from getting 1 slot and assigning it to 2 children
+                if (data.slots && data.slots.length > 0 && data.slots.length < numberOfPatients) {
+                    data._warning = 'INSUFFICIENT_SLOTS: Found ' + data.slots.length + ' but need ' + numberOfPatients + '. Cannot book all children in one pass.';
+                    data._bookingMode = 'insufficient';
+                }
             }
-            if (data && data.groups && data.groups.length > MAX_SLOTS_RETURNED) {
-                data.groups = data.groups.slice(0, MAX_SLOTS_RETURNED);
-                data.totalGroups = MAX_SLOTS_RETURNED;
-                data._truncated = true;
+
+            // v88: Top-level booking_plan maps slots[i] to child[i+1]
+            const bookingPlan = [];
+            if (data.slots && data.slots.length >= numberOfPatients) {
+                for (let i = 0; i < numberOfPatients; i++) {
+                    const slot = data.slots[i];
+                    bookingPlan.push({
+                        child_number: i + 1,
+                        use_this_startTime: slot.startTime || slot.displayTime,
+                        use_this_scheduleViewGUID: slot.scheduleViewGUID,
+                        use_this_scheduleColumnGUID: slot.scheduleColumnGUID,
+                        use_this_appointmentTypeGUID: slot.appointmentTypeGUID,
+                        minutes: slot.minutes || '40'
+                    });
+                }
             }
-            
+
             if (typeof data === 'object') {
                 data._toolVersion = TOOL_VERSION;
-                // v64: Include flow context debug in response
                 data._debug_v64_flow_context = flowContextDebug;
-                // v63: Children array booking sequence guidance
+                data.booking_plan = bookingPlan;
+                data.booking_mode = bookingMode;
+
+                if (data.llm_guidance && data.llm_guidance.action_required === 'book_children_separately') {
+                    console.log('[v84] Preserving book_children_separately guidance');
+                } else {
                 data.llm_guidance = {
                     timestamp: new Date().toISOString(),
-                    model: 'PARENT_AS_PATIENT_V63',
+                    model: 'INDIVIDUAL_PATIENT_PER_PERSON_V71',
                     confirmation_triggers: ['yes', 'yeah', 'yep', 'yup', 'sure', 'okay', 'ok', 'alright', 'that works', 'works for me', 'perfect', 'sounds good'],
                     goodbye_triggers: ["that's all", 'thats all', "that's it", 'thats it', 'no thank you', 'no thanks'],
-                    BOOKING_SEQUENCE_MANDATORY: [
-                        'STEP 1: Offer the slot time(s) to the caller and wait for confirmation',
-                        'STEP 2: When caller confirms, call chord_ortho_patient action=create with PARENT firstName/lastName/phone',
-                        'STEP 3: Get the patientGUID and bookingAuthToken from the chord_ortho_patient response',
-                        'STEP 4: Call schedule_appointment_ortho action=book_child ONE TIME with ALL children:',
-                        '        - patientGUID: the PARENT GUID from step 3',
-                        '        - bookingAuthToken: the token from step 3',
-                        '        - children: array of objects, one per child, each containing:',
-                        '          { childName, childDOB, startTime, scheduleViewGUID, scheduleColumnGUID }',
-                        'CRITICAL: Pass ALL children in ONE book_child call using the children array. Do NOT call book_child multiple times.'
+                    BOOKING_INSTRUCTIONS: numberOfPatients === 1 ? [
+                        'STEP 1: Offer the time to the caller.',
+                        'STEP 2: When confirmed, call book_child with parentFirstName + children array containing 1 child.',
+                        'STEP 3: The child MUST use the startTime from booking_plan[0].use_this_startTime.',
+                        'STEP 4: The children array in book_child MUST have EXACTLY 1 entry.'
+                    ] : [
+                        'STEP 1: Offer time(s) to caller. For consecutive slots say "starting at [first time]". For individual slots list each time.',
+                        'STEP 2: When confirmed, call book_child with parentFirstName + children array containing ALL ' + numberOfPatients + ' children.',
+                        'STEP 3: MANDATORY - Each child MUST use the startTime from booking_plan. Child N uses booking_plan[N-1].use_this_startTime. NEVER give two children the same startTime.',
+                        'STEP 4: The children array in book_child MUST have EXACTLY ' + numberOfPatients + ' entries. No more. No less. One slot per child.'
                     ],
-                    sibling_workflow: 'For 2+ children: create PARENT once, then pass ALL children in a single book_child call using the children array parameter',
+                    CRITICAL_SLOT_RULE: 'v90: There are EXACTLY ' + numberOfPatients + ' slots for ' + numberOfPatients + ' children. The children array in book_child MUST contain EXACTLY ' + numberOfPatients + (numberOfPatients === 1 ? ' child.' : ' children. Even if caller only mentions one child when confirming, INCLUDE ALL CHILDREN.'),
                     next_action: 'offer_time_to_caller_and_wait_for_confirmation',
-                    on_caller_confirms: 'call_chord_ortho_patient_action_create_then_book_child_with_children_array',
+                    on_caller_confirms: 'call_book_child_with_parent_info_and_children_array',
                     children_array_format: {
-                        description: 'Each child object in the children array should have:',
-                        required_fields: ['childName', 'startTime', 'scheduleViewGUID'],
-                        optional_fields: ['childDOB', 'scheduleColumnGUID', 'appointmentTypeGUID', 'minutes', 'insuranceProvider', 'groupID', 'memberID'],
-                        example: '{ childName: "Emma", childDOB: "05/15/2018", startTime: "01/25/2026 9:00 AM", scheduleViewGUID: "abc-123" }'
-                    }
+                        description: 'v76 ATOMIC: Each child needs:',
+                        required_fields: ['firstName', 'dob', 'startTime', 'scheduleViewGUID'],
+                        optional_fields: ['lastName', 'scheduleColumnGUID', 'appointmentTypeGUID', 'minutes'],
+                        example: '{ firstName: "Emma", dob: "05/15/2018", startTime: "01/25/2026 9:00 AM", scheduleViewGUID: "abc-123" }'
+                    },
+                    IMPORTANT: 'v76: book_child with parentFirstName creates patients AND books atomically. Do NOT call chord_ortho_patient create separately.'
                 };
+                } // end else (v84)
             }
             return JSON.stringify(data);
         }
-        
-        // Non-slot actions (book_child, cancel) - use original flow
+
+                // v76: ATOMIC BOOK CONSULTATION - route to bookConsultation when parent info present
+        if (action === 'book_child' && params.parentFirstName) {
+            console.log('[v76] ATOMIC BOOK CONSULTATION: parentFirstName present, routing to bookConsultation');
+            const headers = { 'Content-Type': 'application/json' };
+            const authHeader = getAuthHeader();
+            if (authHeader) headers['Authorization'] = authHeader;
+
+            // Validate children array is present
+            if (!params.children || !Array.isArray(params.children) || params.children.length === 0) {
+                throw new Error('BOOKING FAILED - Atomic book_child requires children array with slot assignments');
+            }
+
+            // v85: Validate unique slots BEFORE calling Node-RED
+            if (params.children.length > 1) {
+                const usedSlots = new Set();
+                for (let i = 0; i < params.children.length; i++) {
+                    const child = params.children[i];
+                    const slotKey = (child.startTime || '').trim().toLowerCase() + '|' + (child.scheduleColumnGUID || DEFAULT_SCHEDULE_COLUMN_GUID).toLowerCase();
+                    if (usedSlots.has(slotKey)) {
+                        console.error('[v85] ATOMIC PATH: Duplicate slot for child ' + (i+1) + ': ' + child.startTime);
+                        return JSON.stringify({
+                            success: false,
+                            error: 'DUPLICATE_SLOT_ASSIGNMENT',
+                            _toolVersion: TOOL_VERSION,
+                            llm_guidance: {
+                                error_type: 'duplicate_slot',
+                                voice_response: 'Let me find a separate appointment time for your other child.',
+                                action_required: 'use_different_slots_per_child',
+                                CRITICAL: 'v85: EACH child MUST have a DIFFERENT startTime. You assigned the same slot (' + child.startTime + ') to multiple children. Look at the booking_plan from grouped_slots - Child 1 uses slot 1, Child 2 uses slot 2. Call grouped_slots again if needed.',
+                                duplicate_startTime: child.startTime,
+                                child_index: i + 1,
+                                fix: 'Re-read the booking_plan from the grouped_slots response. Each child has a unique startTime assigned.'
+                            }
+                        });
+                    }
+                    usedSlots.add(slotKey);
+                }
+                console.log('[v85] ATOMIC PATH: All ' + params.children.length + ' children have unique slot assignments');
+            }
+
+            const consultBody = {
+                uui: uui,
+                sessionId: sessionId,
+                parentFirstName: params.parentFirstName,
+                parentLastName: params.parentLastName,
+                parentPhone: params.parentPhone,
+                parentEmail: params.parentEmail || null,
+                parentDOB: params.parentDOB || null,
+                children: params.children.map(child => ({
+                    firstName: child.firstName || child.childName,
+                    lastName: child.lastName || params.parentLastName,
+                    dob: child.dob || child.childDOB,
+                    startTime: child.startTime,
+                    scheduleViewGUID: child.scheduleViewGUID,
+                    scheduleColumnGUID: child.scheduleColumnGUID || DEFAULT_SCHEDULE_COLUMN_GUID,
+                    appointmentTypeGUID: child.appointmentTypeGUID || 'f6c20c35-9abb-47c2-981a-342996016705',
+                    minutes: child.minutes || 40
+                })),
+                insuranceProvider: params.insuranceProvider || null,
+                insuranceGroupId: params.groupID || null,
+                insuranceMemberId: params.memberID || null
+            };
+
+            console.log('[v76] bookConsultation body:', JSON.stringify(consultBody));
+            const response = await fetch(`${BASE_URL}/ortho-prd/bookConsultation`, {
+                method: 'POST', headers: headers, body: JSON.stringify(consultBody)
+            });
+            const responseText = await response.text();
+            let data;
+            try { data = JSON.parse(responseText); } catch (e) { data = responseText; }
+
+            if (!response.ok) throw new Error('HTTP ' + response.status + ': ' + response.statusText);
+            const errorMessage = checkForError(data);
+            if (errorMessage) throw new Error(errorMessage);
+
+            console.log('[v76] bookConsultation success:', JSON.stringify(data).substring(0, 200));
+            if (typeof data === 'object') {
+                data._toolVersion = TOOL_VERSION;
+                data._debug_v64_flow_context = flowContextDebug;
+
+                // v89: Warn if fewer children booked than expected
+                const bookedCount = params.children ? params.children.length : 1;
+                const expectedCount = parseInt(params.numberOfPatients) || bookedCount;
+                if (data.children && data.children.length < expectedCount) {
+                    data._warning = 'INCOMPLETE_BOOKING: Only ' + data.children.length + ' of ' + expectedCount + ' children were booked. Book remaining children immediately.';
+                    data.llm_guidance = data.llm_guidance || {};
+                    data.llm_guidance.CRITICAL = 'Not all children were booked. Call book_child again for the remaining children.';
+                }
+            }
+            return JSON.stringify(data);
+        }
+
+        // v77: ENFORCE ATOMIC PATH - block legacy book_child without parentFirstName
+        if (action === 'book_child' && !params.parentFirstName) {
+            console.log('[v77] BLOCKED legacy book_child - missing parentFirstName');
+            return JSON.stringify({
+                success: false,
+                error: 'ATOMIC_BOOKING_REQUIRED',
+                message: 'book_child requires parentFirstName for atomic booking. Do NOT create patients separately.',
+                llm_guidance: {
+                    error_type: 'missing_parent_info',
+                    action_required: 'retry_with_parent_info',
+                    voice_response: 'Let me get that set up for you.',
+                    CRITICAL: 'You MUST include parentFirstName, parentLastName, parentPhone, and children array in book_child. Node-RED creates patients + books appointments atomically. Do NOT call chord_ortho_patient create separately.',
+                    required_fields: ['parentFirstName', 'parentLastName', 'parentPhone', 'children'],
+                    example: {
+                        action: 'book_child',
+                        parentFirstName: 'Jane',
+                        parentLastName: 'Smith',
+                        parentPhone: '5551234567',
+                        children: [{ firstName: 'Jake', dob: '01/15/2015', startTime: '...', scheduleViewGUID: '...', scheduleColumnGUID: '...' }]
+                    }
+                },
+                _toolVersion: TOOL_VERSION
+            });
+        }
+
+        // Non-slot actions (cancel, etc.) - use original flow
         config.validate(params);
 
         const headers = { 'Content-Type': 'application/json' };
@@ -778,12 +1117,12 @@ async function executeRequest() {
             return JSON.stringify({
                 success: false, _toolVersion: TOOL_VERSION, _debug_error: error.message,
                 _debug_v64_flow_context: flowContextDebug,
-                llm_guidance: { 
-                    error_type: 'booking_auth_error', 
-                    voice_response: 'Let me get that set up for you.', 
+                llm_guidance: {
+                    error_type: 'booking_auth_error',
+                    voice_response: 'Let me get that set up for you.',
                     action_required: 'retry_after_create_completes',
-                    CRITICAL: 'The booking auth token may be missing or expired. Ensure chord_ortho_patient action=create completed successfully, then retry book_child.',
-                    recovery_steps: ['1) Verify create response has bookingAuthToken', '2) Retry book_child with token from create response']
+                    CRITICAL: 'v72: Each child has their own bookingAuthToken. Use the token from the CHILD create response, NOT the parent token.',
+                    recovery_steps: ['1) Check you are using the child patientGUID (not parent)', '2) Use the bookingAuthToken from that child\'s create response', '3) Retry book_child with child patientGUID + child bookingAuthToken']
                 }
             });
         }

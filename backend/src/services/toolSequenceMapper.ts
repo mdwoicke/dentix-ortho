@@ -67,6 +67,15 @@ const INFO_LOOKUP_SEQUENCE: ExpectedStep[] = [
   { toolName: 'chord_ortho_patient', action: 'lookup', description: 'Patient lookup', occurrences: 'once' },
 ];
 
+// Action aliases: map canonical action names to all observed variants
+const ACTION_ALIASES: Record<string, string[]> = {
+  slots: ['slots', 'grouped_slots', 'get_slots'],
+  lookup: ['lookup', 'clinic_info', 'patient_lookup'],
+  book_child: ['book_child', 'book_appointment'],
+  create_patient: ['create_patient', 'new_patient'],
+  cancel: ['cancel', 'cancel_appointment'],
+};
+
 const SEQUENCE_MAP: Record<CallerIntentType, ExpectedStep[]> = {
   booking: BOOKING_SEQUENCE,
   rescheduling: RESCHEDULING_SEQUENCE,
@@ -99,10 +108,13 @@ export function mapToolSequence(intent: CallerIntent, observations: any[]): Tool
     const matching = observations.filter((obs) => {
       if (obs.name !== step.toolName) return false;
 
-      // If step has an action, check the observation input for that action
+      // If step has an action, check the observation input for that action (with aliases)
       if (step.action) {
         const input = parseObservationInput(obs.input);
-        if (input?.action !== step.action) return false;
+        const obsAction = input?.action;
+        if (!obsAction) return false;
+        const aliases = ACTION_ALIASES[step.action] || [step.action];
+        if (!aliases.includes(obsAction)) return false;
       }
 
       return true;
@@ -187,6 +199,11 @@ function parseObservationInput(input: any): any {
  */
 function isObservationError(obs: any): boolean {
   if (obs.level === 'ERROR') return true;
+
+  const parsed = typeof obs.output === 'string' ? (() => { try { return JSON.parse(obs.output); } catch { return null; } })() : obs.output;
+
+  // partialSuccess means some children succeeded — not a full error
+  if (parsed?.partialSuccess === true) return false;
 
   const output = typeof obs.output === 'string' ? obs.output : JSON.stringify(obs.output || '');
   if (output.includes('"success":false') || output.includes('"success": false')) return true;

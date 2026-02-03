@@ -1,12 +1,31 @@
 /**
  * ============================================================================
  * CHORD DSO PATIENT - Unified Patient & Clinic Tool (Node Red Version)
- * Version: v9 | Updated: 2026-01-18
+ * Version: v13 | Updated: 2026-01-28
  * ============================================================================
  * Consolidates: lookup, get, create, appointments, clinic_info, edit_insurance, confirm_appointment
  *
  * This version calls Node Red endpoints instead of Cloud9 directly.
  * All Cloud9 XML/SOAP logic is handled by Node Red.
+ *
+ * v13: Updated DEFAULT_PROVIDER_GUID to Dr. Troy McCartney (0f588ace-e0bf-44ba-b8ef-be8cbb63153b)
+ *
+ * v12: FIX - Clarified that each child create returns THEIR OWN bookingAuthToken
+ *     - Updated LLM guidance to emphasize child token usage (not parent's)
+ *     - Works with scheduling tool v72 for correct token validation
+ *
+ * v11: REMOVED children array from create action - was dead code causing LLM confusion
+ *     - Each child must be created with a SEPARATE create call (isChild=true)
+ *     - Removed $children from rawParams to prevent LLM from passing children in single call
+ *
+ * v10: INDIVIDUAL_PATIENT_PER_PERSON MODEL
+ *     - Each person (adult and child) gets their own unique patientGUID
+ *     - PARENT: Created first with phone number, gets familyId generated
+ *     - CHILD: Created with isChild=true, parentPatientGUID, familyId, NO phone
+ *     - Appointments tie directly to child's patientGUID (not parent's)
+ *     - Insurance/family linkage stored via SetPatientComment on child's record
+ *     - New params: isChild (boolean), parentPatientGUID (string), familyId (string)
+ *     - New params: insurance.provider, insurance.groupId, insurance.memberId
  *
  * v9: BOOKING AUTHORIZATION TOKEN
  *     - Returns bookingAuthToken on successful patient creation
@@ -14,15 +33,8 @@
  *     - Token validates that the patientGUID matches what was just created
  *     - Prevents LLM from using stale/hallucinated GUIDs in sibling booking
  *
- * v8: PARENT-AS-PATIENT MODEL
- *     - Parent/guardian is the patient record (NOT each child)
- *     - Use PARENT's firstName, lastName, phone, email
- *     - birthdayDateTime is now OPTIONAL (parent's DOB if available)
- *     - ONE patientGUID per family - REUSE for all children's appointments
- *     - Child info (name, DOB) goes in the NOTE field of each appointment
- *     - Removed children array rejection (deprecated sibling-per-child approach)
- *
- * v7: SIBLING BOOKING FIX (DEPRECATED - see v8)
+ * v8: PARENT-AS-PATIENT MODEL (DEPRECATED - replaced by v10)
+ * v7: SIBLING BOOKING FIX (DEPRECATED - see v10)
  * v6: Updated field descriptions in schema to clarify CHILD's info, not parent
  * v5: API CALL TRACING - Add _debug_calls array to track all HTTP calls
  * v4: General improvements
@@ -33,7 +45,7 @@
 
 const fetch = require('node-fetch');
 
-const TOOL_VERSION = 'v9';
+const TOOL_VERSION = 'v12';
 
 // v5: API Call Tracking for debugging - enables Call Flow Navigator visualization
 const _debug_calls = [];
@@ -94,11 +106,11 @@ async function trackedFetch(url, options = {}) {
 }
 
 // ============================================================================
-// 🔧 DEFAULT GUIDS - Production values for CDH Allegheny
+// DEFAULT GUIDS - Production values for CDH Allegheny
 // ============================================================================
 
 const DEFAULT_LOCATION_GUID = '1fef9297-7c8b-426b-b0d1-f2275136e48b';  // CDH - Allegheny 202 (PROD)
-const DEFAULT_PROVIDER_GUID = 'a79ec244-9503-44b2-87e4-5920b6e60392';  // Default Orthodontist
+const DEFAULT_PROVIDER_GUID = '0f588ace-e0bf-44ba-b8ef-be8cbb63153b';  // Dr. Troy McCartney (TRMC)
 
 function isValidGUID(value) {
     if (!value || typeof value !== 'string') return false;
@@ -106,7 +118,7 @@ function isValidGUID(value) {
 }
 
 // ============================================================================
-// 📝 ACTION CONFIGURATIONS - Node Red Endpoints
+// ACTION CONFIGURATIONS - Node Red Endpoints
 // ============================================================================
 
 const BASE_URL = 'https://c1-aicoe-nodered-lb.prod.c1conversations.io/FabricWorkflow/api/chord';
@@ -145,23 +157,44 @@ const ACTIONS = {
     create: {
         endpoint: `${BASE_URL}/ortho-prd/createPatient`,
         method: 'POST',
-        buildBody: (params, uui) => ({
-            uui: uui,
-            patientFirstName: params.patientFirstName,
-            patientLastName: params.patientLastName,
-            birthdayDateTime: params.birthdayDateTime,
-            phoneNumber: params.phoneNumber,
-            emailAddress: params.emailAddress,
-            gender: params.gender,
-            providerGUID: isValidGUID(params.providerGUID) ? params.providerGUID : DEFAULT_PROVIDER_GUID,
-            locationGUID: isValidGUID(params.locationGUID) ? params.locationGUID : DEFAULT_LOCATION_GUID
-        }),
+        buildBody: (params, uui) => {
+            // v10: INDIVIDUAL_PATIENT_PER_PERSON - build body based on isChild flag
+            const body = {
+                uui: uui,
+                patientFirstName: params.patientFirstName,
+                patientLastName: params.patientLastName,
+                birthdayDateTime: params.birthdayDateTime,
+                gender: params.gender,
+                providerGUID: isValidGUID(params.providerGUID) ? params.providerGUID : DEFAULT_PROVIDER_GUID,
+                locationGUID: isValidGUID(params.locationGUID) ? params.locationGUID : DEFAULT_LOCATION_GUID,
+                // v10: New params for child patient creation
+                isChild: params.isChild === true || params.isChild === 'true',
+                parentPatientGUID: params.parentPatientGUID,
+                familyId: params.familyId
+            };
+            // v10: Only parents get phone number, children have no phone
+            if (!body.isChild) {
+                body.phoneNumber = params.phoneNumber;
+                body.emailAddress = params.emailAddress;
+            }
+            // v10: Insurance stored on patient record (especially for children)
+            if (params.insuranceProvider || params.insuranceGroupId || params.insuranceMemberId) {
+                body.insurance = {
+                    provider: params.insuranceProvider,
+                    groupId: params.insuranceGroupId,
+                    memberId: params.insuranceMemberId
+                };
+            }
+            return body;
+        },
         validate: (params) => {
-            // v8: PARENT-AS-PATIENT MODEL - parent is the patient, child info in appointment note
-            // birthdayDateTime is now OPTIONAL (parent's DOB if available)
+            // v13: BLOCK child creation - must use atomic booking via schedule_appointment_ortho book_child
+            const isChild = params.isChild === true || params.isChild === 'true';
+            if (isChild) {
+                throw new Error("ATOMIC_BOOKING_REQUIRED: Do NOT create child patients separately. Use schedule_appointment_ortho action=book_child with parentFirstName, parentLastName, parentPhone, and children array. Node-RED creates parent + children + books appointments in one atomic call.");
+            }
             if (!params.patientFirstName) throw new Error("patientFirstName (PARENT's first name) is required for 'create' action");
             if (!params.patientLastName) throw new Error("patientLastName (PARENT's last name) is required for 'create' action");
-            // Note: birthdayDateTime is now OPTIONAL - child DOB goes in appointment note
         },
         successLog: 'Patient created successfully'
     },
@@ -224,7 +257,7 @@ const ACTIONS = {
 };
 
 // ============================================================================
-// 🔐 AUTHENTICATION
+// AUTHENTICATION
 // ============================================================================
 
 function getAuthHeader() {
@@ -242,7 +275,7 @@ function getAuthHeader() {
 }
 
 // ============================================================================
-// 🔍 ERROR DETECTION HELPER
+// ERROR DETECTION HELPER
 // ============================================================================
 
 function checkForError(data) {
@@ -273,7 +306,7 @@ function checkForError(data) {
 }
 
 // ============================================================================
-// 🔧 PARAMETER CLEANER
+// PARAMETER CLEANER
 // ============================================================================
 
 function cleanParams(params) {
@@ -289,7 +322,7 @@ function cleanParams(params) {
 }
 
 // ============================================================================
-// 🚀 HTTP REQUEST ENGINE
+// HTTP REQUEST ENGINE
 // ============================================================================
 
 async function executeRequest() {
@@ -316,7 +349,7 @@ async function executeRequest() {
     }
 
     // Build params object from Flowise variables
-    // v7: Added children capture to detect invalid sibling booking pattern
+    // v10: Added isChild, parentPatientGUID, familyId for INDIVIDUAL_PATIENT_PER_PERSON model
     const rawParams = {
         phoneNumber: typeof $phoneNumber !== 'undefined' ? $phoneNumber : null,
         filter: typeof $filter !== 'undefined' ? $filter : null,
@@ -332,7 +365,12 @@ async function executeRequest() {
         insuranceGroupId: typeof $insuranceGroupId !== 'undefined' ? $insuranceGroupId : null,
         insuranceMemberId: typeof $insuranceMemberId !== 'undefined' ? $insuranceMemberId : null,
         appointmentId: typeof $appointmentId !== 'undefined' ? $appointmentId : null,
-        children: typeof $children !== 'undefined' ? $children : null
+        // v11: REMOVED children param - was dead code causing LLM to think it could pass children in single create call
+        // Each child must be created with a SEPARATE create call (isChild=true)
+        // v10: INDIVIDUAL_PATIENT_PER_PERSON - new params for child patient creation
+        isChild: typeof $isChild !== 'undefined' ? $isChild : null,
+        parentPatientGUID: typeof $parentPatientGUID !== 'undefined' ? $parentPatientGUID : null,
+        familyId: typeof $familyId !== 'undefined' ? $familyId : null
     };
     const params = cleanParams(rawParams);
 
@@ -406,24 +444,47 @@ async function executeRequest() {
             throw new Error(errorMessage);
         }
 
-        // v9: PARENT-AS-PATIENT MODEL + BOOKING AUTHORIZATION TOKEN
+        // v10: INDIVIDUAL_PATIENT_PER_PERSON MODEL - Different guidance for parent vs child
         if (action === 'create' && responseData.success && responseData.patientGUID) {
-            responseData.llm_guidance = {
-                model: "PARENT_AS_PATIENT",
-                current_state: "PATIENT_CREATED",
-                next_action: "call_book_child_for_each_child",
-                critical_instruction: "Patient (parent) created successfully. Now call schedule_appointment_ortho action=book_child for EACH child using BOTH patientGUID AND bookingAuthToken from this response. Include childName and childDOB in each book_child call.",
-                patientGUID_for_booking: responseData.patientGUID,
-                bookingAuthToken_for_booking: responseData.bookingAuthToken,
-                MUST_INCLUDE_IN_BOOK_CHILD: {
-                    patientGUID: responseData.patientGUID,
-                    bookingAuthToken: responseData.bookingAuthToken
-                },
-                sibling_note: "For SIBLINGS: REUSE this same patientGUID AND bookingAuthToken for all children. Do NOT create separate patients. Child info goes in the appointment note via childName and childDOB parameters.",
-                note_format: "Child: [name] | DOB: [date] | Insurance: [provider] | GroupID: [id] | MemberID: [id]",
-                booking_sequence: "create PARENT once -> book child1 (with patientGUID+bookingAuthToken+childName/DOB) -> book child2 (with same patientGUID+bookingAuthToken+childName/DOB) -> confirm to caller",
-                CRITICAL: "You MUST pass bookingAuthToken to book_child. Without it, the booking will be REJECTED if the patientGUID does not match the one from this create response."
-            };
+            const isChild = responseData.isChild === true;
+            if (isChild) {
+                // Child patient created - book appointment directly to this child's GUID
+                responseData.llm_guidance = {
+                    model: "INDIVIDUAL_PATIENT_PER_PERSON",
+                    current_state: "CHILD_CREATED",
+                    next_action: "book_appointment_for_this_child",
+                    critical_instruction: "Child patient created with their OWN patientGUID. Book appointment using THIS patientGUID (not parent's). No child info needed in appointment note - child has their own record.",
+                    childPatientGUID: responseData.patientGUID,
+                    parentPatientGUID: responseData.parentPatientGUID,
+                    familyId: responseData.familyId,
+                    bookingAuthToken_for_booking: responseData.bookingAuthToken,
+                    MUST_INCLUDE_IN_BOOK_CHILD: {
+                        patientGUID: responseData.patientGUID,
+                        bookingAuthToken: responseData.bookingAuthToken
+                    },
+                    IMPORTANT: "Appointment ties directly to child's patient record. Use childPatientGUID for SetAppointment.",
+                    booking_sequence: "Child created -> book appointment using child's patientGUID -> confirm to caller"
+                };
+            } else {
+                // Parent patient created - next step is to create each child
+                responseData.llm_guidance = {
+                    model: "INDIVIDUAL_PATIENT_PER_PERSON",
+                    current_state: "PARENT_CREATED",
+                    next_action: "create_child_patients_then_book",
+                    critical_instruction: "Parent created. For EACH CHILD: 1) Call action=create with isChild=true. 2) Child create returns patientGUID + bookingAuthToken. 3) Book using CHILD's patientGUID + CHILD's bookingAuthToken.",
+                    parentPatientGUID: responseData.patientGUID,
+                    familyId: responseData.familyId,
+                    // v12: REMOVED bookingAuthToken_for_children - each child gets their OWN token
+                    workflow: [
+                        "1. Parent created (this response) - parentPatientGUID=" + responseData.patientGUID + ", familyId=" + responseData.familyId,
+                        "2. For each child: call action=create with isChild=true, parentPatientGUID, familyId -> RETURNS child's patientGUID + child's bookingAuthToken",
+                        "3. For each child: book appointment using CHILD's patientGUID + CHILD's bookingAuthToken (both from step 2)",
+                        "4. Confirm all appointments to caller"
+                    ],
+                    sibling_note: "Each child gets their own patient record AND their own bookingAuthToken. Family linked via familyId.",
+                    CRITICAL: "v12: Each child has their OWN patientGUID AND bookingAuthToken. Do NOT use parent's values for child booking."
+                };
+            }
         }
 
         // v5: Add debug info to response for Call Flow Navigator

@@ -4,6 +4,7 @@
  */
 
 import axios from 'axios';
+import { AlertErrorDetail, AlertResolution } from '../types/alerts';
 
 // ============================================================================
 // TYPE DEFINITIONS
@@ -211,6 +212,28 @@ export class SlackNotifier {
             alertDetails.push(testLine);
           }
         }
+      } else if (alert.metricType.startsWith('langfuse_') && alert.additionalInfo?.errorDetails) {
+        // Enhanced Langfuse alert formatting with error details
+        const errorDetails = alert.additionalInfo.errorDetails as AlertErrorDetail[];
+        if (errorDetails.length > 0) {
+          alertDetails.push('');
+          alertDetails.push('*Error Details:*');
+          for (const err of errorDetails.slice(0, 3)) {
+            const timestamp = err.timestamp ? new Date(err.timestamp).toLocaleTimeString() : '';
+            let errLine = `• *${err.action || 'unknown'}*: ${err.errorMessage || 'No message'}`;
+            if (timestamp) {
+              errLine += ` _${timestamp}_`;
+            }
+            // Add trace link if available
+            if (err.traceId && this.config.langfuseHost && this.config.langfuseProjectId) {
+              const traceUrl = `${this.config.langfuseHost}/project/${this.config.langfuseProjectId}/traces/${err.traceId}`;
+              errLine += ` (<${traceUrl}|Trace>)`;
+            }
+            alertDetails.push(errLine);
+          }
+        }
+        // Add standard trace links as fallback
+        alertDetails.push(this.formatTraceLinks(alert.sampleTraceIds));
       } else {
         // Standard trace links for other alert types
         alertDetails.push(this.formatTraceLinks(alert.sampleTraceIds));
@@ -223,6 +246,25 @@ export class SlackNotifier {
           text: alertDetails.filter(Boolean).join('\n'),
         },
       });
+
+      // Add resolution suggestion for Langfuse alerts
+      if (alert.metricType.startsWith('langfuse_') && alert.additionalInfo?.resolution) {
+        const resolution = alert.additionalInfo.resolution as AlertResolution;
+        const resolutionText = [
+          `*Suggested Resolution:* ${resolution.suggestion}`,
+          ...resolution.steps.map(s => `  • ${s}`),
+        ].join('\n');
+
+        blocks.push({
+          type: 'context',
+          elements: [
+            {
+              type: 'mrkdwn',
+              text: resolutionText,
+            },
+          ],
+        });
+      }
     }
 
     blocks.push({ type: 'divider' });

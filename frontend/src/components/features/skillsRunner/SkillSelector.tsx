@@ -200,6 +200,7 @@ export function SkillSelector({
     'utility': 'Utility',
     'custom': 'Custom',
     'ai': 'AI / Claude',
+    'agents': 'Debug Agents',
     'uncategorized': 'Other'
   };
 

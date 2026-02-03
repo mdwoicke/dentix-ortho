@@ -14,6 +14,15 @@ import { StepStatus } from './toolSequenceMapper';
 // Types
 // ============================================================================
 
+export interface ToolIOSummary {
+  toolName: string;
+  action: string;
+  input: string;   // JSON stringified, truncated to ~1000 chars
+  output: string;   // JSON stringified, truncated to ~1500 chars
+  status: 'success' | 'error' | 'partial';
+  timestamp: string;
+}
+
 export interface DiagnosticRequest {
   traceId: string;
   sessionId: string;
@@ -21,6 +30,7 @@ export interface DiagnosticRequest {
   apiErrors: string[];
   stepStatuses: StepStatus[];
   failureTimestamp?: string;
+  toolIO?: ToolIOSummary[];
 }
 
 export interface DiagnosticReport {
@@ -71,6 +81,21 @@ function determineExperts(request: DiagnosticRequest): ExpertAgentType[] {
   // API errors suggest Node-RED flow issues
   if (apiErrors.length > 0) {
     agents.add('nodered_flow');
+  }
+
+  // Check tool I/O for partial failures or errors (even when steps show "completed")
+  if (request.toolIO) {
+    for (const tool of request.toolIO) {
+      if (tool.status === 'error' || tool.status === 'partial') {
+        if (tool.toolName.includes('schedule') || tool.action === 'book_child' || tool.action === 'grouped_slots' || tool.action === 'slots') {
+          agents.add('scheduling_tool');
+          agents.add('nodered_flow'); // booking failures often trace to Node-RED
+        }
+        if (tool.toolName.includes('patient') || tool.action === 'create_patient' || tool.action === 'lookup') {
+          agents.add('patient_tool');
+        }
+      }
+    }
   }
 
   // Low completion rate suggests system prompt issues (wrong tool invocation, missing data gathering)
@@ -128,6 +153,7 @@ export class DiagnosticOrchestrator {
               status: ss.status,
               detail: ss.errors.length > 0 ? ss.errors.join('; ') : undefined,
             })),
+            toolIO: request.toolIO,
           },
         });
         agents.push(result);

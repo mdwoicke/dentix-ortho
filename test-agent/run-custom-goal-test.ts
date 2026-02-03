@@ -9,14 +9,15 @@ async function main() {
     // Initialize dependencies
     const database = new Database();
 
-    // Get base test case - GOAL-HAPPY-001 (Happy Path 01)
-    const baseTestCase = getGoalTest('GOAL-HAPPY-001');
+    // Get test case from CLI arg or default to GOAL-HAPPY-002
+    const testId = process.argv[2] || 'GOAL-HAPPY-002';
+    const baseTestCase = getGoalTest(testId);
     if (!baseTestCase) {
-        console.error('Test case GOAL-HAPPY-001 not found');
+        console.error(`Test case ${testId} not found`);
         return;
     }
 
-    // Override persona with "Test" names as requested by user
+    // Override persona with "Test" names to avoid Azure content filter
     const testCase: GoalOrientedTestCase = {
         ...baseTestCase,
         persona: {
@@ -27,7 +28,22 @@ async function main() {
                 parentFirstName: 'Test',
                 parentLastName: 'User',
                 parentPhone: '2155551234',
-                children: [
+                children: testId === 'GOAL-HAPPY-002' ? [
+                    {
+                        firstName: 'TestKidA',
+                        lastName: 'User',
+                        dateOfBirth: '2014-03-15',
+                        isNewPatient: true,
+                        hadBracesBefore: false,
+                    },
+                    {
+                        firstName: 'TestKidB',
+                        lastName: 'User',
+                        dateOfBirth: '2016-07-22',
+                        isNewPatient: true,
+                        hadBracesBefore: false,
+                    },
+                ] : [
                     {
                         firstName: 'Test',
                         lastName: 'Child',
@@ -46,13 +62,14 @@ async function main() {
         sessionVars.c1mg_variable_caller_id_number = testCase.persona.inventory.parentPhone;
     }
 
-    // Use Production config (ID: 1) which has the API key for the endpoint
-    console.log('=== GOAL TEST: HAPPY PATH 01 ===');
-    console.log('Using Production config (ID: 1) with API key');
-    console.log('Test User: Test User (parent), Test Child (child)');
+    // Use Production config (ID: 1)
+    const configId = parseInt(process.argv[3] || '1');
+    console.log(`=== GOAL TEST: ${testId} ===`);
+    console.log(`Using config ID: ${configId}`);
+    console.log(`Children: ${testCase.persona.inventory.children?.map(c => c.firstName).join(', ')}`);
     console.log('');
 
-    const flowiseClient = await FlowiseClient.forActiveConfig(undefined, sessionVars, 1);
+    const flowiseClient = await FlowiseClient.forActiveConfig(undefined, sessionVars, configId);
 
     // Use factory function which handles IntentDetector
     const runner = createGoalTestRunner(flowiseClient, database);

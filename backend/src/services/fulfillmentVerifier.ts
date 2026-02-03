@@ -120,7 +120,7 @@ export function extractClaimedRecords(observations: any[], _intent: CallerIntent
     const action = input?.action;
 
     // --- Patient lookup: extract patient GUID from output ---
-    if (action === 'lookup' && output) {
+    if ((action === 'lookup' || action === 'clinic_info') && output) {
       const patients = output.patients || output.results || (Array.isArray(output) ? output : null);
       if (Array.isArray(patients)) {
         for (const p of patients) {
@@ -156,23 +156,78 @@ export function extractClaimedRecords(observations: any[], _intent: CallerIntent
       }
     }
 
-    // --- Book child: extract appointment GUID ---
+    // --- Book child: extract appointment GUID(s) ---
     if (action === 'book_child' && output) {
-      const apptGuid = extractGuid(output, 'appointmentGuid', 'AppointmentGUID', 'apptGuid', 'apptGUID', 'guid', 'GUID');
-      if (apptGuid) {
-        const patGuid = extractGuid(output, 'patientGuid', 'PatientGUID', 'patGUID')
-          || extractGuid(input, 'patientGuid', 'PatientGUID', 'patGUID');
+      // New format: output.children[] array with per-child results + output.parent
+      if (Array.isArray(output.children)) {
+        // Extract parent claim if present
+        if (output.parent) {
+          const parentGuid = extractGuid(output.parent, 'patientGUID', 'patientGuid', 'PatientGUID', 'guid');
+          if (parentGuid) {
+            const parentName = output.parent.firstName && output.parent.lastName
+              ? `${output.parent.firstName} ${output.parent.lastName}`
+              : output.parent.name || undefined;
+            claims.push({
+              type: 'patient',
+              guid: parentGuid,
+              claimedName: parentName,
+              source: `book_child_parent:${obsId}`,
+            });
+          }
+        }
 
-        const childName = input?.childName || output?.childName || undefined;
-        claims.push({
-          type: 'appointment',
-          guid: apptGuid,
-          patientGuid: patGuid,
-          claimedName: childName,
-          childName,
-          claimedDate: input?.date || input?.startTime || output?.date || output?.startTime || undefined,
-          source: `book_child:${obsId}`,
-        });
+        // Extract per-child claims
+        for (const child of output.children) {
+          const childName = child.firstName || child.childName || child.name || undefined;
+
+          // Patient claim from child
+          const childPatGuid = extractGuid(child, 'patientGUID', 'patientGuid', 'PatientGUID', 'guid');
+          if (childPatGuid) {
+            claims.push({
+              type: 'patient',
+              guid: childPatGuid,
+              claimedName: childName,
+              childName,
+              source: `book_child_patient:${obsId}`,
+            });
+          }
+
+          // Appointment claim from child.appointment
+          const appt = child.appointment || child;
+          const apptGuid = extractGuid(appt, 'appointmentGUID', 'appointmentGuid', 'AppointmentGUID', 'apptGuid', 'guid');
+          if (apptGuid) {
+            claims.push({
+              type: 'appointment',
+              guid: apptGuid,
+              patientGuid: childPatGuid,
+              claimedName: childName,
+              childName,
+              claimedDate: appt.startTime || appt.date || undefined,
+              source: `book_child_appt:${obsId}`,
+            });
+          } else if (child.status === 'queued' || child.queued) {
+            // Child was queued but no appointment GUID yet — record as claim with empty guid for tracking
+            // Don't push a claim since we have no GUID to verify
+          }
+        }
+      } else {
+        // Legacy flat format: single GUID at top level
+        const apptGuid = extractGuid(output, 'appointmentGuid', 'AppointmentGUID', 'apptGuid', 'apptGUID', 'guid', 'GUID');
+        if (apptGuid) {
+          const patGuid = extractGuid(output, 'patientGuid', 'PatientGUID', 'patGUID')
+            || extractGuid(input, 'patientGuid', 'PatientGUID', 'patGUID');
+
+          const childName = input?.childName || output?.childName || undefined;
+          claims.push({
+            type: 'appointment',
+            guid: apptGuid,
+            patientGuid: patGuid,
+            claimedName: childName,
+            childName,
+            claimedDate: input?.date || input?.startTime || output?.date || output?.startTime || undefined,
+            source: `book_child:${obsId}`,
+          });
+        }
       }
     }
   }

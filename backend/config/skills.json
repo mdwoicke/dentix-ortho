@@ -415,7 +415,7 @@
       "id": "nodered-deploy",
       "name": "Deploy Node-RED Flow",
       "description": "Push docs/v1/nodered_Cloud9_flows.json to production Node-RED",
-      "command": "cd {{workDir}}/test-agent && node scripts/deploy-nodered.js {{backupArg}} {{dryRunArg}}",
+      "command": "cd {{workDir}} && node scripts/deploy-nodered.js {{backupArg}} {{dryRunArg}}",
       "category": "deployment",
       "inputs": [
         {
@@ -438,7 +438,7 @@
       "id": "nodered-list-flows",
       "name": "List Node-RED Flows",
       "description": "List all available flow tabs in Node-RED",
-      "command": "cd {{workDir}}/test-agent && node scripts/copy-nodered-flow.js --list",
+      "command": "cd {{workDir}} && node scripts/copy-nodered-flow.js --list",
       "category": "deployment",
       "inputs": []
     },
@@ -446,7 +446,7 @@
       "id": "nodered-copy-flow",
       "name": "Copy Node-RED Flow",
       "description": "Copy an existing Node-RED flow to a new flow with a new name",
-      "command": "cd {{workDir}}/test-agent && node scripts/copy-nodered-flow.js --source \"{{source}}\" --name \"{{newName}}\" {{disabledArg}} {{backupArg}} {{dryRunArg}}",
+      "command": "cd {{workDir}} && node scripts/copy-nodered-flow.js --source \"{{source}}\" --name \"{{newName}}\" {{disabledArg}} {{backupArg}} {{dryRunArg}}",
       "category": "deployment",
       "inputs": [
         {
@@ -492,8 +492,8 @@
       "id": "total-call-trace",
       "name": "Total Call Trace",
       "description": "Comprehensive Langfuse session analysis - traces all tool calls, investigates slot metadata, detects failure patterns (FP-001 through FP-006), and suggests solutions",
-      "command": "cd {{workDir}}/test-agent && node scripts/total-call-trace.js {{sessionId}}",
-      "category": "test-agent",
+      "command": "cd {{workDir}} && node scripts/total-call-trace.js {{sessionId}}",
+      "category": "agents",
       "inputs": [
         {
           "name": "sessionId",
@@ -502,6 +502,134 @@
           "required": true,
           "placeholder": "30dc66e1-eabd-46ca-b546-9a4237e64f19",
           "description": "The Langfuse session ID to analyze (from Ortho-Test-JL-UAT project)"
+        }
+      ]
+    },
+    {
+      "id": "agent-total-session-trace",
+      "name": "Total Session Trace",
+      "description": "Full tool call dump with execution times, cache decisions, and timing summary per tool",
+      "command": "cd {{workDir}} && node scripts/total-session-trace.js {{sessionId}}",
+      "category": "agents",
+      "inputs": [
+        {
+          "name": "sessionId",
+          "label": "Session ID",
+          "type": "text",
+          "required": true,
+          "placeholder": "e.g. 7dd08971-bdcf-4b2f-8c39-a1896846adda"
+        }
+      ]
+    },
+    {
+      "id": "agent-debug-session-quick",
+      "name": "Quick Session Debug",
+      "description": "Fast session diagnostics - checks tool calls, errors, and basic failure patterns",
+      "command": "cd {{workDir}} && node scripts/debug-session-quick.js {{sessionId}}",
+      "category": "agents",
+      "inputs": [
+        {
+          "name": "sessionId",
+          "label": "Session ID",
+          "type": "text",
+          "required": true,
+          "placeholder": "e.g. 30dc66e1-eabd-46ca-b546-9a4237e64f19"
+        }
+      ]
+    },
+    {
+      "id": "agent-analyze-session",
+      "name": "Analyze Session",
+      "description": "Session analysis with tool call extraction and comparison against known patterns",
+      "command": "cd {{workDir}} && node scripts/analyze-session.js {{sessionId}}",
+      "category": "agents",
+      "inputs": [
+        {
+          "name": "sessionId",
+          "label": "Session ID",
+          "type": "text",
+          "required": true,
+          "placeholder": "e.g. 30dc66e1-eabd-46ca-b546-9a4237e64f19"
+        }
+      ]
+    },
+    {
+      "id": "agent-trace-session",
+      "name": "Trace Session",
+      "description": "Trace all Langfuse observations for a session with chronological tool call log",
+      "command": "cd {{workDir}} && node scripts/trace-session.js {{sessionId}}",
+      "category": "agents",
+      "inputs": [
+        {
+          "name": "sessionId",
+          "label": "Session ID",
+          "type": "text",
+          "required": true,
+          "placeholder": "e.g. 30dc66e1-eabd-46ca-b546-9a4237e64f19"
+        }
+      ]
+    },
+    {
+      "id": "agent-analyze-failure-pattern",
+      "name": "Analyze Failure Patterns",
+      "description": "Deep-dive failure pattern analysis across recent test runs",
+      "command": "cd {{workDir}} && node scripts/analyze-failure-pattern.js {{sessionId}}",
+      "category": "agents",
+      "inputs": [
+        {
+          "name": "sessionId",
+          "label": "Session ID (optional)",
+          "type": "text",
+          "required": false,
+          "placeholder": "Leave empty for recent failures"
+        }
+      ]
+    },
+    {
+      "id": "agent-analyze-sibling-failures",
+      "name": "Analyze Sibling Failures",
+      "description": "Analyze sibling booking failures - multi-child scheduling race conditions and token issues",
+      "command": "cd {{workDir}} && node scripts/analyze-sibling-failures.js",
+      "category": "agents",
+      "inputs": []
+    },
+    {
+      "id": "agent-full-session-analysis",
+      "name": "Full Session Analysis",
+      "description": "Complete session analysis including all observations, LLM interactions, and tool calls",
+      "command": "cd {{workDir}} && node scripts/full-session-analysis.js {{sessionId}}",
+      "category": "agents",
+      "inputs": [
+        {
+          "name": "sessionId",
+          "label": "Session ID",
+          "type": "text",
+          "required": true,
+          "placeholder": "e.g. 30dc66e1-eabd-46ca-b546-9a4237e64f19"
+        }
+      ]
+    },
+    {
+      "id": "agent-analyze-recent-failures",
+      "name": "Analyze Recent Failures",
+      "description": "Scan recent test runs for failures and categorize by error type",
+      "command": "cd {{workDir}} && node scripts/analyze-recent-failures.js",
+      "category": "agents",
+      "inputs": []
+    },
+    {
+      "id": "agent-analyze-trace",
+      "name": "Analyze Trace",
+      "description": "Analyze a specific Langfuse trace by trace ID",
+      "command": "cd {{workDir}} && node scripts/analyze-trace.js {{traceId}}",
+      "category": "agents",
+      "inputs": [
+        {
+          "name": "traceId",
+          "label": "Trace ID",
+          "type": "text",
+          "required": true,
+          "placeholder": "e.g. dd1a7852-e45f-4e89-b09e-2e633318f5d0"
         }
       ]
     }

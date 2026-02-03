@@ -21,7 +21,7 @@ import * as documentParserService from '../services/documentParserService';
 import { LangfuseTraceService } from '../services/langfuseTraceService';
 import { QueueActivityService } from '../services/queueActivityService';
 import { getLLMProvider } from '../../../shared/services/llm-provider';
-import { DiagnosticOrchestrator, DiagnosticRequest } from '../services/diagnosticOrchestrator';
+import { DiagnosticOrchestrator, DiagnosticRequest, ToolIOSummary } from '../services/diagnosticOrchestrator';
 import { ExpertAgentService, ExpertAgentType } from '../services/expertAgentService';
 import { classifyCallerIntent } from '../services/callerIntentClassifier';
 import { mapToolSequence, StepStatus } from '../services/toolSequenceMapper';
@@ -8460,7 +8460,7 @@ export function transformToConversationTurns(trace: any, _observations: any[]): 
     for (const msg of input.history) {
       turns.push({
         role: msg.role === 'apiMessage' ? 'assistant' : 'user',
-        content: msg.content || '',
+        content: stripPayload(msg.content || ''),
         timestamp: trace.started_at,
       });
     }
@@ -8477,18 +8477,37 @@ export function transformToConversationTurns(trace: any, _observations: any[]): 
 
   // Add final response
   if (output) {
-    const content = typeof output === 'string'
+    // Handle Flowise returnValues structure
+    const rawContent = typeof output === 'string'
       ? output
-      : output.text || output.content || output.output || JSON.stringify(output);
+      : output.returnValues?.output || output.text || output.content || output.output || JSON.stringify(output);
     turns.push({
       role: 'assistant',
-      content,
+      content: stripPayload(rawContent),
       timestamp: trace.ended_at || trace.started_at,
       responseTimeMs: trace.latency_ms,
     });
   }
 
   return turns;
+}
+
+/**
+ * Strip PAYLOAD: JSON blocks from Flowise assistant responses,
+ * keeping only the ANSWER: text portion.
+ */
+function stripPayload(text: string): string {
+  if (!text) return text;
+  // Remove PAYLOAD: section and everything after it
+  const payloadIdx = text.indexOf('\nPAYLOAD:');
+  if (payloadIdx !== -1) {
+    text = text.substring(0, payloadIdx).trim();
+  }
+  // Strip leading "ANSWER: " prefix if present
+  if (text.startsWith('ANSWER: ') || text.startsWith('ANSWER:')) {
+    text = text.replace(/^ANSWER:\s*/, '');
+  }
+  return text;
 }
 
 // Internal Langchain traces to exclude from display
@@ -8821,31 +8840,54 @@ export async function diagnoseProductionTrace(
 
   try {
     const { traceId } = req.params;
-    const { useLLM = true, configId } = req.body;
+    const { useLLM = true, configId, sessionId: bodySessionId } = req.body;
 
-    // Get the trace data first
+    // Get the trace data - try session-level first for full context
     db = getTestAgentDbWritable();
     const service = new LangfuseTraceService(db);
-    let result = service.getTrace(traceId);
 
-    // Try on-demand import if not found and configId provided
-    if (!result && configId) {
-      console.log(`[diagnoseProductionTrace] Trace ${traceId} not found locally, attempting on-demand import`);
-      try {
-        result = await service.importSingleTrace(traceId, configId);
-      } catch (importError: any) {
-        console.error(`[diagnoseProductionTrace] On-demand import failed:`, importError.message);
+    let allObservations: any[] = [];
+    let allTraces: any[] = [];
+    let sessionId = bodySessionId || '';
+    let firstTrace: any = null;
+
+    if (bodySessionId) {
+      // Use session-level data - gets ALL traces and observations
+      const sessionResult = service.getSession(bodySessionId, configId);
+      if (sessionResult) {
+        allTraces = sessionResult.traces;
+        allObservations = sessionResult.observations;
+        firstTrace = allTraces[0];
+        sessionId = bodySessionId;
       }
     }
 
-    if (!result) {
-      res.status(404).json({ success: false, error: 'Trace not found' });
-      return;
+    // Fall back to single trace if no session data
+    if (allTraces.length === 0) {
+      let result = service.getTrace(traceId);
+      if (!result && configId) {
+        console.log(`[diagnoseProductionTrace] Trace ${traceId} not found locally, attempting on-demand import`);
+        try {
+          result = await service.importSingleTrace(traceId, configId);
+        } catch (importError: any) {
+          console.error(`[diagnoseProductionTrace] On-demand import failed:`, importError.message);
+        }
+      }
+      if (!result) {
+        res.status(404).json({ success: false, error: 'Trace not found' });
+        return;
+      }
+      firstTrace = result.trace;
+      allObservations = result.observations;
+      sessionId = firstTrace.session_id || traceId;
     }
 
-    const { trace, observations } = result;
-    const filteredObservations = filterInternalTraces(observations);
-    const transcript = transformToConversationTurns(trace, filteredObservations);
+    const trace = firstTrace;
+    const filteredObservations = filterInternalTraces(allObservations);
+
+    // Use the last trace for conversation (it has the most complete history)
+    const lastTrace = allTraces.length > 0 ? allTraces[allTraces.length - 1] : firstTrace;
+    const transcript = transformToConversationTurns(lastTrace, filteredObservations);
     const apiCalls = transformToApiCalls(filteredObservations);
 
     // Check for errors in the trace
@@ -8856,7 +8898,7 @@ export async function diagnoseProductionTrace(
     );
 
     const hasErrors = apiErrors.length > 0 ||
-      observations.some((o: any) => o.level === 'ERROR' || o.status_message?.includes('error'));
+      allObservations.some((o: any) => o.level === 'ERROR' || o.status_message?.includes('error'));
 
     // Build transcript text for LLM
     const transcriptText = transcript
@@ -8920,17 +8962,41 @@ export async function diagnoseProductionTrace(
       console.warn('[diagnoseProductionTrace] Could not build stepStatuses:', stepErr instanceof Error ? stepErr.message : stepErr);
     }
 
+    // Build tool I/O context from all observations
+    const toolIO: ToolIOSummary[] = filteredObservations
+      .filter((obs: any) => ['chord_ortho_patient', 'schedule_appointment_ortho', 'current_date_time'].includes(obs.name))
+      .map((obs: any) => {
+        const input = typeof obs.input === 'string' ? obs.input : JSON.stringify(obs.input || '');
+        const output = typeof obs.output === 'string' ? obs.output : JSON.stringify(obs.output || '');
+        const parsedInput = (() => { try { return JSON.parse(input); } catch { return {}; } })();
+
+        let status: 'success' | 'error' | 'partial' = 'success';
+        const parsedOutput = (() => { try { return JSON.parse(output); } catch { return {}; } })();
+        if (parsedOutput?.partialSuccess) status = 'partial';
+        else if (output.includes('"success":false') || output.includes('"success": false') || obs.level === 'ERROR') status = 'error';
+
+        return {
+          toolName: obs.name,
+          action: parsedInput?.action || 'unknown',
+          input: input.substring(0, 1000),
+          output: output.substring(0, 1500),
+          status,
+          timestamp: obs.started_at || '',
+        };
+      });
+
     // Use orchestrator for expert-based diagnosis
     const orchestrator = new DiagnosticOrchestrator(db);
     const diagnosticRequest: DiagnosticRequest = {
       traceId,
-      sessionId: trace.session_id || traceId,
+      sessionId: sessionId || trace.session_id || traceId,
       transcript: transcriptText,
       apiErrors: apiErrors.map(call =>
         `${call.name}: ${call.statusCode ? `Status ${call.statusCode}` : 'Error'}, Output: ${(call.output || '').slice(0, 500)}`
       ),
       stepStatuses,
       failureTimestamp: trace.timestamp || undefined,
+      toolIO,
     };
 
     // Close DB before LLM calls (may take time)
