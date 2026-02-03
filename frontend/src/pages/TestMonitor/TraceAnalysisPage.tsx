@@ -823,6 +823,137 @@ function getStatusBadge(status: CorrectionStatus): { color: string; label: strin
   }
 }
 
+// Slot picker modal
+function SlotPickerModal({
+  childName, slots, intendedSlot, loading, booking, onSelect, onClose,
+}: {
+  childName: string;
+  slots: SlotAlternative[];
+  intendedSlot: SlotAlternative | null;
+  loading: boolean;
+  booking: boolean;
+  onSelect: (slot: SlotAlternative) => void;
+  onClose: () => void;
+}) {
+  // Group slots into AM and PM
+  const amSlots: SlotAlternative[] = [];
+  const pmSlots: SlotAlternative[] = [];
+  for (const s of slots) {
+    const upper = s.startTime.toUpperCase();
+    if (upper.includes('PM') && !upper.includes('12:')) {
+      pmSlots.push(s);
+    } else if (upper.includes('PM') && upper.includes('12:')) {
+      pmSlots.push(s);
+    } else {
+      amSlots.push(s);
+    }
+  }
+
+  // Extract just the time portion for display
+  const formatTime = (startTime: string) => {
+    try {
+      const d = new Date(startTime);
+      return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+    } catch {
+      // Fallback: grab the time part after the date
+      const parts = startTime.split(' ');
+      return parts.length >= 2 ? parts.slice(1).join(' ') : startTime;
+    }
+  };
+
+  const isIntended = (s: SlotAlternative) =>
+    intendedSlot && s.startTime === intendedSlot.startTime;
+
+  const slotButton = (s: SlotAlternative) => (
+    <button
+      key={s.startTime}
+      onClick={() => onSelect(s)}
+      disabled={booking}
+      className={`px-3 py-2 text-sm rounded-lg border transition-colors disabled:opacity-50 ${
+        isIntended(s)
+          ? 'border-green-400 dark:border-green-600 bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-300 font-medium ring-2 ring-green-300 dark:ring-green-700'
+          : 'border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-blue-50 dark:hover:bg-blue-900/20 hover:border-blue-300 dark:hover:border-blue-600'
+      }`}
+    >
+      {formatTime(s.startTime)}
+      {isIntended(s) && <span className="ml-1 text-xs">(original)</span>}
+    </button>
+  );
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+      <div
+        className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-lg mx-4 max-h-[80vh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-700">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+              Select Slot for {childName}
+            </h3>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+              {slots.length} available slot{slots.length !== 1 ? 's' : ''} on this day
+            </p>
+          </div>
+          <button onClick={onClose} className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400">
+            <Icons.X />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto px-5 py-4">
+          {loading ? (
+            <div className="flex items-center justify-center py-12 gap-3">
+              <Spinner size="lg" />
+              <span className="text-sm text-gray-500 dark:text-gray-400">Loading available slots from Cloud9...</span>
+            </div>
+          ) : slots.length === 0 ? (
+            <div className="text-center py-12 text-gray-500 dark:text-gray-400">
+              <p className="text-sm">No available slots found for this day.</p>
+            </div>
+          ) : (
+            <div className="space-y-5">
+              {amSlots.length > 0 && (
+                <div>
+                  <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">Morning</div>
+                  <div className="flex flex-wrap gap-2">
+                    {amSlots.map(slotButton)}
+                  </div>
+                </div>
+              )}
+              {pmSlots.length > 0 && (
+                <div>
+                  <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">Afternoon</div>
+                  <div className="flex flex-wrap gap-2">
+                    {pmSlots.map(slotButton)}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {booking && (
+            <div className="mt-4 flex items-center gap-2 text-sm text-blue-600 dark:text-blue-400">
+              <Spinner size="sm" /> Processing...
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="px-5 py-3 border-t border-gray-200 dark:border-gray-700 flex justify-end">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-sm font-medium rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function BookingCorrectionCard({
   sessionId, bookingResults, currentBookingData, onRefresh,
 }: {
@@ -834,6 +965,13 @@ function BookingCorrectionCard({
   const [childStates, setChildStates] = useState<Record<string, ChildCorrectionState>>({});
   const [history, setHistory] = useState<BookingCorrectionRecord[]>([]);
   const [confirmAction, setConfirmAction] = useState<{ type: string; message: string; onConfirm: () => void } | null>(null);
+  // Modal state: which child key is open + the action mode
+  const [slotModal, setSlotModal] = useState<{
+    key: string;
+    br: CallReportBookingResult;
+    mode: 'book' | 'reschedule';
+    oldApptGUID?: string;
+  } | null>(null);
 
   // Load correction history
   useEffect(() => {
@@ -845,22 +983,36 @@ function BookingCorrectionCard({
     setChildStates(prev => ({ ...prev, [key]: { ...getState(key), ...patch } }));
   };
 
-  const handleCheckSlot = async (br: CallReportBookingResult) => {
+  // Open modal and fetch slots
+  const openSlotPicker = async (br: CallReportBookingResult, mode: 'book' | 'reschedule', oldApptGUID?: string, fallbackSlot?: string) => {
     const key = br.patientGUID || br.childName || '';
-    if (!br.patientGUID || !br.slot) return;
+    const slot = br.slot || fallbackSlot;
+    if (!br.patientGUID || !slot) return;
 
+    setSlotModal({ key, br, mode, oldApptGUID });
     setState(key, { checking: true, checkResult: null, actionResult: null });
+
     try {
-      // Parse date from slot
-      const slotDate = br.slot.split(' ')[0]; // MM/DD/YYYY
+      const slotDate = slot.split(' ')[0]; // MM/DD/YYYY
       const result = await checkSlotAvailability(sessionId, {
         patientGUID: br.patientGUID,
-        intendedStartTime: br.slot,
+        intendedStartTime: slot,
         date: slotDate,
       });
       setState(key, { checking: false, checkResult: result });
     } catch (err: any) {
       setState(key, { checking: false, actionResult: { success: false, message: err.message } });
+    }
+  };
+
+  // User picked a slot from the modal
+  const handleSlotSelected = (slot: SlotAlternative) => {
+    if (!slotModal) return;
+    const { br, mode, oldApptGUID } = slotModal;
+    if (mode === 'reschedule' && oldApptGUID) {
+      handleReschedule(br, oldApptGUID, slot);
+    } else {
+      handleBook(br, slot);
     }
   };
 
@@ -883,6 +1035,7 @@ function BookingCorrectionCard({
           });
           setState(key, { booking: false, actionResult: result });
           if (result.success) {
+            setSlotModal(null);
             getCorrectionHistory(sessionId).then(r => setHistory(r.corrections)).catch(() => {});
             onRefresh();
           }
@@ -934,6 +1087,7 @@ function BookingCorrectionCard({
           });
           setState(key, { booking: false, actionResult: result });
           if (result.success) {
+            setSlotModal(null);
             getCorrectionHistory(sessionId).then(r => setHistory(r.corrections)).catch(() => {});
             onRefresh();
           }
@@ -963,6 +1117,22 @@ function BookingCorrectionCard({
             </div>
           </div>
         )}
+
+        {/* Slot Picker Modal */}
+        {slotModal && (() => {
+          const state = getState(slotModal.key);
+          return (
+            <SlotPickerModal
+              childName={slotModal.br.childName || 'Unknown'}
+              slots={state.checkResult?.alternatives || []}
+              intendedSlot={state.checkResult?.intendedSlot || null}
+              loading={state.checking}
+              booking={state.booking}
+              onSelect={handleSlotSelected}
+              onClose={() => setSlotModal(null)}
+            />
+          );
+        })()}
 
         {/* Per-child rows */}
         {bookingResults.map((br) => {
@@ -1005,13 +1175,13 @@ function BookingCorrectionCard({
 
               {/* Actions */}
               <div className="flex flex-wrap gap-2 items-center">
-                {(status === 'needs_booking' || status === 'was_cancelled' || status === 'no_record') && br.slot && (
+                {(status === 'needs_booking' || status === 'was_cancelled' || status === 'no_record') && (br.slot) && (
                   <button
-                    onClick={() => handleCheckSlot(br)}
+                    onClick={() => openSlotPicker(br, 'book')}
                     disabled={state.checking}
                     className="px-3 py-1 text-xs font-medium rounded bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-800/40 disabled:opacity-50"
                   >
-                    {state.checking ? 'Checking...' : 'Check Availability'}
+                    {state.checking ? 'Loading...' : 'Book...'}
                   </button>
                 )}
 
@@ -1025,80 +1195,15 @@ function BookingCorrectionCard({
                       Cancel
                     </button>
                     <button
-                      onClick={() => handleCheckSlot(br)}
+                      onClick={() => openSlotPicker(br, 'reschedule', currentAppt.appointmentGUID, currentAppt.dateTime)}
                       disabled={state.checking}
                       className="px-3 py-1 text-xs font-medium rounded bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 hover:bg-yellow-200 dark:hover:bg-yellow-800/40 disabled:opacity-50"
                     >
-                      {state.checking ? 'Checking...' : 'Reschedule...'}
+                      {state.checking ? 'Loading...' : 'Reschedule...'}
                     </button>
                   </>
                 )}
               </div>
-
-              {/* Slot check results */}
-              {state.checkResult && (
-                <div className="ml-2 p-2 rounded bg-gray-50 dark:bg-gray-700/30 border border-gray-200 dark:border-gray-600 text-xs space-y-2">
-                  {state.checkResult.slotAvailable && state.checkResult.intendedSlot ? (
-                    <div>
-                      <span className="text-green-600 dark:text-green-400 font-medium">{'\u2713'} Slot available</span>
-                      <div className="text-gray-500 dark:text-gray-400 mt-0.5">
-                        View: {state.checkResult.intendedSlot.scheduleViewGUID.substring(0, 8)}...
-                        Column: {state.checkResult.intendedSlot.scheduleColumnGUID.substring(0, 8)}...
-                      </div>
-                      <button
-                        onClick={() => {
-                          if (status === 'booked' || status === 'queued_booked') {
-                            handleReschedule(br, currentAppt!.appointmentGUID, state.checkResult!.intendedSlot!);
-                          } else {
-                            handleBook(br, state.checkResult!.intendedSlot!);
-                          }
-                        }}
-                        disabled={state.booking}
-                        className="mt-1 px-3 py-1 text-xs font-medium rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-50"
-                      >
-                        {state.booking ? 'Processing...' : (status === 'booked' || status === 'queued_booked') ? 'Confirm Reschedule' : 'Confirm Book'}
-                      </button>
-                    </div>
-                  ) : (
-                    <div>
-                      <span className="text-red-600 dark:text-red-400 font-medium">{'\u2717'} Slot not available</span>
-                      {state.checkResult.alternatives.length > 0 && (
-                        <div className="mt-1">
-                          <div className="text-gray-500 dark:text-gray-400 mb-1">Closest alternatives:</div>
-                          {state.checkResult.alternatives.map((alt, i) => (
-                            <label key={i} className="flex items-center gap-2 py-0.5 cursor-pointer">
-                              <input
-                                type="radio"
-                                name={`alt-${key}`}
-                                checked={state.selectedAlternative?.startTime === alt.startTime}
-                                onChange={() => setState(key, { selectedAlternative: alt })}
-                                className="text-blue-600"
-                              />
-                              <span>{alt.startTime}</span>
-                              <span className="text-gray-400">({alt.minutesFromIntended > 0 ? '+' : ''}{alt.minutesFromIntended} min)</span>
-                            </label>
-                          ))}
-                          {state.selectedAlternative && (
-                            <button
-                              onClick={() => {
-                                if (status === 'booked' || status === 'queued_booked') {
-                                  handleReschedule(br, currentAppt!.appointmentGUID, state.selectedAlternative!);
-                                } else {
-                                  handleBook(br, state.selectedAlternative!);
-                                }
-                              }}
-                              disabled={state.booking}
-                              className="mt-1 px-3 py-1 text-xs font-medium rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
-                            >
-                              {state.booking ? 'Processing...' : 'Book Selected Slot'}
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
 
               {/* Action result */}
               {state.actionResult && (

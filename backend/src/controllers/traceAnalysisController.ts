@@ -949,15 +949,17 @@ export async function checkSlotAvailability(req: Request, res: Response): Promis
       alternatives.push(entry);
     }
 
-    // Sort alternatives by absolute distance from intended
-    if (intendedMs) {
-      alternatives.sort((a, b) => Math.abs(a.minutesFromIntended) - Math.abs(b.minutesFromIntended));
-    }
+    // Sort all slots chronologically
+    alternatives.sort((a, b) => {
+      const aMs = new Date(a.startTime).getTime();
+      const bMs = new Date(b.startTime).getTime();
+      return aMs - bMs;
+    });
 
     res.json({
       slotAvailable: !!intendedSlot,
       intendedSlot,
-      alternatives: alternatives.slice(0, 5),
+      alternatives, // Return ALL slots for the day
     });
   } catch (err: any) {
     console.error(`Check slot failed for session ${sessionId}:`, err);
