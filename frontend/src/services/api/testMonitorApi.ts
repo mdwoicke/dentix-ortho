@@ -1404,11 +1404,11 @@ export async function analyzeProductionTrace(traceId: string): Promise<TraceAnal
  */
 export async function diagnoseProductionTrace(
   traceId: string,
-  options?: { useLLM?: boolean; configId?: number }
+  options?: { useLLM?: boolean; configId?: number; sessionId?: string }
 ): Promise<DiagnosisResult> {
   const response = await post<DiagnosisResult>(
     `/test-monitor/production-calls/${traceId}/diagnose`,
-    { useLLM: options?.useLLM ?? true, configId: options?.configId },
+    { useLLM: options?.useLLM ?? true, configId: options?.configId, sessionId: options?.sessionId },
     { timeout: API_CONFIG.AI_TIMEOUT }
   );
   return response;
@@ -2177,42 +2177,89 @@ export interface TraceAnalysisIntent {
   confidence: number;
   summary: string;
   bookingDetails?: {
-    patientName?: string;
-    appointmentType?: string;
-    requestedDate?: string;
-    requestedTime?: string;
-    location?: string;
-    isNewPatient?: boolean;
-    childName?: string;
+    childCount: number;
+    childNames: string[];
+    parentName: string | null;
+    parentPhone: string | null;
+    requestedDates: string[];
   };
 }
 
-export interface TraceAnalysisToolStep {
-  step: number;
-  name: string;
-  status: 'success' | 'failure' | 'skipped' | 'not_started';
+export interface TraceAnalysisExpectedStep {
+  toolName: string;
+  action?: string;
+  description: string;
+  occurrences: 'once' | 'per_child';
   optional?: boolean;
-  details?: string;
-  durationMs?: number;
+}
+
+export interface TraceAnalysisStepStatus {
+  step: TraceAnalysisExpectedStep;
+  status: 'completed' | 'failed' | 'missing';
+  actualCount: number;
+  expectedCount: number;
+  observationIds: string[];
+  errors: string[];
 }
 
 export interface TraceAnalysisToolSequence {
-  steps: TraceAnalysisToolStep[];
+  expectedSteps: TraceAnalysisExpectedStep[];
+  stepStatuses: TraceAnalysisStepStatus[];
   completionRate: number;
-  summary?: string;
 }
 
 export interface TraceAnalysisVerification {
-  status: 'fulfilled' | 'partially_fulfilled' | 'not_fulfilled' | 'unknown';
-  verifiedAt: string;
-  evidence: Array<{ source: string; detail: string }>;
+  status: 'verified' | 'partial' | 'failed' | 'no_claims';
+  verifications: Array<{
+    claimed: { type: string; guid: string; claimedName?: string; claimedDate?: string; childName?: string; source: string };
+    exists: boolean;
+    mismatches: Array<{ field: string; claimed: string; actual: string }>;
+    error?: string;
+  }>;
+  childVerifications: Array<{
+    childName: string;
+    patientRecordStatus: 'pass' | 'fail' | 'skipped';
+    appointmentRecordStatus: 'pass' | 'fail' | 'skipped';
+    details: any[];
+  }>;
   summary: string;
+  verifiedAt: string;
 }
 
 export interface TraceAnalysisTrace {
   traceId: string;
   timestamp: string;
   name: string;
+}
+
+export interface CurrentBookingPatient {
+  patientGUID: string;
+  name: string;
+  dob: string | null;
+  phone: string | null;
+  email: string | null;
+}
+
+export interface CurrentBookingAppointment {
+  appointmentGUID: string;
+  dateTime: string;
+  type: string | null;
+  status: string | null;
+  location: string | null;
+}
+
+export interface CurrentBookingChild {
+  patientGUID: string;
+  name: string;
+  dob: string | null;
+  appointments: CurrentBookingAppointment[];
+}
+
+export interface CurrentBookingData {
+  parent: CurrentBookingPatient | null;
+  children: CurrentBookingChild[];
+  queriedAt: string;
+  errors: string[];
 }
 
 export interface TraceAnalysisResponse {
@@ -2222,8 +2269,50 @@ export interface TraceAnalysisResponse {
   intent: TraceAnalysisIntent | null;
   toolSequence: TraceAnalysisToolSequence | null;
   verification?: TraceAnalysisVerification | null;
+  callReport?: CallReport | null;
+  currentBookingData?: CurrentBookingData | null;
   analyzedAt: string;
   cached: boolean;
+}
+
+export interface CallReportToolCall {
+  name: string;
+  action: string;
+  timestamp: string;
+  durationMs: number | null;
+  inputSummary: string;
+  outputSummary: string;
+  status: 'success' | 'error' | 'partial';
+}
+
+export interface CallReportBookingResult {
+  childName: string | null;
+  patientGUID: string | null;
+  appointmentGUID: string | null;
+  booked: boolean;
+  queued: boolean;
+  error: string | null;
+  slot: string | null;
+  scheduleViewGUID?: string;
+  scheduleColumnGUID?: string;
+  appointmentTypeGUID?: string;
+}
+
+export interface CallReport {
+  callerName: string | null;
+  callerPhone: string | null;
+  callerDOB: string | null;
+  callerEmail: string | null;
+  parentPatientGUID: string | null;
+  children: Array<{ name: string; dob: string | null }>;
+  location: string | null;
+  insurance: string | null;
+  toolCalls: CallReportToolCall[];
+  bookingResults: CallReportBookingResult[];
+  bookingElapsedMs: number | null;
+  bookingOverall: 'success' | 'partial' | 'failed' | 'none';
+  discrepancies: Array<{ aspect: string; said: string; actual: string }>;
+  issues: string[];
 }
 
 /**
@@ -2240,7 +2329,7 @@ export async function getTraceAnalysis(
 
   const queryString = params.toString();
   const url = `/trace-analysis/${sessionId}${queryString ? `?${queryString}` : ''}`;
-  const response = await get<TraceAnalysisResponse>(url);
+  const response = await get<TraceAnalysisResponse>(url, { timeout: API_CONFIG.AI_TIMEOUT });
   return response;
 }
 
@@ -2295,4 +2384,83 @@ export async function getTierSlots(tier: number): Promise<TierSlotsResponse> {
     `/test-monitor/cache-health/tier/${tier}/slots`
   );
   return response;
+}
+
+// ============================================================================
+// BOOKING CORRECTION API
+// ============================================================================
+
+export interface SlotAlternative {
+  startTime: string;
+  scheduleViewGUID: string;
+  scheduleColumnGUID: string;
+  minutesFromIntended: number;
+}
+
+export interface SlotCheckResult {
+  slotAvailable: boolean;
+  intendedSlot: SlotAlternative | null;
+  alternatives: SlotAlternative[];
+}
+
+export interface CorrectionResult {
+  success: boolean;
+  appointmentGUID?: string;
+  oldAppointmentGUID?: string;
+  newAppointmentGUID?: string;
+  message: string;
+  error?: string;
+}
+
+export interface BookingCorrectionRecord {
+  id: number;
+  session_id: string;
+  action: string;
+  child_name: string | null;
+  patient_guid: string | null;
+  appointment_guid_before: string | null;
+  appointment_guid_after: string | null;
+  slot_before: string | null;
+  slot_after: string | null;
+  status: string;
+  error: string | null;
+  performed_at: string;
+}
+
+export async function checkSlotAvailability(
+  sessionId: string,
+  params: { patientGUID: string; intendedStartTime: string; date: string }
+): Promise<SlotCheckResult> {
+  return post<SlotCheckResult>(`/trace-analysis/${sessionId}/correction/check-slot`, params);
+}
+
+export async function bookCorrection(
+  sessionId: string,
+  params: {
+    patientGUID: string; startTime: string; scheduleViewGUID: string;
+    scheduleColumnGUID: string; appointmentTypeGUID?: string; minutes?: number; childName?: string;
+  }
+): Promise<CorrectionResult> {
+  return post<CorrectionResult>(`/trace-analysis/${sessionId}/correction/book`, params);
+}
+
+export async function cancelCorrection(
+  sessionId: string,
+  params: { appointmentGUID: string; childName?: string }
+): Promise<CorrectionResult> {
+  return post<CorrectionResult>(`/trace-analysis/${sessionId}/correction/cancel`, params);
+}
+
+export async function rescheduleCorrection(
+  sessionId: string,
+  params: {
+    appointmentGUID: string; patientGUID: string; newStartTime: string;
+    scheduleViewGUID: string; scheduleColumnGUID: string; childName?: string;
+  }
+): Promise<CorrectionResult> {
+  return post<CorrectionResult>(`/trace-analysis/${sessionId}/correction/reschedule`, params);
+}
+
+export async function getCorrectionHistory(sessionId: string): Promise<{ corrections: BookingCorrectionRecord[] }> {
+  return get<{ corrections: BookingCorrectionRecord[] }>(`/trace-analysis/${sessionId}/correction/history`);
 }

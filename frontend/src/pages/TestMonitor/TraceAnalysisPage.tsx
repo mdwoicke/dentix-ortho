@@ -10,11 +10,27 @@ import { Button, Card, Spinner } from '../../components/ui';
 import {
   getTraceAnalysis,
   diagnoseProductionTrace,
+  checkSlotAvailability,
+  bookCorrection,
+  cancelCorrection,
+  rescheduleCorrection,
+  getCorrectionHistory,
   type TraceAnalysisResponse,
   type TraceAnalysisTranscriptTurn,
-  type TraceAnalysisToolStep,
+  type TraceAnalysisStepStatus,
   type DiagnosisResult,
+  type CallReport,
+  type CurrentBookingData,
+  type SlotAlternative,
+  type SlotCheckResult,
+  type CorrectionResult,
+  type CallReportBookingResult,
+  type BookingCorrectionRecord,
+  type CurrentBookingChild,
 } from '../../services/api/testMonitorApi';
+import { GuidCopyButton } from '../../components/ui/GuidCopyButton';
+import { getLangfuseConfigs } from '../../services/api/appSettingsApi';
+import type { LangfuseConfigProfile } from '../../types/appSettings.types';
 
 // ============================================================================
 // ICONS
@@ -93,11 +109,11 @@ function getIntentBadgeColor(type: string): string {
 
 function getStepStatusIcon(status: string) {
   switch (status) {
-    case 'success':
+    case 'completed':
       return <span className="text-green-500"><Icons.Check /></span>;
-    case 'failure':
+    case 'failed':
       return <span className="text-red-500"><Icons.X /></span>;
-    case 'skipped':
+    case 'missing':
       return <span className="text-gray-400"><Icons.Clock /></span>;
     default:
       return <span className="text-gray-300"><Icons.Clock /></span>;
@@ -106,11 +122,11 @@ function getStepStatusIcon(status: string) {
 
 function getStepStatusBadge(status: string): string {
   switch (status) {
-    case 'success':
+    case 'completed':
       return 'bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300';
-    case 'failure':
+    case 'failed':
       return 'bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300';
-    case 'skipped':
+    case 'missing':
       return 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400';
     default:
       return 'bg-gray-50 dark:bg-gray-800 text-gray-400 dark:text-gray-500';
@@ -125,12 +141,14 @@ function getConfidenceColor(confidence: number): string {
 
 function getVerificationBadge(status: string): { color: string; label: string } {
   switch (status) {
-    case 'fulfilled':
-      return { color: 'bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300', label: 'Fulfilled' };
-    case 'partially_fulfilled':
-      return { color: 'bg-yellow-100 dark:bg-yellow-900 text-yellow-700 dark:text-yellow-300', label: 'Partially Fulfilled' };
-    case 'not_fulfilled':
-      return { color: 'bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300', label: 'Not Fulfilled' };
+    case 'verified':
+      return { color: 'bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300', label: 'Verified' };
+    case 'partial':
+      return { color: 'bg-yellow-100 dark:bg-yellow-900 text-yellow-700 dark:text-yellow-300', label: 'Partial' };
+    case 'failed':
+      return { color: 'bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300', label: 'Failed' };
+    case 'no_claims':
+      return { color: 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400', label: 'No Claims' };
     default:
       return { color: 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400', label: 'Unknown' };
   }
@@ -141,7 +159,7 @@ function getVerificationBadge(status: string): { color: string; label: string } 
 // ============================================================================
 
 function TraceList({ traces }: { traces: TraceAnalysisResponse['traces'] }) {
-  if (traces.length === 0) {
+  if (!traces || traces.length === 0) {
     return <p className="text-sm text-gray-500 dark:text-gray-400">No traces found.</p>;
   }
 
@@ -199,46 +217,32 @@ function IntentCard({ intent }: { intent: TraceAnalysisResponse['intent'] }) {
             Booking Details
           </div>
           <div className="grid grid-cols-2 gap-2 text-sm">
-            {intent.bookingDetails.patientName && (
+            {intent.bookingDetails.parentName && (
               <div>
-                <span className="text-gray-500 dark:text-gray-400">Patient:</span>{' '}
-                <span className="text-gray-900 dark:text-white">{intent.bookingDetails.patientName}</span>
+                <span className="text-gray-500 dark:text-gray-400">Parent:</span>{' '}
+                <span className="text-gray-900 dark:text-white">{intent.bookingDetails.parentName}</span>
               </div>
             )}
-            {intent.bookingDetails.appointmentType && (
+            {intent.bookingDetails.parentPhone && (
               <div>
-                <span className="text-gray-500 dark:text-gray-400">Type:</span>{' '}
-                <span className="text-gray-900 dark:text-white">{intent.bookingDetails.appointmentType}</span>
+                <span className="text-gray-500 dark:text-gray-400">Phone:</span>{' '}
+                <span className="text-gray-900 dark:text-white">{intent.bookingDetails.parentPhone}</span>
               </div>
             )}
-            {intent.bookingDetails.requestedDate && (
+            <div>
+              <span className="text-gray-500 dark:text-gray-400">Children:</span>{' '}
+              <span className="text-gray-900 dark:text-white">{intent.bookingDetails.childCount}</span>
+            </div>
+            {intent.bookingDetails.childNames.length > 0 && (
               <div>
-                <span className="text-gray-500 dark:text-gray-400">Date:</span>{' '}
-                <span className="text-gray-900 dark:text-white">{intent.bookingDetails.requestedDate}</span>
+                <span className="text-gray-500 dark:text-gray-400">Names:</span>{' '}
+                <span className="text-gray-900 dark:text-white">{intent.bookingDetails.childNames.join(', ')}</span>
               </div>
             )}
-            {intent.bookingDetails.requestedTime && (
-              <div>
-                <span className="text-gray-500 dark:text-gray-400">Time:</span>{' '}
-                <span className="text-gray-900 dark:text-white">{intent.bookingDetails.requestedTime}</span>
-              </div>
-            )}
-            {intent.bookingDetails.location && (
-              <div>
-                <span className="text-gray-500 dark:text-gray-400">Location:</span>{' '}
-                <span className="text-gray-900 dark:text-white">{intent.bookingDetails.location}</span>
-              </div>
-            )}
-            {intent.bookingDetails.isNewPatient !== undefined && (
-              <div>
-                <span className="text-gray-500 dark:text-gray-400">New Patient:</span>{' '}
-                <span className="text-gray-900 dark:text-white">{intent.bookingDetails.isNewPatient ? 'Yes' : 'No'}</span>
-              </div>
-            )}
-            {intent.bookingDetails.childName && (
-              <div>
-                <span className="text-gray-500 dark:text-gray-400">Child:</span>{' '}
-                <span className="text-gray-900 dark:text-white">{intent.bookingDetails.childName}</span>
+            {intent.bookingDetails.requestedDates.length > 0 && (
+              <div className="col-span-2">
+                <span className="text-gray-500 dark:text-gray-400">Requested Dates:</span>{' '}
+                <span className="text-gray-900 dark:text-white">{intent.bookingDetails.requestedDates.join(', ')}</span>
               </div>
             )}
           </div>
@@ -249,7 +253,7 @@ function IntentCard({ intent }: { intent: TraceAnalysisResponse['intent'] }) {
 }
 
 function TranscriptView({ transcript }: { transcript: TraceAnalysisTranscriptTurn[] }) {
-  if (transcript.length === 0) {
+  if (!transcript || transcript.length === 0) {
     return <p className="text-sm text-gray-500 dark:text-gray-400">No transcript available.</p>;
   }
 
@@ -308,54 +312,53 @@ function ToolSequenceView({ toolSequence }: { toolSequence: TraceAnalysisRespons
         <div className="flex-1 h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
           <div
             className={`h-full rounded-full transition-all ${
-              toolSequence.completionRate >= 0.8
+              (toolSequence.completionRate ?? 0) >= 0.8
                 ? 'bg-green-500'
-                : toolSequence.completionRate >= 0.5
+                : (toolSequence.completionRate ?? 0) >= 0.5
                 ? 'bg-yellow-500'
                 : 'bg-red-500'
             }`}
-            style={{ width: `${toolSequence.completionRate * 100}%` }}
+            style={{ width: `${(toolSequence.completionRate ?? 0) * 100}%` }}
           />
         </div>
         <span className="text-sm font-medium text-gray-900 dark:text-white">
-          {(toolSequence.completionRate * 100).toFixed(0)}%
+          {((toolSequence.completionRate ?? 0) * 100).toFixed(0)}%
         </span>
       </div>
 
-      {toolSequence.summary && (
-        <p className="text-sm text-gray-600 dark:text-gray-400">{toolSequence.summary}</p>
-      )}
-
-      {/* Steps */}
+      {/* Step statuses */}
       <div className="space-y-2">
-        {toolSequence.steps.map((step: TraceAnalysisToolStep) => (
+        {(toolSequence.stepStatuses || []).map((ss: TraceAnalysisStepStatus, idx: number) => (
           <div
-            key={step.step}
+            key={idx}
             className="flex items-center gap-3 p-3 rounded-lg bg-gray-50 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600"
           >
             <span className="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded-full bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300 text-xs font-bold">
-              {step.step}
+              {idx + 1}
             </span>
-            <div className="flex-shrink-0">{getStepStatusIcon(step.status)}</div>
+            <div className="flex-shrink-0">{getStepStatusIcon(ss.status)}</div>
             <div className="flex-1 min-w-0">
               <div className="text-sm font-medium text-gray-900 dark:text-white">
-                {step.name}
-                {step.optional && (
+                {ss.step.description}
+                {ss.step.optional && (
                   <span className="ml-2 text-xs text-gray-400 dark:text-gray-500">(optional)</span>
                 )}
               </div>
-              {step.details && (
-                <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{step.details}</div>
+              <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                {ss.actualCount}/{ss.expectedCount} calls
+                {ss.step.occurrences === 'per_child' && ' (per child)'}
+              </div>
+              {ss.errors.length > 0 && (
+                <div className="mt-1 space-y-0.5">
+                  {ss.errors.map((err, ei) => (
+                    <div key={ei} className="text-xs text-red-600 dark:text-red-400">{err}</div>
+                  ))}
+                </div>
               )}
             </div>
-            <span className={`flex-shrink-0 px-2 py-0.5 text-xs font-medium rounded-full ${getStepStatusBadge(step.status)}`}>
-              {step.status}
+            <span className={`flex-shrink-0 px-2 py-0.5 text-xs font-medium rounded-full ${getStepStatusBadge(ss.status)}`}>
+              {ss.status}
             </span>
-            {step.durationMs !== undefined && (
-              <span className="flex-shrink-0 text-xs text-gray-400 dark:text-gray-500">
-                {step.durationMs < 1000 ? `${step.durationMs}ms` : `${(step.durationMs / 1000).toFixed(1)}s`}
-              </span>
-            )}
           </div>
         ))}
       </div>
@@ -379,13 +382,18 @@ function VerificationCard({ verification }: { verification: TraceAnalysisRespons
           </span>
         </div>
         <p className="text-sm text-gray-700 dark:text-gray-300 mb-3">{verification.summary}</p>
-        {verification.evidence && verification.evidence.length > 0 && (
-          <div className="space-y-1">
-            <div className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Evidence</div>
-            {verification.evidence.map((ev, idx) => (
-              <div key={idx} className="flex gap-2 text-xs text-gray-600 dark:text-gray-400">
-                <span className="font-medium text-gray-700 dark:text-gray-300">{ev.source}:</span>
-                <span>{ev.detail}</span>
+        {verification.childVerifications && verification.childVerifications.length > 0 && (
+          <div className="space-y-2">
+            <div className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Per-Child Results</div>
+            {verification.childVerifications.map((cv, idx) => (
+              <div key={idx} className="flex items-center gap-3 text-sm">
+                <span className="font-medium text-gray-900 dark:text-white">{cv.childName}</span>
+                <span className={`px-1.5 py-0.5 text-xs rounded ${cv.patientRecordStatus === 'pass' ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' : cv.patientRecordStatus === 'fail' ? 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300' : 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400'}`}>
+                  Patient: {cv.patientRecordStatus}
+                </span>
+                <span className={`px-1.5 py-0.5 text-xs rounded ${cv.appointmentRecordStatus === 'pass' ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' : cv.appointmentRecordStatus === 'fail' ? 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300' : 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400'}`}>
+                  Appt: {cv.appointmentRecordStatus}
+                </span>
               </div>
             ))}
           </div>
@@ -470,6 +478,678 @@ function DiagnosticReportCard({ diagnosis }: { diagnosis: DiagnosisResult }) {
 }
 
 // ============================================================================
+// CALL REPORT CARD
+// ============================================================================
+
+function CallReportCard({ report }: { report: CallReport }) {
+  const statusColor = {
+    success: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300',
+    partial: 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300',
+    failed: 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300',
+    none: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400',
+  };
+
+  const toolStatusDot = (status: string) => {
+    if (status === 'success') return '🟢';
+    if (status === 'partial') return '🟡';
+    return '🔴';
+  };
+
+  return (
+    <Card>
+      <div className="p-4 space-y-4">
+        <h3 className="text-base font-semibold text-gray-900 dark:text-white">Call Trace Report</h3>
+
+        {/* Caller Info */}
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
+          {report.callerName && (
+            <div><span className="text-gray-500 dark:text-gray-400">Caller:</span> <span className="font-medium text-gray-900 dark:text-white">{report.callerName}</span></div>
+          )}
+          {report.callerPhone && (
+            <div><span className="text-gray-500 dark:text-gray-400">Phone:</span> <span className="font-mono text-gray-900 dark:text-white">{report.callerPhone}</span></div>
+          )}
+          {report.callerEmail && (
+            <div><span className="text-gray-500 dark:text-gray-400">Email:</span> <span className="font-mono text-gray-900 dark:text-white">{report.callerEmail}</span></div>
+          )}
+          {report.callerDOB && (
+            <div><span className="text-gray-500 dark:text-gray-400">DOB:</span> <span className="text-gray-900 dark:text-white">{report.callerDOB}</span></div>
+          )}
+          {report.location && (
+            <div><span className="text-gray-500 dark:text-gray-400">Location:</span> <span className="text-gray-900 dark:text-white">{report.location}</span></div>
+          )}
+          {report.insurance && (
+            <div><span className="text-gray-500 dark:text-gray-400">Insurance:</span> <span className="text-gray-900 dark:text-white">{report.insurance}</span></div>
+          )}
+        </div>
+
+        {/* Children */}
+        {report.children.length > 0 && (
+          <div>
+            <div className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">Children ({report.children.length})</div>
+            <div className="flex gap-3">
+              {report.children.map((child, i) => (
+                <div key={i} className="px-3 py-2 rounded-lg bg-gray-50 dark:bg-gray-700/50 text-sm">
+                  <div className="font-medium text-gray-900 dark:text-white">{child.name}</div>
+                  {child.dob && <div className="text-xs text-gray-500 dark:text-gray-400">DOB: {child.dob}</div>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Tool Call Sequence */}
+        {report.toolCalls.length > 0 && (
+          <div>
+            <div className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">Tool Call Sequence</div>
+            <div className="space-y-2">
+              {report.toolCalls.map((tc, i) => (
+                <div key={i} className="p-2 rounded-lg bg-gray-50 dark:bg-gray-700/30 border border-gray-200 dark:border-gray-600 text-sm">
+                  <div className="flex items-center gap-2">
+                    <span>{toolStatusDot(tc.status)}</span>
+                    <span className="font-medium text-gray-900 dark:text-white">{i + 1}. {tc.name}</span>
+                    <span className="text-gray-500 dark:text-gray-400">{'\u2192'}</span>
+                    <code className="text-xs px-1.5 py-0.5 rounded bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300">{tc.action}</code>
+                    {tc.durationMs && <span className="text-xs text-gray-400 ml-auto">{(tc.durationMs / 1000).toFixed(1)}s</span>}
+                  </div>
+                  <div className="ml-6 mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    <div>Input: {tc.inputSummary}</div>
+                    <div>Output: {tc.outputSummary}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Booking Results */}
+        {report.bookingResults.length > 0 && (
+          <div>
+            <div className="flex items-center gap-2 mb-2">
+              <div className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Booking Results</div>
+              <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${statusColor[report.bookingOverall]}`}>
+                {report.bookingOverall.toUpperCase()}
+              </span>
+              {report.bookingElapsedMs && (
+                <span className="text-xs text-gray-400">{(report.bookingElapsedMs / 1000).toFixed(1)}s elapsed</span>
+              )}
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-xs text-gray-500 dark:text-gray-400 uppercase">
+                    <th className="text-left py-1 pr-3">Child</th>
+                    <th className="text-left py-1 pr-3">Patient GUID</th>
+                    <th className="text-left py-1 pr-3">Slot</th>
+                    <th className="text-left py-1 pr-3">Appt GUID</th>
+                    <th className="text-left py-1 pr-3">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {report.bookingResults.map((br, i) => (
+                    <tr key={i} className="border-t border-gray-200 dark:border-gray-600">
+                      <td className="py-1.5 pr-3 font-medium text-gray-900 dark:text-white">{br.childName || 'Unknown'}</td>
+                      <td className="py-1.5 pr-3">
+                        {br.patientGUID ? (
+                          <div className="flex items-center gap-1">
+                            <span className="font-mono text-xs text-gray-600 dark:text-gray-400">{br.patientGUID.substring(0, 8)}...</span>
+                            <GuidCopyButton label="Patient GUID" guid={br.patientGUID} />
+                          </div>
+                        ) : '\u2014'}
+                      </td>
+                      <td className="py-1.5 pr-3 text-gray-700 dark:text-gray-300">{br.slot || '\u2014'}</td>
+                      <td className="py-1.5 pr-3">
+                        {br.appointmentGUID ? (
+                          <div className="flex items-center gap-1">
+                            <span className="font-mono text-xs text-gray-600 dark:text-gray-400">{br.appointmentGUID.substring(0, 8)}...</span>
+                            <GuidCopyButton label="Appointment GUID" guid={br.appointmentGUID} />
+                          </div>
+                        ) : '\u2014'}
+                      </td>
+                      <td className="py-1.5 pr-3">
+                        {br.booked ? (
+                          <span className="text-green-600 dark:text-green-400 font-medium">{'\u2713'} Booked</span>
+                        ) : br.queued ? (
+                          <span className="text-yellow-600 dark:text-yellow-400 font-medium">{'\u23F3'} Queued</span>
+                        ) : (
+                          <span className="text-red-600 dark:text-red-400 font-medium">{'\u2717'} Failed{br.error ? `: ${br.error}` : ''}</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* Discrepancies */}
+        {report.discrepancies.length > 0 && (
+          <div>
+            <div className="text-xs font-medium text-orange-600 dark:text-orange-400 uppercase tracking-wider mb-2">Discrepancies</div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-xs text-gray-500 dark:text-gray-400">
+                    <th className="text-left py-1 pr-3">Aspect</th>
+                    <th className="text-left py-1 pr-3">What Allie Said</th>
+                    <th className="text-left py-1 pr-3">What Actually Happened</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {report.discrepancies.map((d, i) => (
+                    <tr key={i} className="border-t border-gray-200 dark:border-gray-600">
+                      <td className="py-1.5 pr-3 font-medium text-gray-900 dark:text-white">{d.aspect}</td>
+                      <td className="py-1.5 pr-3 text-gray-700 dark:text-gray-300">{d.said}</td>
+                      <td className="py-1.5 pr-3 text-gray-700 dark:text-gray-300">{d.actual}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* Issues */}
+        {report.issues.length > 0 && (
+          <div className="p-3 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
+            <div className="text-xs font-medium text-red-600 dark:text-red-400 uppercase tracking-wider mb-1">Issues Identified</div>
+            <ul className="space-y-1">
+              {report.issues.map((issue, i) => (
+                <li key={i} className="text-sm text-red-800 dark:text-red-300 flex gap-2">
+                  <span className="text-red-500">{i + 1}.</span>
+                  <span>{issue}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+// ============================================================================
+// CURRENT BOOKING DATA CARD
+// ============================================================================
+
+function CurrentBookingDataCard({ data }: { data: CurrentBookingData }) {
+  return (
+    <Card>
+      <div className="p-4 space-y-4">
+        <h3 className="text-base font-semibold text-gray-900 dark:text-white">Current Booking Data</h3>
+
+        {/* Parent */}
+        {data.parent && (
+          <div>
+            <div className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">Parent</div>
+            <div className="p-3 rounded-lg bg-gray-50 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600">
+              <div className="flex items-center gap-4 text-sm mb-1">
+                <span className="font-medium text-gray-900 dark:text-white">{data.parent.name}</span>
+                {data.parent.dob && <span className="text-gray-500 dark:text-gray-400">DOB: {data.parent.dob}</span>}
+                {data.parent.phone && <span className="text-gray-500 dark:text-gray-400">Phone: {data.parent.phone}</span>}
+                {data.parent.email && <span className="text-gray-500 dark:text-gray-400">{data.parent.email}</span>}
+              </div>
+              <div className="flex items-center gap-1 text-xs">
+                <span className="text-gray-500 dark:text-gray-400">Patient GUID:</span>
+                <code className="font-mono text-gray-700 dark:text-gray-300">{data.parent.patientGUID}</code>
+                <GuidCopyButton label="Patient GUID" guid={data.parent.patientGUID} />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Children */}
+        {data.children.length > 0 && (
+          <div>
+            <div className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">Children</div>
+            <div className="space-y-3">
+              {data.children.map((child) => (
+                <div key={child.patientGUID} className="p-3 rounded-lg bg-gray-50 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600">
+                  <div className="font-medium text-sm text-gray-900 dark:text-white mb-1">{child.name}</div>
+                  <div className="flex items-center gap-1 text-xs mb-1">
+                    <span className="text-gray-500 dark:text-gray-400">Patient GUID:</span>
+                    <code className="font-mono text-gray-700 dark:text-gray-300">{child.patientGUID}</code>
+                    <GuidCopyButton label="Patient GUID" guid={child.patientGUID} />
+                  </div>
+                  {child.dob && <div className="text-xs text-gray-500 dark:text-gray-400 mb-2">DOB: {child.dob}</div>}
+
+                  {child.appointments.length > 0 ? (
+                    <div className="mt-2">
+                      <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">Appointments:</div>
+                      <div className="space-y-1.5">
+                        {child.appointments.map((appt) => (
+                          <div key={appt.appointmentGUID} className="ml-2 p-2 rounded bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 text-xs">
+                            <div className="flex items-center gap-2 mb-0.5">
+                              <span className="text-gray-900 dark:text-white font-medium">{appt.dateTime}</span>
+                              {appt.type && <span className="text-gray-500 dark:text-gray-400">- {appt.type}</span>}
+                              {appt.status && (
+                                <span className={`px-1.5 py-0.5 rounded text-xs ${
+                                  appt.status.toLowerCase().includes('cancel') ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300' :
+                                  'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300'
+                                }`}>
+                                  {appt.status}
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <span className="text-gray-500 dark:text-gray-400">Appt GUID:</span>
+                              <code className="font-mono text-gray-700 dark:text-gray-300">{appt.appointmentGUID}</code>
+                              <GuidCopyButton label="Appointment GUID" guid={appt.appointmentGUID} />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-xs text-gray-400 dark:text-gray-500 mt-1 italic">No appointments found</div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Errors */}
+        {data.errors.length > 0 && (
+          <div className="p-2 rounded bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800">
+            <div className="text-xs font-medium text-yellow-600 dark:text-yellow-400 mb-1">Warnings</div>
+            {data.errors.map((err, i) => (
+              <div key={i} className="text-xs text-yellow-700 dark:text-yellow-300">{err}</div>
+            ))}
+          </div>
+        )}
+
+        {/* Queried timestamp */}
+        <div className="text-xs text-gray-400 dark:text-gray-500">
+          Queried: {formatTimestamp(data.queriedAt)}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+// ============================================================================
+// BOOKING CORRECTION CARD
+// ============================================================================
+
+interface ChildCorrectionState {
+  checking: boolean;
+  booking: boolean;
+  checkResult: SlotCheckResult | null;
+  selectedAlternative: SlotAlternative | null;
+  actionResult: CorrectionResult | null;
+}
+
+type CorrectionStatus = 'needs_booking' | 'booked' | 'was_cancelled' | 'queued_booked' | 'no_record';
+
+function determineCorrectionStatus(
+  br: CallReportBookingResult,
+  currentChildren: CurrentBookingChild[]
+): { status: CorrectionStatus; currentChild: CurrentBookingChild | null; currentAppt: any | null } {
+  const currentChild = currentChildren.find(c => c.patientGUID === br.patientGUID) || null;
+  if (!currentChild) {
+    return { status: br.queued || br.booked ? 'needs_booking' : 'no_record', currentChild: null, currentAppt: null };
+  }
+
+  const scheduledAppts = currentChild.appointments.filter(a =>
+    a.status && !a.status.toLowerCase().includes('cancel')
+  );
+  const cancelledAppts = currentChild.appointments.filter(a =>
+    a.status && a.status.toLowerCase().includes('cancel')
+  );
+
+  if (br.booked && scheduledAppts.length > 0) {
+    return { status: 'booked', currentChild, currentAppt: scheduledAppts[0] };
+  }
+  if (br.queued && scheduledAppts.length > 0) {
+    return { status: 'queued_booked', currentChild, currentAppt: scheduledAppts[0] };
+  }
+  if (br.booked && cancelledAppts.length > 0 && scheduledAppts.length === 0) {
+    return { status: 'was_cancelled', currentChild, currentAppt: cancelledAppts[0] };
+  }
+  if ((br.queued && !br.booked) || (br.booked && scheduledAppts.length === 0)) {
+    return { status: 'needs_booking', currentChild, currentAppt: null };
+  }
+  return { status: 'no_record', currentChild, currentAppt: null };
+}
+
+function getStatusBadge(status: CorrectionStatus): { color: string; label: string; icon: string } {
+  switch (status) {
+    case 'needs_booking': return { color: 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300', label: 'Needs Booking', icon: '\u26A0' };
+    case 'booked': return { color: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300', label: 'Booked', icon: '\u2713' };
+    case 'was_cancelled': return { color: 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300', label: 'Was Cancelled', icon: '\u2717' };
+    case 'queued_booked': return { color: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300', label: 'Queued\u2192Booked', icon: '\u2713' };
+    case 'no_record': return { color: 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400', label: 'No Record', icon: '\u2014' };
+  }
+}
+
+function BookingCorrectionCard({
+  sessionId, bookingResults, currentBookingData, onRefresh,
+}: {
+  sessionId: string;
+  bookingResults: CallReportBookingResult[];
+  currentBookingData: CurrentBookingData;
+  onRefresh: () => void;
+}) {
+  const [childStates, setChildStates] = useState<Record<string, ChildCorrectionState>>({});
+  const [history, setHistory] = useState<BookingCorrectionRecord[]>([]);
+  const [confirmAction, setConfirmAction] = useState<{ type: string; message: string; onConfirm: () => void } | null>(null);
+
+  // Load correction history
+  useEffect(() => {
+    getCorrectionHistory(sessionId).then(r => setHistory(r.corrections)).catch(() => {});
+  }, [sessionId]);
+
+  const getState = (key: string): ChildCorrectionState => childStates[key] || { checking: false, booking: false, checkResult: null, selectedAlternative: null, actionResult: null };
+  const setState = (key: string, patch: Partial<ChildCorrectionState>) => {
+    setChildStates(prev => ({ ...prev, [key]: { ...getState(key), ...patch } }));
+  };
+
+  const handleCheckSlot = async (br: CallReportBookingResult) => {
+    const key = br.patientGUID || br.childName || '';
+    if (!br.patientGUID || !br.slot) return;
+
+    setState(key, { checking: true, checkResult: null, actionResult: null });
+    try {
+      // Parse date from slot
+      const slotDate = br.slot.split(' ')[0]; // MM/DD/YYYY
+      const result = await checkSlotAvailability(sessionId, {
+        patientGUID: br.patientGUID,
+        intendedStartTime: br.slot,
+        date: slotDate,
+      });
+      setState(key, { checking: false, checkResult: result });
+    } catch (err: any) {
+      setState(key, { checking: false, actionResult: { success: false, message: err.message } });
+    }
+  };
+
+  const handleBook = async (br: CallReportBookingResult, slot: SlotAlternative) => {
+    const key = br.patientGUID || br.childName || '';
+    setConfirmAction({
+      type: 'Book',
+      message: `Book appointment for ${br.childName || 'Unknown'} at ${slot.startTime}?`,
+      onConfirm: async () => {
+        setConfirmAction(null);
+        setState(key, { booking: true, actionResult: null });
+        try {
+          const result = await bookCorrection(sessionId, {
+            patientGUID: br.patientGUID!,
+            startTime: slot.startTime,
+            scheduleViewGUID: slot.scheduleViewGUID,
+            scheduleColumnGUID: slot.scheduleColumnGUID,
+            appointmentTypeGUID: br.appointmentTypeGUID,
+            childName: br.childName || undefined,
+          });
+          setState(key, { booking: false, actionResult: result });
+          if (result.success) {
+            getCorrectionHistory(sessionId).then(r => setHistory(r.corrections)).catch(() => {});
+            onRefresh();
+          }
+        } catch (err: any) {
+          setState(key, { booking: false, actionResult: { success: false, message: err.message } });
+        }
+      },
+    });
+  };
+
+  const handleCancel = async (br: CallReportBookingResult, apptGUID: string) => {
+    const key = br.patientGUID || br.childName || '';
+    setConfirmAction({
+      type: 'Cancel',
+      message: `Cancel appointment ${apptGUID.substring(0, 8)}... for ${br.childName || 'Unknown'}?`,
+      onConfirm: async () => {
+        setConfirmAction(null);
+        setState(key, { booking: true, actionResult: null });
+        try {
+          const result = await cancelCorrection(sessionId, { appointmentGUID: apptGUID, childName: br.childName || undefined });
+          setState(key, { booking: false, actionResult: result });
+          if (result.success) {
+            getCorrectionHistory(sessionId).then(r => setHistory(r.corrections)).catch(() => {});
+            onRefresh();
+          }
+        } catch (err: any) {
+          setState(key, { booking: false, actionResult: { success: false, message: err.message } });
+        }
+      },
+    });
+  };
+
+  const handleReschedule = async (br: CallReportBookingResult, oldApptGUID: string, newSlot: SlotAlternative) => {
+    const key = br.patientGUID || br.childName || '';
+    setConfirmAction({
+      type: 'Reschedule',
+      message: `Cancel ${oldApptGUID.substring(0, 8)}... and rebook ${br.childName || 'Unknown'} at ${newSlot.startTime}?`,
+      onConfirm: async () => {
+        setConfirmAction(null);
+        setState(key, { booking: true, actionResult: null });
+        try {
+          const result = await rescheduleCorrection(sessionId, {
+            appointmentGUID: oldApptGUID,
+            patientGUID: br.patientGUID!,
+            newStartTime: newSlot.startTime,
+            scheduleViewGUID: newSlot.scheduleViewGUID,
+            scheduleColumnGUID: newSlot.scheduleColumnGUID,
+            childName: br.childName || undefined,
+          });
+          setState(key, { booking: false, actionResult: result });
+          if (result.success) {
+            getCorrectionHistory(sessionId).then(r => setHistory(r.corrections)).catch(() => {});
+            onRefresh();
+          }
+        } catch (err: any) {
+          setState(key, { booking: false, actionResult: { success: false, message: err.message } });
+        }
+      },
+    });
+  };
+
+  return (
+    <Card>
+      <div className="p-4 space-y-4">
+        <h3 className="text-base font-semibold text-gray-900 dark:text-white">Booking Corrections</h3>
+
+        {/* Confirmation Dialog */}
+        {confirmAction && (
+          <div className="p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800">
+            <p className="text-sm text-blue-800 dark:text-blue-200 mb-2">{confirmAction.message}</p>
+            <div className="flex gap-2">
+              <button onClick={confirmAction.onConfirm} className="px-3 py-1 text-sm font-medium rounded bg-blue-600 text-white hover:bg-blue-700">
+                Confirm {confirmAction.type}
+              </button>
+              <button onClick={() => setConfirmAction(null)} className="px-3 py-1 text-sm font-medium rounded bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-500">
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Per-child rows */}
+        {bookingResults.map((br) => {
+          const key = br.patientGUID || br.childName || '';
+          const { status, currentAppt } = determineCorrectionStatus(br, currentBookingData.children);
+          const badge = getStatusBadge(status);
+          const state = getState(key);
+
+          return (
+            <div key={key} className="p-3 rounded-lg border border-gray-200 dark:border-gray-600 space-y-2">
+              {/* Header */}
+              <div className="flex items-center gap-3">
+                <span className="font-medium text-gray-900 dark:text-white">{br.childName || 'Unknown'}</span>
+                <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${badge.color}`}>
+                  {badge.icon} {badge.label}
+                </span>
+              </div>
+
+              {/* Details */}
+              <div className="text-xs text-gray-500 dark:text-gray-400 space-y-0.5">
+                {br.patientGUID && (
+                  <div className="flex items-center gap-1">
+                    Patient GUID: <code className="font-mono">{br.patientGUID}</code>
+                    <GuidCopyButton label="Patient GUID" guid={br.patientGUID} />
+                  </div>
+                )}
+                {br.slot && <div>Intended Slot: {br.slot}</div>}
+                {currentAppt && (
+                  <div>
+                    Current: {currentAppt.dateTime} - {currentAppt.status}
+                    {currentAppt.appointmentGUID && (
+                      <span className="ml-2">
+                        Appt: <code className="font-mono">{currentAppt.appointmentGUID.substring(0, 8)}...</code>
+                        <GuidCopyButton label="Appt GUID" guid={currentAppt.appointmentGUID} />
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Actions */}
+              <div className="flex flex-wrap gap-2 items-center">
+                {(status === 'needs_booking' || status === 'was_cancelled' || status === 'no_record') && br.slot && (
+                  <button
+                    onClick={() => handleCheckSlot(br)}
+                    disabled={state.checking}
+                    className="px-3 py-1 text-xs font-medium rounded bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-800/40 disabled:opacity-50"
+                  >
+                    {state.checking ? 'Checking...' : 'Check Availability'}
+                  </button>
+                )}
+
+                {(status === 'booked' || status === 'queued_booked') && currentAppt?.appointmentGUID && (
+                  <>
+                    <button
+                      onClick={() => handleCancel(br, currentAppt.appointmentGUID)}
+                      disabled={state.booking}
+                      className="px-3 py-1 text-xs font-medium rounded bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-800/40 disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={() => handleCheckSlot(br)}
+                      disabled={state.checking}
+                      className="px-3 py-1 text-xs font-medium rounded bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 hover:bg-yellow-200 dark:hover:bg-yellow-800/40 disabled:opacity-50"
+                    >
+                      {state.checking ? 'Checking...' : 'Reschedule...'}
+                    </button>
+                  </>
+                )}
+              </div>
+
+              {/* Slot check results */}
+              {state.checkResult && (
+                <div className="ml-2 p-2 rounded bg-gray-50 dark:bg-gray-700/30 border border-gray-200 dark:border-gray-600 text-xs space-y-2">
+                  {state.checkResult.slotAvailable && state.checkResult.intendedSlot ? (
+                    <div>
+                      <span className="text-green-600 dark:text-green-400 font-medium">{'\u2713'} Slot available</span>
+                      <div className="text-gray-500 dark:text-gray-400 mt-0.5">
+                        View: {state.checkResult.intendedSlot.scheduleViewGUID.substring(0, 8)}...
+                        Column: {state.checkResult.intendedSlot.scheduleColumnGUID.substring(0, 8)}...
+                      </div>
+                      <button
+                        onClick={() => {
+                          if (status === 'booked' || status === 'queued_booked') {
+                            handleReschedule(br, currentAppt!.appointmentGUID, state.checkResult!.intendedSlot!);
+                          } else {
+                            handleBook(br, state.checkResult!.intendedSlot!);
+                          }
+                        }}
+                        disabled={state.booking}
+                        className="mt-1 px-3 py-1 text-xs font-medium rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-50"
+                      >
+                        {state.booking ? 'Processing...' : (status === 'booked' || status === 'queued_booked') ? 'Confirm Reschedule' : 'Confirm Book'}
+                      </button>
+                    </div>
+                  ) : (
+                    <div>
+                      <span className="text-red-600 dark:text-red-400 font-medium">{'\u2717'} Slot not available</span>
+                      {state.checkResult.alternatives.length > 0 && (
+                        <div className="mt-1">
+                          <div className="text-gray-500 dark:text-gray-400 mb-1">Closest alternatives:</div>
+                          {state.checkResult.alternatives.map((alt, i) => (
+                            <label key={i} className="flex items-center gap-2 py-0.5 cursor-pointer">
+                              <input
+                                type="radio"
+                                name={`alt-${key}`}
+                                checked={state.selectedAlternative?.startTime === alt.startTime}
+                                onChange={() => setState(key, { selectedAlternative: alt })}
+                                className="text-blue-600"
+                              />
+                              <span>{alt.startTime}</span>
+                              <span className="text-gray-400">({alt.minutesFromIntended > 0 ? '+' : ''}{alt.minutesFromIntended} min)</span>
+                            </label>
+                          ))}
+                          {state.selectedAlternative && (
+                            <button
+                              onClick={() => {
+                                if (status === 'booked' || status === 'queued_booked') {
+                                  handleReschedule(br, currentAppt!.appointmentGUID, state.selectedAlternative!);
+                                } else {
+                                  handleBook(br, state.selectedAlternative!);
+                                }
+                              }}
+                              disabled={state.booking}
+                              className="mt-1 px-3 py-1 text-xs font-medium rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+                            >
+                              {state.booking ? 'Processing...' : 'Book Selected Slot'}
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Action result */}
+              {state.actionResult && (
+                <div className={`p-2 rounded text-xs ${state.actionResult.success ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300' : 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300'}`}>
+                  {state.actionResult.message}
+                  {state.actionResult.appointmentGUID && (
+                    <span className="ml-1">
+                      Appt: <code className="font-mono">{state.actionResult.appointmentGUID.substring(0, 8)}...</code>
+                      <GuidCopyButton label="New Appt GUID" guid={state.actionResult.appointmentGUID} />
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {/* Loading overlay */}
+              {state.booking && (
+                <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+                  <Spinner size="sm" /> Processing correction...
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {/* Correction History */}
+        {history.length > 0 && (
+          <div>
+            <div className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">Correction History</div>
+            <div className="space-y-1">
+              {history.map((h) => (
+                <div key={h.id} className="text-xs text-gray-600 dark:text-gray-400 flex gap-2">
+                  <span>{formatTimestamp(h.performed_at)}</span>
+                  <span>{'\u2014'}</span>
+                  <span className="capitalize">{h.action}</span>
+                  {h.child_name && <span>{h.child_name}</span>}
+                  {h.slot_after && <span>at {h.slot_after}</span>}
+                  {h.appointment_guid_after && <span>{'\u2192'} Appt: {h.appointment_guid_after.substring(0, 8)}...</span>}
+                  <span className={h.status === 'success' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}>
+                    {h.status === 'success' ? '\u2713' : '\u2717'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+// ============================================================================
 // MAIN PAGE COMPONENT
 // ============================================================================
 
@@ -483,8 +1163,10 @@ export default function TraceAnalysisPage() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<TraceAnalysisResponse | null>(null);
   const [diagnosisResult, setDiagnosisResult] = useState<DiagnosisResult | null>(null);
+  const [langfuseConfigs, setLangfuseConfigs] = useState<LangfuseConfigProfile[]>([]);
+  const [selectedConfigId, setSelectedConfigId] = useState<number | undefined>(undefined);
 
-  const analyzeSession = useCallback(async (sessionId: string, opts?: { force?: boolean; verify?: boolean }) => {
+  const analyzeSession = useCallback(async (sessionId: string, opts?: { force?: boolean; verify?: boolean; configId?: number }) => {
     if (!sessionId.trim()) return;
 
     try {
@@ -494,6 +1176,7 @@ export default function TraceAnalysisPage() {
       const data = await getTraceAnalysis(sessionId.trim(), {
         force: opts?.force,
         verify: opts?.verify,
+        configId: opts?.configId ?? selectedConfigId,
       });
       setResult(data);
     } catch (err: any) {
@@ -502,6 +1185,13 @@ export default function TraceAnalysisPage() {
     } finally {
       setLoading(false);
     }
+  }, [selectedConfigId]);
+
+  // Load Langfuse configs on mount
+  useEffect(() => {
+    getLangfuseConfigs()
+      .then(configs => setLangfuseConfigs(configs))
+      .catch(err => console.error('Failed to fetch Langfuse configs:', err));
   }, []);
 
   // Deep linking: read ?sessionId from URL on mount
@@ -546,7 +1236,10 @@ export default function TraceAnalysisPage() {
     try {
       setDiagnoseLoading(true);
       setError(null);
-      const data = await diagnoseProductionTrace(traceId);
+      const data = await diagnoseProductionTrace(traceId, {
+        configId: selectedConfigId || undefined,
+        sessionId: sessionIdInput.trim() || undefined,
+      });
       setDiagnosisResult(data);
     } catch (err: any) {
       setError(err.message || 'Diagnosis failed');
@@ -566,6 +1259,18 @@ export default function TraceAnalysisPage() {
       <Card>
         <form onSubmit={handleSubmit} className="p-4">
           <div className="flex gap-3">
+            <select
+              value={selectedConfigId ?? ''}
+              onChange={(e) => setSelectedConfigId(e.target.value ? parseInt(e.target.value, 10) : undefined)}
+              className="w-48 px-3 py-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            >
+              <option value="">All Sources</option>
+              {langfuseConfigs.map((config) => (
+                <option key={config.id} value={config.id}>
+                  {config.name}
+                </option>
+              ))}
+            </select>
             <div className="relative flex-1">
               <input
                 type="text"
@@ -610,13 +1315,23 @@ export default function TraceAnalysisPage() {
       )}
 
       {/* Loading */}
-      {loading && !result && (
-        <div className="flex items-center justify-center py-16">
-          <div className="flex flex-col items-center gap-3">
-            <Spinner size="lg" />
-            <p className="text-sm text-gray-500 dark:text-gray-400">Analyzing session...</p>
+      {loading && (
+        <Card>
+          <div className="p-6">
+            <div className="flex items-center gap-4 mb-4">
+              <Spinner size="lg" />
+              <div>
+                <p className="text-base font-medium text-gray-900 dark:text-white">Analyzing session...</p>
+                <p className="text-sm text-gray-500 dark:text-gray-400">
+                  Importing traces from Langfuse and classifying intent. This may take 10-30 seconds.
+                </p>
+              </div>
+            </div>
+            <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2 overflow-hidden">
+              <div className="bg-blue-500 h-2 rounded-full animate-pulse" style={{ width: '60%' }} />
+            </div>
           </div>
-        </div>
+        </Card>
       )}
 
       {/* Results */}
@@ -640,6 +1355,22 @@ export default function TraceAnalysisPage() {
 
           {/* Diagnostic Report (if present) */}
           {diagnosisResult && <DiagnosticReportCard diagnosis={diagnosisResult} />}
+
+          {/* Call Report (if present) */}
+          {result.callReport && <CallReportCard report={result.callReport} />}
+
+          {/* Current Booking Data (if present) */}
+          {result.currentBookingData && <CurrentBookingDataCard data={result.currentBookingData} />}
+
+          {/* Booking Corrections (if we have both booking results and current data) */}
+          {result.currentBookingData && result.callReport?.bookingResults && result.callReport.bookingResults.length > 0 && (
+            <BookingCorrectionCard
+              sessionId={result.sessionId}
+              bookingResults={result.callReport.bookingResults}
+              currentBookingData={result.currentBookingData}
+              onRefresh={handleRefresh}
+            />
+          )}
 
           {/* Intent Classification */}
           <Card>

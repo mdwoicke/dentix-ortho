@@ -22,4 +22,11 @@ router.get('/:sessionId/intent', traceAnalysisController.getIntent);
 // GET /api/trace-analysis/:sessionId/verify - Fulfillment verification
 router.get('/:sessionId/verify', traceAnalysisController.verifySession);
 
+// Booking correction endpoints
+router.post('/:sessionId/correction/check-slot', traceAnalysisController.checkSlotAvailability);
+router.post('/:sessionId/correction/book', traceAnalysisController.bookCorrection);
+router.post('/:sessionId/correction/cancel', traceAnalysisController.cancelCorrection);
+router.post('/:sessionId/correction/reschedule', traceAnalysisController.rescheduleCorrection);
+router.get('/:sessionId/correction/history', traceAnalysisController.getCorrectionHistory);
+
 export default router;
