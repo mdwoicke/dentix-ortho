@@ -9,7 +9,7 @@ import { Request, Response } from 'express';
 import BetterSqlite3 from 'better-sqlite3';
 import path from 'path';
 import { LangfuseTraceService } from '../services/langfuseTraceService';
-import { classifyCallerIntent, CallerIntent, ConversationTurn } from '../services/callerIntentClassifier';
+import { classifyCallerIntent, CallerIntent, ConversationTurn, enhanceIntentWithObservations } from '../services/callerIntentClassifier';
 import { mapToolSequence, ToolSequenceResult } from '../services/toolSequenceMapper';
 import {
   transformToConversationTurns,
@@ -17,6 +17,7 @@ import {
 } from './testMonitorController';
 import { verifyFulfillment, FulfillmentVerdict } from '../services/fulfillmentVerifier';
 import { createCloud9Client } from '../services/cloud9/client';
+import { ProdTestRecordService } from '../services/prodTestRecordService';
 
 // Path to test-agent database
 const TEST_AGENT_DB_PATH = path.resolve(__dirname, '../../../test-agent/data/test-results.db');
@@ -499,11 +500,13 @@ export async function analyzeSession(req: Request, res: Response): Promise<void>
     // Import session if needed
     const service = new LangfuseTraceService(db);
     let sessionData = service.getSession(sessionId, configId);
+    let wasJustImported = false;
 
     if (!sessionData) {
       // Try importing from Langfuse
       try {
         sessionData = await service.importSessionTraces(sessionId, configId);
+        wasJustImported = true;
       } catch (importErr: any) {
         res.status(404).json({ error: `Session not found in Langfuse: ${importErr.message}` });
         return;
@@ -513,6 +516,18 @@ export async function analyzeSession(req: Request, res: Response): Promise<void>
     if (!sessionData || !sessionData.traces || sessionData.traces.length === 0) {
       res.status(404).json({ error: 'Session not found or has no traces' });
       return;
+    }
+
+    // Auto-sync session bookings to Prod Tracker when session is newly imported
+    if (wasJustImported) {
+      try {
+        const prodTrackerService = new ProdTestRecordService(db);
+        const syncResult = await prodTrackerService.syncSessionToProdTracker(sessionId);
+        console.log(`[TraceAnalysis] Auto-synced session ${sessionId} to Prod Tracker: ${syncResult.patientsFound} patients, ${syncResult.appointmentsFound} appointments`);
+      } catch (syncErr: any) {
+        console.warn(`[TraceAnalysis] Failed to sync session ${sessionId} to Prod Tracker: ${syncErr.message}`);
+        // Non-fatal - continue with analysis
+      }
     }
 
     const traces = sessionData.traces.map((t: any) => ({
@@ -530,6 +545,11 @@ export async function analyzeSession(req: Request, res: Response): Promise<void>
     let intent: CallerIntent | null = null;
     try {
       intent = await classifyCallerIntent(transcript);
+      // Enhance with child names from tool observations (more reliable than transcript extraction)
+      if (intent) {
+        const allObs = filterInternalTraces(sessionData.observations);
+        intent = enhanceIntentWithObservations(intent, allObs);
+      }
     } catch (err: any) {
       // LLM failure is non-fatal; return trace data without intent
       console.error(`Intent classification failed for session ${sessionId}:`, err.message);
@@ -649,10 +669,12 @@ export async function getIntent(req: Request, res: Response): Promise<void> {
     // Get session data
     const service = new LangfuseTraceService(db);
     let sessionData = service.getSession(sessionId, configId);
+    let wasJustImported = false;
 
     if (!sessionData) {
       try {
         sessionData = await service.importSessionTraces(sessionId, configId);
+        wasJustImported = true;
       } catch (importErr: any) {
         res.status(404).json({ error: `Session not found: ${importErr.message}` });
         return;
@@ -664,11 +686,26 @@ export async function getIntent(req: Request, res: Response): Promise<void> {
       return;
     }
 
+    // Auto-sync session bookings to Prod Tracker when session is newly imported
+    if (wasJustImported) {
+      try {
+        const prodTrackerService = new ProdTestRecordService(db);
+        await prodTrackerService.syncSessionToProdTracker(sessionId);
+      } catch (syncErr: any) {
+        console.warn(`[TraceAnalysis] Failed to sync session ${sessionId} to Prod Tracker: ${syncErr.message}`);
+      }
+    }
+
     const transcript = buildTranscript(sessionData.traces, sessionData.observations);
 
     let intent: CallerIntent | null = null;
     try {
       intent = await classifyCallerIntent(transcript);
+      // Enhance with child names from tool observations (more reliable than transcript extraction)
+      if (intent) {
+        const allObs = filterInternalTraces(sessionData.observations);
+        intent = enhanceIntentWithObservations(intent, allObs);
+      }
     } catch (err: any) {
       res.status(500).json({ error: `Intent classification failed: ${err.message}` });
       return;
@@ -740,10 +777,12 @@ export async function verifySession(req: Request, res: Response): Promise<void> 
     // Get session data
     const service = new LangfuseTraceService(db);
     let sessionData = service.getSession(sessionId, configId);
+    let wasJustImported = false;
 
     if (!sessionData) {
       try {
         sessionData = await service.importSessionTraces(sessionId, configId);
+        wasJustImported = true;
       } catch (importErr: any) {
         res.status(404).json({ error: `Session not found: ${importErr.message}` });
         return;
@@ -755,11 +794,23 @@ export async function verifySession(req: Request, res: Response): Promise<void> 
       return;
     }
 
+    // Auto-sync session bookings to Prod Tracker when session is newly imported
+    if (wasJustImported) {
+      try {
+        const prodTrackerService = new ProdTestRecordService(db);
+        await prodTrackerService.syncSessionToProdTracker(sessionId);
+      } catch (syncErr: any) {
+        console.warn(`[TraceAnalysis] Failed to sync session ${sessionId} to Prod Tracker: ${syncErr.message}`);
+      }
+    }
+
     // Get or compute intent
     let intent: any = null;
     const cachedAnalysis = db.prepare(
       'SELECT caller_intent_type, caller_intent_confidence, caller_intent_summary, booking_details_json FROM session_analysis WHERE session_id = ?'
     ).get(sessionId) as any;
+
+    const allObs = filterInternalTraces(sessionData.observations);
 
     if (cachedAnalysis?.caller_intent_type) {
       intent = {
@@ -772,13 +823,16 @@ export async function verifySession(req: Request, res: Response): Promise<void> 
       const transcript = buildTranscript(sessionData.traces, sessionData.observations);
       try {
         intent = await classifyCallerIntent(transcript);
+        // Enhance with child names from tool observations (more reliable than transcript extraction)
+        if (intent) {
+          intent = enhanceIntentWithObservations(intent, allObs);
+        }
       } catch (err: any) {
         res.status(500).json({ error: `Intent classification failed: ${err.message}` });
         return;
       }
     }
 
-    const allObs = filterInternalTraces(sessionData.observations);
     const verification = await verifyFulfillment(sessionId, allObs, intent);
 
     // Cache verification
@@ -801,29 +855,15 @@ export async function verifySession(req: Request, res: Response): Promise<void> 
 /**
  * GET /api/trace-analysis/monitoring-results
  *
- * Query monitoring_results with filters: dateFrom, dateTo, status, intentType, sessionId, limit, offset.
+ * Query session_analysis with filters: dateFrom, dateTo, status, intentType, sessionId, limit, offset.
+ * Note: Originally this queried monitoring_results, but that table was never populated.
+ * Now uses session_analysis directly with column mapping.
  */
 export async function getMonitoringResults(req: Request, res: Response): Promise<void> {
   let db: BetterSqlite3.Database | null = null;
 
   try {
     db = getDb();
-
-    // Ensure monitoring_results table exists (may not if monitoring hasn't run yet)
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS monitoring_results (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        session_id TEXT NOT NULL UNIQUE,
-        intent_type TEXT,
-        intent_confidence REAL,
-        verification_status TEXT,
-        verdict_summary TEXT,
-        diagnostic_status TEXT,
-        diagnostic_report_json TEXT,
-        analyzed_at TEXT NOT NULL DEFAULT (datetime('now')),
-        diagnosed_at TEXT
-      );
-    `);
 
     const {
       dateFrom,
@@ -842,25 +882,25 @@ export async function getMonitoringResults(req: Request, res: Response): Promise
     const params: any[] = [];
 
     if (dateFrom) {
-      conditions.push('mr.analyzed_at >= ?');
+      conditions.push('sa.analyzed_at >= ?');
       params.push(dateFrom);
     }
     if (dateTo) {
-      conditions.push('mr.analyzed_at <= ?');
+      conditions.push('sa.analyzed_at <= ?');
       params.push(dateTo + 'T23:59:59');
     }
     if (status) {
       const statuses = status.split(',').map(s => s.trim());
-      conditions.push(`mr.verification_status IN (${statuses.map(() => '?').join(',')})`);
+      conditions.push(`sa.verification_status IN (${statuses.map(() => '?').join(',')})`);
       params.push(...statuses);
     }
     if (intentType) {
       const types = intentType.split(',').map(s => s.trim());
-      conditions.push(`mr.intent_type IN (${types.map(() => '?').join(',')})`);
+      conditions.push(`sa.caller_intent_type IN (${types.map(() => '?').join(',')})`);
       params.push(...types);
     }
     if (sessionId) {
-      conditions.push('mr.session_id LIKE ?');
+      conditions.push('sa.session_id LIKE ?');
       params.push(`%${sessionId}%`);
     }
 
@@ -868,17 +908,25 @@ export async function getMonitoringResults(req: Request, res: Response): Promise
 
     // Count total
     const countRow = db.prepare(
-      `SELECT COUNT(*) as total FROM monitoring_results mr ${whereClause}`
+      `SELECT COUNT(*) as total FROM session_analysis sa ${whereClause}`
     ).get(...params) as any;
     const total = countRow?.total || 0;
 
-    // Fetch results with optional join to session_analysis for caller_intent_summary
+    // Fetch results from session_analysis with column mapping to match MonitoringResult interface
     const results = db.prepare(`
-      SELECT mr.*, sa.caller_intent_summary
-      FROM monitoring_results mr
-      LEFT JOIN session_analysis sa ON mr.session_id = sa.session_id
+      SELECT
+        sa.id,
+        sa.session_id,
+        sa.caller_intent_type as intent_type,
+        sa.caller_intent_confidence as intent_confidence,
+        sa.verification_status,
+        NULL as verdict_summary,
+        NULL as diagnostic_status,
+        sa.analyzed_at,
+        sa.caller_intent_summary
+      FROM session_analysis sa
       ${whereClause}
-      ORDER BY mr.analyzed_at DESC
+      ORDER BY sa.analyzed_at DESC
       LIMIT ? OFFSET ?
     `).all(...params, limit, offset);
 
@@ -897,6 +945,7 @@ export async function getMonitoringResults(req: Request, res: Response): Promise
 
 const DEFAULT_LOCATION_GUID = '3D44BD41-4E94-4E93-A157-C7E3A0024286';
 const DEFAULT_APPT_TYPE_GUID = 'f6c20c35-9abb-47c2-981a-342996016705';
+const CHAIR_8_GUID = '07687884-7e37-49aa-8028-d43b751c9034'; // Only show Chair 8 slots (matches Node-RED slot logic)
 const DEFAULT_MINUTES = 40;
 const VENDOR_USERNAME = 'Intelepeer';
 
@@ -914,13 +963,26 @@ export async function checkSlotAvailability(req: Request, res: Response): Promis
 
   try {
     const client = createCloud9Client('production');
+    // Use same parameters as Node-RED slot lookup:
+    // - appointmentTypeGuid: required for consultation slots
+    // - No providerGuid filter (we filter to Chair 8 after)
     const resp = await client.getAvailableAppts({
-      locationGuid: DEFAULT_LOCATION_GUID,
+      locationGuid: DEFAULT_LOCATION_GUID, // Note: Not used by API, location is from credentials
+      appointmentTypeGuid: DEFAULT_APPT_TYPE_GUID, // Required: filters to consultation appointment type
       startDate: date,
       endDate: date,
     });
 
-    const slots = resp.records || [];
+    const allSlots = resp.records || [];
+
+    // Filter to Chair 8 only (same as Node-RED slot logic)
+    const slots = allSlots.filter(slot => {
+      const colGUID = (slot.ScheduleColumnGUID || slot.schdcolGUID || '').toLowerCase();
+      return colGUID === CHAIR_8_GUID.toLowerCase();
+    });
+
+    console.log(`[checkSlotAvailability] Found ${allSlots.length} total slots, ${slots.length} Chair 8 slots for ${date}`);
+
     let intendedSlot: any = null;
     const alternatives: any[] = [];
 

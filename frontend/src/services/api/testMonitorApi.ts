@@ -2429,7 +2429,7 @@ export interface BookingCorrectionRecord {
 
 export async function checkSlotAvailability(
   sessionId: string,
-  params: { patientGUID: string; intendedStartTime: string; date: string }
+  params: { patientGUID: string; intendedStartTime: string; date: string; scheduleViewGUID?: string }
 ): Promise<SlotCheckResult> {
   return post<SlotCheckResult>(`/trace-analysis/${sessionId}/correction/check-slot`, params);
 }

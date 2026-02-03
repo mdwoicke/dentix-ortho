@@ -158,38 +158,6 @@ function getVerificationBadge(status: string): { color: string; label: string } 
 // SUB-COMPONENTS
 // ============================================================================
 
-function TraceList({ traces }: { traces: TraceAnalysisResponse['traces'] }) {
-  if (!traces || traces.length === 0) {
-    return <p className="text-sm text-gray-500 dark:text-gray-400">No traces found.</p>;
-  }
-
-  return (
-    <div className="space-y-2">
-      {traces.map((trace, idx) => (
-        <div
-          key={trace.traceId}
-          className="flex items-center gap-3 p-3 rounded-lg bg-gray-50 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600"
-        >
-          <span className="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded-full bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 text-xs font-bold">
-            {idx + 1}
-          </span>
-          <div className="flex-1 min-w-0">
-            <div className="text-sm font-medium text-gray-900 dark:text-white truncate">
-              {trace.name || 'Unnamed trace'}
-            </div>
-            <div className="text-xs text-gray-500 dark:text-gray-400 font-mono">
-              {trace.traceId}
-            </div>
-          </div>
-          <div className="flex-shrink-0 text-xs text-gray-500 dark:text-gray-400">
-            {formatTimestamp(trace.timestamp)}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function IntentCard({ intent }: { intent: TraceAnalysisResponse['intent'] }) {
   if (!intent) {
     return (
@@ -252,44 +220,104 @@ function IntentCard({ intent }: { intent: TraceAnalysisResponse['intent'] }) {
   );
 }
 
+type TranscriptFilter = 'all' | 'caller' | 'agent';
+
 function TranscriptView({ transcript }: { transcript: TraceAnalysisTranscriptTurn[] }) {
+  const [filter, setFilter] = useState<TranscriptFilter>('all');
+
   if (!transcript || transcript.length === 0) {
     return <p className="text-sm text-gray-500 dark:text-gray-400">No transcript available.</p>;
   }
 
-  return (
-    <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2">
-      {transcript.map((turn, idx) => {
-        const isUser = turn.role === 'user';
-        const isTool = turn.role === 'tool';
+  // Filter transcript based on selection
+  const filteredTranscript = transcript.filter((turn) => {
+    if (filter === 'all') return true;
+    if (filter === 'caller') return turn.role === 'user';
+    if (filter === 'agent') return turn.role === 'assistant' || turn.role === 'tool';
+    return true;
+  });
 
-        return (
-          <div
-            key={idx}
-            className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}
-          >
-            <div
-              className={`max-w-[80%] rounded-lg px-4 py-2.5 ${
-                isUser
-                  ? 'bg-blue-500 text-white'
-                  : isTool
-                  ? 'bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200'
-                  : 'bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white'
-              }`}
-            >
-              <div className={`text-xs font-medium mb-1 ${
-                isUser ? 'text-blue-100' : isTool ? 'text-amber-600 dark:text-amber-400' : 'text-gray-500 dark:text-gray-400'
-              }`}>
-                {turn.role === 'user' ? 'Caller' : turn.role === 'tool' ? 'Tool' : 'Assistant'}
-                {turn.timestamp && (
-                  <span className="ml-2 font-normal opacity-75">{formatTimestamp(turn.timestamp)}</span>
-                )}
+  // Count messages by role
+  const callerCount = transcript.filter(t => t.role === 'user').length;
+  const agentCount = transcript.filter(t => t.role === 'assistant' || t.role === 'tool').length;
+
+  return (
+    <div className="space-y-3">
+      {/* Filter Toggle */}
+      <div className="flex items-center gap-2 pb-2 border-b border-gray-200 dark:border-gray-700">
+        <span className="text-xs text-gray-500 dark:text-gray-400 mr-1">Show:</span>
+        <button
+          onClick={() => setFilter('all')}
+          className={`px-3 py-1 text-xs font-medium rounded-full transition-colors ${
+            filter === 'all'
+              ? 'bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300'
+              : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
+          }`}
+        >
+          Both ({transcript.length})
+        </button>
+        <button
+          onClick={() => setFilter('caller')}
+          className={`px-3 py-1 text-xs font-medium rounded-full transition-colors ${
+            filter === 'caller'
+              ? 'bg-blue-500 text-white'
+              : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
+          }`}
+        >
+          Caller ({callerCount})
+        </button>
+        <button
+          onClick={() => setFilter('agent')}
+          className={`px-3 py-1 text-xs font-medium rounded-full transition-colors ${
+            filter === 'agent'
+              ? 'bg-gray-700 dark:bg-gray-500 text-white'
+              : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
+          }`}
+        >
+          Agent ({agentCount})
+        </button>
+      </div>
+
+      {/* Transcript Messages */}
+      <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2">
+        {filteredTranscript.length === 0 ? (
+          <p className="text-sm text-gray-500 dark:text-gray-400 italic text-center py-4">
+            No messages match the selected filter.
+          </p>
+        ) : (
+          filteredTranscript.map((turn, idx) => {
+            const isUser = turn.role === 'user';
+            const isTool = turn.role === 'tool';
+
+            return (
+              <div
+                key={idx}
+                className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}
+              >
+                <div
+                  className={`max-w-[80%] rounded-lg px-4 py-2.5 ${
+                    isUser
+                      ? 'bg-blue-500 text-white'
+                      : isTool
+                      ? 'bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200'
+                      : 'bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white'
+                  }`}
+                >
+                  <div className={`text-xs font-medium mb-1 ${
+                    isUser ? 'text-blue-100' : isTool ? 'text-amber-600 dark:text-amber-400' : 'text-gray-500 dark:text-gray-400'
+                  }`}>
+                    {turn.role === 'user' ? 'Caller' : turn.role === 'tool' ? 'Tool' : 'Agent'}
+                    {turn.timestamp && (
+                      <span className="ml-2 font-normal opacity-75">{formatTimestamp(turn.timestamp)}</span>
+                    )}
+                  </div>
+                  <div className="text-sm whitespace-pre-wrap break-words">{turn.content}</div>
+                </div>
               </div>
-              <div className="text-sm whitespace-pre-wrap break-words">{turn.content}</div>
-            </div>
-          </div>
-        );
-      })}
+            );
+          })
+        )}
+      </div>
     </div>
   );
 }
@@ -823,22 +851,106 @@ function getStatusBadge(status: CorrectionStatus): { color: string; label: strin
   }
 }
 
-// Slot picker modal
+// Helper to format date for input[type=date] (YYYY-MM-DD)
+function formatDateForInput(dateStr: string | null): string {
+  if (!dateStr) {
+    // Default to today
+    const today = new Date();
+    return today.toISOString().split('T')[0];
+  }
+  // Parse MM/DD/YYYY format
+  const parts = dateStr.split(' ')[0].split('/');
+  if (parts.length === 3) {
+    const [month, day, year] = parts;
+    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+  }
+  // Try to parse as date
+  try {
+    const d = new Date(dateStr);
+    return d.toISOString().split('T')[0];
+  } catch {
+    return new Date().toISOString().split('T')[0];
+  }
+}
+
+// Helper to format YYYY-MM-DD to MM/DD/YYYY for API
+function formatDateForApi(dateStr: string): string {
+  const [year, month, day] = dateStr.split('-');
+  return `${month}/${day}/${year}`;
+}
+
+// Helper to format date for display
+function formatDateForDisplay(dateStr: string): string {
+  const [year, month, day] = dateStr.split('-');
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${months[parseInt(month, 10) - 1]} ${parseInt(day, 10)}, ${year}`;
+}
+
+// Slot picker modal with date selection
 function SlotPickerModal({
-  childName, slots, intendedSlot, loading, booking, onSelect, onClose,
+  childName, patientGUID, defaultDate, slots, intendedSlot, loading, booking, onDateChange, onSelect, onClose,
 }: {
   childName: string;
+  patientGUID: string;
+  defaultDate: string | null; // The date from the trace (MM/DD/YYYY format)
   slots: SlotAlternative[];
   intendedSlot: SlotAlternative | null;
   loading: boolean;
   booking: boolean;
+  onDateChange: (date: string) => void; // Called with MM/DD/YYYY format
   onSelect: (slot: SlotAlternative) => void;
   onClose: () => void;
 }) {
+  const [selectedDate, setSelectedDate] = useState(() => formatDateForInput(defaultDate));
+  const originalDate = formatDateForInput(defaultDate);
+  const isOriginalDate = selectedDate === originalDate;
+
+  // Handle date change
+  const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newDate = e.target.value;
+    setSelectedDate(newDate);
+    onDateChange(formatDateForApi(newDate));
+  };
+
+  // Quick date navigation
+  const changeDate = (days: number) => {
+    const current = new Date(selectedDate);
+    current.setDate(current.getDate() + days);
+    const newDateStr = current.toISOString().split('T')[0];
+    setSelectedDate(newDateStr);
+    onDateChange(formatDateForApi(newDateStr));
+  };
+
+  // Filter out past time slots if showing today's date
+  const filterPastSlots = (slotList: SlotAlternative[]): SlotAlternative[] => {
+    const now = new Date();
+    const todayStr = now.toISOString().split('T')[0]; // YYYY-MM-DD
+
+    // If not viewing today, return all slots
+    if (selectedDate !== todayStr) {
+      return slotList;
+    }
+
+    // Filter out slots that have already passed
+    return slotList.filter(s => {
+      try {
+        const slotDate = new Date(s.startTime);
+        // Add 5 minute buffer - don't show slots starting in less than 5 minutes
+        const bufferMs = 5 * 60 * 1000;
+        return slotDate.getTime() > (now.getTime() + bufferMs);
+      } catch {
+        return true; // Keep slot if we can't parse it
+      }
+    });
+  };
+
+  const filteredSlots = filterPastSlots(slots);
+  const pastSlotsCount = slots.length - filteredSlots.length;
+
   // Group slots into AM and PM
   const amSlots: SlotAlternative[] = [];
   const pmSlots: SlotAlternative[] = [];
-  for (const s of slots) {
+  for (const s of filteredSlots) {
     const upper = s.startTime.toUpperCase();
     if (upper.includes('PM') && !upper.includes('12:')) {
       pmSlots.push(s);
@@ -893,12 +1005,70 @@ function SlotPickerModal({
               Select Slot for {childName}
             </h3>
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-              {slots.length} available slot{slots.length !== 1 ? 's' : ''} on this day
+              {loading ? 'Loading...' : `${filteredSlots.length} available slot${filteredSlots.length !== 1 ? 's' : ''}`} for {formatDateForDisplay(selectedDate)}
+              {pastSlotsCount > 0 && (
+                <span className="ml-1 text-yellow-600 dark:text-yellow-400">
+                  ({pastSlotsCount} past time{pastSlotsCount !== 1 ? 's' : ''} hidden)
+                </span>
+              )}
             </p>
           </div>
           <button onClick={onClose} className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400">
             <Icons.X />
           </button>
+        </div>
+
+        {/* Date Picker Section */}
+        <div className="px-5 py-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700/50">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => changeDate(-1)}
+              disabled={loading}
+              className="p-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 text-gray-600 dark:text-gray-400"
+              title="Previous day"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+              </svg>
+            </button>
+            <div className="flex-1 flex items-center gap-2">
+              <input
+                type="date"
+                value={selectedDate}
+                onChange={handleDateChange}
+                disabled={loading}
+                className="flex-1 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:opacity-50"
+              />
+              {!isOriginalDate && (
+                <button
+                  onClick={() => {
+                    setSelectedDate(originalDate);
+                    onDateChange(formatDateForApi(originalDate));
+                  }}
+                  disabled={loading}
+                  className="px-3 py-2 text-xs font-medium rounded-lg bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-800/40 disabled:opacity-50"
+                  title="Return to original search date"
+                >
+                  Original
+                </button>
+              )}
+            </div>
+            <button
+              onClick={() => changeDate(1)}
+              disabled={loading}
+              className="p-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 text-gray-600 dark:text-gray-400"
+              title="Next day"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+            </button>
+          </div>
+          {isOriginalDate && defaultDate && (
+            <p className="mt-2 text-xs text-green-600 dark:text-green-400">
+              Showing slots for the date originally searched in this call
+            </p>
+          )}
         </div>
 
         {/* Body */}
@@ -908,9 +1078,19 @@ function SlotPickerModal({
               <Spinner size="lg" />
               <span className="text-sm text-gray-500 dark:text-gray-400">Loading available slots from Cloud9...</span>
             </div>
-          ) : slots.length === 0 ? (
+          ) : filteredSlots.length === 0 ? (
             <div className="text-center py-12 text-gray-500 dark:text-gray-400">
-              <p className="text-sm">No available slots found for this day.</p>
+              {pastSlotsCount > 0 ? (
+                <>
+                  <p className="text-sm">All {pastSlotsCount} slot{pastSlotsCount !== 1 ? 's' : ''} for today have already passed.</p>
+                  <p className="text-xs mt-2">Try selecting a future date above.</p>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm">No available slots found for {formatDateForDisplay(selectedDate)}.</p>
+                  <p className="text-xs mt-2">Try selecting a different date above.</p>
+                </>
+              )}
             </div>
           ) : (
             <div className="space-y-5">
@@ -954,6 +1134,15 @@ function SlotPickerModal({
   );
 }
 
+interface SlotModalState {
+  key: string;
+  br: CallReportBookingResult;
+  mode: 'book' | 'reschedule';
+  oldApptGUID?: string;
+  currentDate: string; // MM/DD/YYYY format - the current date being viewed
+  originalDate: string; // MM/DD/YYYY format - the original date from the trace
+}
+
 function BookingCorrectionCard({
   sessionId, bookingResults, currentBookingData, onRefresh,
 }: {
@@ -965,13 +1154,8 @@ function BookingCorrectionCard({
   const [childStates, setChildStates] = useState<Record<string, ChildCorrectionState>>({});
   const [history, setHistory] = useState<BookingCorrectionRecord[]>([]);
   const [confirmAction, setConfirmAction] = useState<{ type: string; message: string; onConfirm: () => void } | null>(null);
-  // Modal state: which child key is open + the action mode
-  const [slotModal, setSlotModal] = useState<{
-    key: string;
-    br: CallReportBookingResult;
-    mode: 'book' | 'reschedule';
-    oldApptGUID?: string;
-  } | null>(null);
+  // Modal state: which child key is open + the action mode + date tracking
+  const [slotModal, setSlotModal] = useState<SlotModalState | null>(null);
 
   // Load correction history
   useEffect(() => {
@@ -983,26 +1167,67 @@ function BookingCorrectionCard({
     setChildStates(prev => ({ ...prev, [key]: { ...getState(key), ...patch } }));
   };
 
-  // Open modal and fetch slots
-  const openSlotPicker = async (br: CallReportBookingResult, mode: 'book' | 'reschedule', oldApptGUID?: string, fallbackSlot?: string) => {
+  // Fetch slots for a given date
+  const fetchSlotsForDate = async (br: CallReportBookingResult, date: string, intendedSlot?: string, scheduleViewGUID?: string) => {
     const key = br.patientGUID || br.childName || '';
-    const slot = br.slot || fallbackSlot;
-    if (!br.patientGUID || !slot) return;
+    if (!br.patientGUID) return;
 
-    setSlotModal({ key, br, mode, oldApptGUID });
-    setState(key, { checking: true, checkResult: null, actionResult: null });
+    setState(key, { checking: true, checkResult: null });
 
     try {
-      const slotDate = slot.split(' ')[0]; // MM/DD/YYYY
       const result = await checkSlotAvailability(sessionId, {
         patientGUID: br.patientGUID,
-        intendedStartTime: slot,
-        date: slotDate,
+        intendedStartTime: intendedSlot || `${date} 9:00 AM`, // Use intended slot or a default time
+        date: date,
+        scheduleViewGUID: scheduleViewGUID || br.scheduleViewGUID, // Filter to same chair if available
       });
       setState(key, { checking: false, checkResult: result });
     } catch (err: any) {
       setState(key, { checking: false, actionResult: { success: false, message: err.message } });
     }
+  };
+
+  // Open modal and fetch slots
+  const openSlotPicker = async (br: CallReportBookingResult, mode: 'book' | 'reschedule', oldApptGUID?: string, fallbackSlot?: string) => {
+    const key = br.patientGUID || br.childName || '';
+    const slot = br.slot || fallbackSlot;
+    if (!br.patientGUID) return;
+
+    // Extract date from slot or use today
+    let slotDate: string;
+    if (slot) {
+      slotDate = slot.split(' ')[0]; // MM/DD/YYYY
+    } else {
+      // Default to today if no slot
+      const today = new Date();
+      slotDate = `${(today.getMonth() + 1).toString().padStart(2, '0')}/${today.getDate().toString().padStart(2, '0')}/${today.getFullYear()}`;
+    }
+
+    setSlotModal({ key, br, mode, oldApptGUID, currentDate: slotDate, originalDate: slotDate });
+    setState(key, { checking: true, checkResult: null, actionResult: null });
+
+    try {
+      const result = await checkSlotAvailability(sessionId, {
+        patientGUID: br.patientGUID,
+        intendedStartTime: slot || `${slotDate} 9:00 AM`,
+        date: slotDate,
+        scheduleViewGUID: br.scheduleViewGUID, // Filter to same chair if available
+      });
+      setState(key, { checking: false, checkResult: result });
+    } catch (err: any) {
+      setState(key, { checking: false, actionResult: { success: false, message: err.message } });
+    }
+  };
+
+  // Handle date change from the modal
+  const handleDateChange = async (newDate: string) => {
+    if (!slotModal) return;
+
+    // Update modal state with new date
+    setSlotModal(prev => prev ? { ...prev, currentDate: newDate } : null);
+
+    // Fetch slots for the new date (pass scheduleViewGUID to filter to same chair)
+    await fetchSlotsForDate(slotModal.br, newDate, slotModal.br.slot || undefined, slotModal.br.scheduleViewGUID);
   };
 
   // User picked a slot from the modal
@@ -1124,10 +1349,13 @@ function BookingCorrectionCard({
           return (
             <SlotPickerModal
               childName={slotModal.br.childName || 'Unknown'}
+              patientGUID={slotModal.br.patientGUID || ''}
+              defaultDate={slotModal.originalDate}
               slots={state.checkResult?.alternatives || []}
               intendedSlot={state.checkResult?.intendedSlot || null}
               loading={state.checking}
               booking={state.booking}
+              onDateChange={handleDateChange}
               onSelect={handleSlotSelected}
               onClose={() => setSlotModal(null)}
             />
@@ -1175,13 +1403,13 @@ function BookingCorrectionCard({
 
               {/* Actions */}
               <div className="flex flex-wrap gap-2 items-center">
-                {(status === 'needs_booking' || status === 'was_cancelled' || status === 'no_record') && (br.slot) && (
+                {(status === 'needs_booking' || status === 'was_cancelled' || status === 'no_record') && br.patientGUID && (
                   <button
                     onClick={() => openSlotPicker(br, 'book')}
                     disabled={state.checking}
                     className="px-3 py-1 text-xs font-medium rounded bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-800/40 disabled:opacity-50"
                   >
-                    {state.checking ? 'Loading...' : 'Book...'}
+                    {state.checking ? 'Loading...' : br.slot ? 'Book...' : 'Schedule...'}
                   </button>
                 )}
 
@@ -1455,6 +1683,14 @@ export default function TraceAnalysisPage() {
             )}
           </div>
 
+          {/* Intent Classification */}
+          <Card>
+            <div className="p-4">
+              <h3 className="text-base font-semibold text-gray-900 dark:text-white mb-3">Intent Classification</h3>
+              <IntentCard intent={result.intent} />
+            </div>
+          </Card>
+
           {/* Verification (if present) */}
           {result.verification && <VerificationCard verification={result.verification} />}
 
@@ -1477,34 +1713,13 @@ export default function TraceAnalysisPage() {
             />
           )}
 
-          {/* Intent Classification */}
+          {/* Tool Sequence */}
           <Card>
             <div className="p-4">
-              <h3 className="text-base font-semibold text-gray-900 dark:text-white mb-3">Intent Classification</h3>
-              <IntentCard intent={result.intent} />
+              <h3 className="text-base font-semibold text-gray-900 dark:text-white mb-3">Tool Sequence</h3>
+              <ToolSequenceView toolSequence={result.toolSequence} />
             </div>
           </Card>
-
-          {/* Two-column layout for traces and tool sequence */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Trace List */}
-            <Card>
-              <div className="p-4">
-                <h3 className="text-base font-semibold text-gray-900 dark:text-white mb-3">
-                  Traces ({result.traces.length})
-                </h3>
-                <TraceList traces={result.traces} />
-              </div>
-            </Card>
-
-            {/* Tool Sequence */}
-            <Card>
-              <div className="p-4">
-                <h3 className="text-base font-semibold text-gray-900 dark:text-white mb-3">Tool Sequence</h3>
-                <ToolSequenceView toolSequence={result.toolSequence} />
-              </div>
-            </Card>
-          </div>
 
           {/* Transcript */}
           <Card>
