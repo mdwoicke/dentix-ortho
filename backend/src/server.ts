@@ -4,6 +4,7 @@ import logger from './utils/logger';
 import { getDatabase } from './config/database';
 import { seedMasterAdmin } from './services/authService';
 import { initializeTestRunCleanup, stopPeriodicCleanup } from './services/testRunCleanupService';
+import { startCacheRefreshScheduler, stopCacheRefreshScheduler } from './services/cacheRefreshScheduler';
 
 // Load environment variables
 dotenv.config();
@@ -55,6 +56,9 @@ const server = app.listen(Number(PORT), HOST, () => {
 
   // Initialize test run cleanup service (marks abandoned runs & starts periodic cleanup)
   initializeTestRunCleanup();
+
+  // Start cache refresh scheduler (backup for Node-RED cron)
+  startCacheRefreshScheduler();
 });
 
 // Graceful shutdown
@@ -63,6 +67,9 @@ const gracefulShutdown = (signal: string) => {
 
   // Stop the test run cleanup service
   stopPeriodicCleanup();
+
+  // Stop the cache refresh scheduler
+  stopCacheRefreshScheduler();
 
   server.close(() => {
     logger.info('HTTP server closed');

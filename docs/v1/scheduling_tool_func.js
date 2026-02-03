@@ -1,9 +1,19 @@
 /**
  * ============================================================================
  * CHORD SCHEDULING DSO - Appointment Scheduling Tool (Node Red Version)
- * Version: v91 | Updated: 2026-02-02
+ * Version: v92 | Updated: 2026-02-03
  * ============================================================================
  * Actions: slots, grouped_slots, book_child, cancel
+ *
+ * v92: NEVER OFFER SAME-DAY APPOINTMENTS - Minimum booking is TOMORROW
+ *      - correctDateRange() now uses tomorrow as minimum, not today
+ *      - Filters out any slots that are for today (stale cache protection)
+ *      - Root cause: Session conv_2_+19546824812_1770134504775 offered past slot
+ *
+ * v92: NEVER OFFER SAME-DAY APPOINTMENTS - Minimum booking is TOMORROW
+ *      - correctDateRange() now uses tomorrow as minimum, not today
+ *      - Filters out any slots that are for today (stale cache protection)
+ *      - Root cause: Session conv_2_+19546824812_1770134504775 offered past slot
  *
  * v91: FIX numberOfPatients FLOWISE BUG - Change schema type from integer to string
  *      - Flowise drops integer-typed params as undefined causing cleanParams to strip them
@@ -154,7 +164,7 @@
 
 const fetch = require('node-fetch');
 
-const TOOL_VERSION = 'v91';
+const TOOL_VERSION = 'v92';
 const MAX_SLOTS_RETURNED = 1;
 const BASE_URL = 'https://c1-aicoe-nodered-lb.prod.c1conversations.io/FabricWorkflow/api/chord';
 const DEFAULT_SCHEDULE_COLUMN_GUID = '07687884-7e37-49aa-8028-d43b751c9034';
@@ -423,11 +433,13 @@ function parseDate(dateStr) {
     return new Date(parseInt(parts[2]), parseInt(parts[0]) - 1, parseInt(parts[1]));
 }
 
-// v51: Enhanced date range correction with future date validation
+// v92: Enhanced date range correction - NEVER offer same-day appointments
 function correctDateRange(startDate, endDate, expansionDays = DATE_EXPANSION_TIERS[0]) {
     let correctedStart = startDate ? parseDate(startDate) : null;
     let correctedEnd = endDate ? parseDate(endDate) : null;
     const today = new Date(); today.setHours(0, 0, 0, 0);
+    // v92: CRITICAL - minimum booking date is TOMORROW, not today
+    const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1);
     let datesCorrected = false;
     let originalStart = startDate;
     let originalEnd = endDate;
@@ -437,7 +449,7 @@ function correctDateRange(startDate, endDate, expansionDays = DATE_EXPANSION_TIE
     maxFutureDate.setDate(maxFutureDate.getDate() + MAX_FUTURE_DAYS);
     
     if (correctedStart && correctedStart > maxFutureDate) {
-        console.log('[v51] WARNING: startDate ' + startDate + ' is ' + Math.ceil((correctedStart - today) / (1000 * 60 * 60 * 24)) + ' days in future - AUTO-CORRECTING to today');
+        console.log('[v51] WARNING: startDate ' + startDate + ' is ' + Math.ceil((correctedStart - today) / (1000 * 60 * 60 * 24)) + ' days in future - AUTO-CORRECTING to tomorrow');
         correctedStart = null; // Will be set to today below
         datesCorrected = true;
     }
@@ -447,9 +459,14 @@ function correctDateRange(startDate, endDate, expansionDays = DATE_EXPANSION_TIE
         datesCorrected = true;
     }
     
-    // Fix dates in the past or missing
-    if (!correctedStart || correctedStart < today) {
-        correctedStart = new Date(Math.max(today.getTime(), SANDBOX_MIN_DATE.getTime()));
+    // v92: Fix dates that are today or in the past - minimum is TOMORROW
+    if (!correctedStart || correctedStart < tomorrow) {
+        const minDate = new Date(Math.max(tomorrow.getTime(), SANDBOX_MIN_DATE.getTime()));
+        if (correctedStart && correctedStart.toDateString() === today.toDateString()) {
+            console.log('[v92] POLICY: Same-day booking NOT allowed. Adjusting startDate from today to tomorrow.');
+        }
+        correctedStart = minDate;
+        datesCorrected = true;
     }
     if (correctedStart < SANDBOX_MIN_DATE) correctedStart = new Date(SANDBOX_MIN_DATE);
     
@@ -863,6 +880,29 @@ async function executeRequest() {
             
             // v52: Format slots with individual GUIDs for direct booking
             data = formatSlotsResponse(data);
+
+            // v92: FILTER OUT SAME-DAY SLOTS - Protect against stale cache
+            const todayStr = new Date().toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
+            const filterSameDaySlots = (slots) => {
+                if (!slots || !Array.isArray(slots)) return slots;
+                const originalCount = slots.length;
+                const filtered = slots.filter(slot => {
+                    const slotTime = slot.startTime || slot.displayTime || slot.StartTime;
+                    if (!slotTime) return true;
+                    const slotDateMatch = slotTime.match(/(d{1,2})/(d{1,2})/(d{4})/);
+                    if (!slotDateMatch) return true;
+                    const slotDateStr = slotDateMatch[1].padStart(2, '0') + '/' + slotDateMatch[2].padStart(2, '0') + '/' + slotDateMatch[3];
+                    const isSameDay = slotDateStr === todayStr;
+                    if (isSameDay) console.log('[v92] FILTERING OUT same-day slot: ' + slotTime);
+                    return !isSameDay;
+                });
+                if (filtered.length < originalCount) console.log('[v92] Removed ' + (originalCount - filtered.length) + ' same-day slots');
+                return filtered;
+            };
+            if (data.slots) data.slots = filterSameDaySlots(data.slots);
+            if (data.groups && Array.isArray(data.groups)) {
+                data.groups = data.groups.map(g => ({ ...g, slots: filterSameDaySlots(g.slots) })).filter(g => g.slots && g.slots.length > 0);
+            }
 
             // v89: BULLETPROOF slot-to-child mapping
             // Build final slots array to contain EXACTLY what LLM needs: one slot per child
