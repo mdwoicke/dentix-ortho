@@ -1791,4 +1791,122 @@ export class ProdTestRecordService {
       return value;
     }
   }
+
+  // ============================================================================
+  // SESSION SYNC - Sync a single session's bookings to Prod Tracker
+  // ============================================================================
+
+  /**
+   * Sync booking results from a specific Langfuse session to prod_test_records
+   * Called automatically when trace analysis imports a session
+   *
+   * @param sessionId - The Langfuse session ID
+   * @returns Import result with counts of patients and appointments found
+   */
+  async syncSessionToProdTracker(sessionId: string): Promise<{
+    patientsFound: number;
+    appointmentsFound: number;
+    alreadyImported: number;
+    errors: string[];
+  }> {
+    const result = {
+      patientsFound: 0,
+      appointmentsFound: 0,
+      alreadyImported: 0,
+      errors: [] as string[],
+    };
+
+    if (!sessionId) {
+      result.errors.push('sessionId is required');
+      return result;
+    }
+
+    try {
+      console.log(`[ProdTestRecordService] Syncing session ${sessionId} to Prod Tracker`);
+
+      // Get observations from this session that match SetPatient/SetAppointment patterns
+      const observations = this.db.prepare(`
+        SELECT
+          pto.observation_id,
+          pto.trace_id,
+          pto.name,
+          pto.input,
+          pto.output,
+          pto.started_at,
+          pt.session_id,
+          pt.langfuse_config_id
+        FROM production_trace_observations pto
+        JOIN production_traces pt ON pto.trace_id = pt.trace_id
+        WHERE pt.session_id = ?
+          AND (
+            -- SetPatient success responses
+            (pto.name = 'chord_ortho_patient' AND (pto.output LIKE '%Patient Added:%' OR pto.output LIKE '%Patient GUID Added%'))
+            OR
+            -- SetAppointment success responses
+            (pto.name = 'schedule_appointment_ortho' AND pto.output LIKE '%Appointment GUID Added%')
+          )
+        ORDER BY pto.started_at ASC
+      `).all(sessionId) as any[];
+
+      console.log(`[ProdTestRecordService] Found ${observations.length} booking observations in session ${sessionId}`);
+
+      // Get already-imported observation_ids for fast lookup
+      const existingObservationIds = new Set<string>(
+        (this.db.prepare(`
+          SELECT DISTINCT observation_id FROM prod_test_records
+          WHERE observation_id IS NOT NULL AND session_id = ?
+        `).all(sessionId) as any[]).map(r => r.observation_id)
+      );
+
+      for (const obs of observations) {
+        try {
+          // Skip if already imported
+          if (obs.observation_id && existingObservationIds.has(obs.observation_id)) {
+            result.alreadyImported++;
+            continue;
+          }
+
+          const input = this.parseJson(obs.input);
+          const output = this.parseJson(obs.output);
+
+          // Process patient creation
+          if (obs.name === 'chord_ortho_patient' && output) {
+            const patientGuid = this.extractPatientGuid(output);
+            if (patientGuid) {
+              const imported = this.importPatientRecord(obs, input, patientGuid);
+              if (imported) {
+                result.patientsFound++;
+                existingObservationIds.add(obs.observation_id);
+              } else {
+                result.alreadyImported++;
+              }
+            }
+          }
+          // Process appointment creation
+          else if (obs.name === 'schedule_appointment_ortho' && output) {
+            const appointmentGuid = this.extractAppointmentGuid(output);
+            if (appointmentGuid) {
+              const imported = await this.importAppointmentRecord(obs, input, appointmentGuid);
+              if (imported) {
+                result.appointmentsFound++;
+                existingObservationIds.add(obs.observation_id);
+              } else {
+                result.alreadyImported++;
+              }
+            }
+          }
+        } catch (err: any) {
+          result.errors.push(`Error processing observation ${obs.observation_id}: ${err.message}`);
+        }
+      }
+
+      console.log(`[ProdTestRecordService] Session ${sessionId} sync complete: ${result.patientsFound} patients, ${result.appointmentsFound} appointments, ${result.alreadyImported} already imported`);
+
+    } catch (err: any) {
+      result.errors.push(`Sync failed: ${err.message}`);
+      console.error('[ProdTestRecordService] Session sync error:', err);
+    }
+
+    return result;
+  }
 }

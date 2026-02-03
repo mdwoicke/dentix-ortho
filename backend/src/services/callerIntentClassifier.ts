@@ -304,17 +304,30 @@ function classifyFromTranscript(transcript: ConversationTurn[]): CallerIntent | 
 
   if (signalCount < 2) return null;
 
+  // Calculate child count: use max of names found, explicit count, or default to 1
+  const finalChildCount = Math.max(childNames.length, explicitChildCount, 1);
+
+  // Build summary - distinguish between named children and inferred count
+  let summaryChildInfo: string;
+  if (childNames.length > 0) {
+    summaryChildInfo = `${childNames.length} child${childNames.length !== 1 ? 'ren' : ''} identified: ${childNames.join(', ')}`;
+  } else if (explicitChildCount > 0) {
+    summaryChildInfo = `${explicitChildCount} child${explicitChildCount !== 1 ? 'ren' : ''} mentioned (names not extracted)`;
+  } else {
+    summaryChildInfo = `child count inferred as 1 (no names extracted)`;
+  }
+
   return {
     type: 'booking',
     confidence: Math.min(0.85, 0.5 + signalCount * 0.1),
     bookingDetails: {
-      childCount: Math.max(childNames.length, explicitChildCount, 1),
+      childCount: finalChildCount,
       childNames,
       parentName,
       parentPhone: null,
       requestedDates: dates,
     },
-    summary: `Transcript-based: booking intent detected (${childNames.length} child${childNames.length !== 1 ? 'ren' : ''} identified)`,
+    summary: `Transcript-based: booking intent detected (${summaryChildInfo})`,
   };
 }
 
@@ -326,5 +339,122 @@ function createFallbackIntent(reason: string): CallerIntent {
     type: 'info_lookup',
     confidence: 0,
     summary: `Fallback classification - ${reason}`,
+  };
+}
+
+/**
+ * Extract child names from tool observations (book_child actions).
+ * This captures names that may not have been extracted from transcript text.
+ */
+export function extractChildNamesFromObservations(observations: any[]): { childNames: string[]; parentName: string | null } {
+  const childNames: string[] = [];
+  let parentName: string | null = null;
+
+  for (const obs of observations) {
+    // Look for book_child or schedule_appointment tool calls
+    if (obs.name?.includes('schedule') || obs.name?.includes('book') || obs.name?.includes('patient')) {
+      try {
+        const input = typeof obs.input === 'string' ? JSON.parse(obs.input) : obs.input;
+
+        // Extract from book_child action
+        if (input?.action === 'book_child' && input?.children) {
+          const childrenData = typeof input.children === 'string'
+            ? JSON.parse(input.children)
+            : input.children;
+
+          if (Array.isArray(childrenData)) {
+            for (const child of childrenData) {
+              const firstName = child.firstName || child.first_name;
+              const lastName = child.lastName || child.last_name;
+              if (firstName) {
+                const fullName = lastName ? `${firstName} ${lastName}` : firstName;
+                if (!childNames.includes(fullName)) {
+                  childNames.push(fullName);
+                }
+              }
+            }
+          }
+
+          // Extract parent name
+          if (!parentName && input.parentFirstName) {
+            parentName = input.parentLastName
+              ? `${input.parentFirstName} ${input.parentLastName}`
+              : input.parentFirstName;
+          }
+        }
+
+        // Also check output for created children
+        if (obs.output) {
+          const output = typeof obs.output === 'string' ? JSON.parse(obs.output) : obs.output;
+          if (output?.children && Array.isArray(output.children)) {
+            for (const child of output.children) {
+              const firstName = child.firstName || child.first_name;
+              const lastName = child.lastName || child.last_name;
+              if (firstName) {
+                const fullName = lastName ? `${firstName} ${lastName}` : firstName;
+                if (!childNames.includes(fullName)) {
+                  childNames.push(fullName);
+                }
+              }
+            }
+          }
+          if (!parentName && output?.parent?.firstName) {
+            parentName = output.parent.lastName
+              ? `${output.parent.firstName} ${output.parent.lastName}`
+              : output.parent.firstName;
+          }
+        }
+      } catch (e) {
+        // Ignore parse errors
+      }
+    }
+  }
+
+  return { childNames, parentName };
+}
+
+/**
+ * Enhance an intent with child names extracted from tool observations.
+ * Merges tool-extracted names with transcript-extracted names.
+ */
+export function enhanceIntentWithObservations(intent: CallerIntent, observations: any[]): CallerIntent {
+  if (intent.type !== 'booking') {
+    return intent;
+  }
+
+  const { childNames: obsChildNames, parentName: obsParentName } = extractChildNamesFromObservations(observations);
+
+  // Merge child names (tool observations are more reliable)
+  const existingNames = intent.bookingDetails?.childNames || [];
+  const mergedNames = [...new Set([...obsChildNames, ...existingNames])];
+
+  // Update parent name if not already set
+  const parentName = intent.bookingDetails?.parentName || obsParentName;
+
+  // Update child count
+  const childCount = Math.max(
+    mergedNames.length,
+    intent.bookingDetails?.childCount || 1
+  );
+
+  // Rebuild summary with actual data
+  let summaryChildInfo: string;
+  if (mergedNames.length > 0) {
+    summaryChildInfo = `${mergedNames.length} child${mergedNames.length !== 1 ? 'ren' : ''} identified: ${mergedNames.join(', ')}`;
+  } else {
+    summaryChildInfo = `child count: ${childCount} (names not extracted)`;
+  }
+
+  return {
+    ...intent,
+    bookingDetails: {
+      ...intent.bookingDetails,
+      childCount,
+      childNames: mergedNames,
+      parentName,
+      parentPhone: intent.bookingDetails?.parentPhone || null,
+      requestedDates: intent.bookingDetails?.requestedDates || [],
+    },
+    summary: `Booking intent detected (${summaryChildInfo})`,
   };
 }
