@@ -908,6 +908,12 @@ export function ProdTestTrackerPage() {
                     const childCount = family.children.filter(c => c.isChild).length;
                     const hasParent = !!family.parent;
 
+                    // Find session_id from any record in the family (parent, child patient, or appointment)
+                    const familySessionId = family.parent?.session_id
+                      || family.children.find(c => c.patientRecord?.session_id)?.patientRecord?.session_id
+                      || family.children.flatMap(c => c.appointments).find(a => a.session_id)?.session_id
+                      || null;
+
                     return (
                       <React.Fragment key={family.familyKey}>
                         {/* Family Header Row */}
@@ -936,7 +942,7 @@ export function ProdTestTrackerPage() {
                             <span className="text-lg">{isExpanded ? '▼' : '▶'}</span>
                           </td>
                           <td className="px-4 py-3" colSpan={2}>
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-wrap">
                               <Badge variant="default">Family</Badge>
                               {isV72Family && <Badge variant="info" className="text-xs">v72</Badge>}
                               <span className="text-sm font-bold text-gray-900 dark:text-gray-100">
@@ -945,6 +951,30 @@ export function ProdTestTrackerPage() {
                               <span className="text-xs text-gray-500">
                                 ({hasParent ? '1 parent + ' : ''}{childCount > 0 ? `${childCount} child${childCount !== 1 ? 'ren' : ''}` : `${family.children.length} patient${family.children.length !== 1 ? 's' : ''}`}, {family.totalAppointments} appt{family.totalAppointments !== 1 ? 's' : ''})
                               </span>
+                              {/* Langfuse Session ID on Family Header */}
+                              {familySessionId && (
+                                <div className="flex items-center gap-1 px-2 py-0.5 bg-orange-100 dark:bg-orange-900/30 rounded text-xs" onClick={(e) => e.stopPropagation()}>
+                                  <svg className="w-3 h-3 text-orange-600 dark:text-orange-400" viewBox="0 0 24 24" fill="currentColor">
+                                    <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+                                  </svg>
+                                  <span className="font-mono text-orange-700 dark:text-orange-300 max-w-[180px] truncate" title={familySessionId}>
+                                    {familySessionId}
+                                  </span>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      navigator.clipboard.writeText(familySessionId);
+                                      toast.showSuccess('Session ID copied!');
+                                    }}
+                                    className="p-0.5 hover:bg-orange-200 dark:hover:bg-orange-800 rounded transition-colors"
+                                    title="Copy session ID"
+                                  >
+                                    <svg className="w-3 h-3 text-orange-600 dark:text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                    </svg>
+                                  </button>
+                                </div>
+                              )}
                             </div>
                             {family.familyId && (
                               <div className="text-xs text-gray-400 font-mono mt-1">

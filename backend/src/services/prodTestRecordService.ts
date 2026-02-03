@@ -896,20 +896,40 @@ export class ProdTestRecordService {
 
       console.log(`[ProdTestRecordService] Got ${cloud9Response.records.length} appointments from Cloud9`);
 
-      // Build map from schedule_column_guid -> chair description
+      // Build maps from chair schedules:
+      // 1. schedule_column_guid -> chair description (for direct lookup)
+      // 2. location_guid -> schedule_view_guids[] (for GetAppointmentsByDate calls)
+      // 3. location_guid:svcOrder -> chair description (for translating Chair number)
       const scheduleColumnDescriptionMap = new Map<string, string>();
+      const locationScheduleViewMap = new Map<string, string[]>();
+      const svcOrderToChairMap = new Map<string, string>();
+
       if (chairSchedulesResponse.status === 'Success' && chairSchedulesResponse.records) {
         chairSchedulesResponse.records.forEach((schedule: any) => {
+          // Map schedule column GUID to description
           if (schedule.schdcolGUID && schedule.schdcolDescription) {
             scheduleColumnDescriptionMap.set(schedule.schdcolGUID, schedule.schdcolDescription);
-            // Also add uppercase version for case-insensitive matching
             scheduleColumnDescriptionMap.set(schedule.schdcolGUID.toUpperCase(), schedule.schdcolDescription);
           }
+
+          // Map location GUID to schedule view GUIDs
+          if (schedule.locGUID && schedule.schdvwGUID) {
+            const existing = locationScheduleViewMap.get(schedule.locGUID) || [];
+            if (!existing.includes(schedule.schdvwGUID)) {
+              existing.push(schedule.schdvwGUID);
+            }
+            locationScheduleViewMap.set(schedule.locGUID, existing);
+          }
+
+          // Map location + svcOrder to chair description
+          if (schedule.locGUID && schedule.svcOrder && schedule.schdcolDescription) {
+            svcOrderToChairMap.set(`${schedule.locGUID}:${schedule.svcOrder}`, schedule.schdcolDescription);
+          }
         });
-        console.log(`[ProdTestRecordService] Built chair schedule map with ${scheduleColumnDescriptionMap.size / 2} entries`);
+        console.log(`[ProdTestRecordService] Built chair schedule map with ${scheduleColumnDescriptionMap.size / 2} entries, ${locationScheduleViewMap.size} locations`);
       }
 
-      // Update each local record with Cloud9 data
+      // Update or create local records from Cloud9 data
       for (const appt of cloud9Response.records) {
         try {
           const apptGuid = appt.AppointmentGUID || appt.appointment_guid;
@@ -921,9 +941,7 @@ export class ProdTestRecordService {
             WHERE UPPER(appointment_guid) = UPPER(?) AND record_type = 'appointment'
           `).get(apptGuid) as any;
 
-          if (!existing) continue;
-
-          // Extract Cloud9 fields (handle different naming conventions)
+          // Extract Cloud9 fields first (needed for both update and insert)
           const locationName = appt.LocationName || appt.location_name || null;
           const locationGuid = appt.LocationGUID || appt.location_guid || null;
           const providerName = appt.OrthodontistName || appt.orthodontist_name || appt.ProviderName || appt.provider_name || null;
@@ -931,20 +949,90 @@ export class ProdTestRecordService {
           const appointmentTypeGuid = appt.AppointmentTypeGUID || appt.appointment_type_guid || null;
           const appointmentMinutes = appt.Minutes || appt.minutes || appt.AppointmentMinutes || null;
           const appointmentDateTime = appt.AppointmentDateTime || appt.appointment_date_time || null;
+          const patientName = appt.PatientFullName || appt.PatientName || appt.patient_name || '';
+          const [patientLastName, patientFirstName] = patientName.includes(',')
+            ? patientName.split(',').map((s: string) => s.trim())
+            : ['', patientName];
+          const scheduleViewGuid = appt.ScheduleViewGUID || appt.schedule_view_guid || null;
+          const scheduleColumnGuid = appt.ScheduleColumnGUID || appt.schedule_column_guid || null;
 
-          // Chair lookup: GetAppointmentListByPatient doesn't return ScheduleColumnDescription directly
-          // So we look it up from the chair schedules using the schedule_column_guid stored in our local record
+          // If record doesn't exist locally, CREATE it from Cloud9 data
+          if (!existing) {
+            console.log(`[ProdTestRecordService] Creating new local record for Cloud9 appointment ${apptGuid}`);
+
+            // Look up chair from schedule column
+            let chair: string | null = null;
+            if (scheduleColumnGuid) {
+              chair = scheduleColumnDescriptionMap.get(scheduleColumnGuid) ||
+                      scheduleColumnDescriptionMap.get(scheduleColumnGuid.toUpperCase()) ||
+                      null;
+            }
+
+            // Try to find the Langfuse session that created this appointment
+            // Search for trace observation with "Appointment GUID Added: {guid}" in output
+            const langfuseMatch = this.db.prepare(`
+              SELECT pt.trace_id, pt.session_id, pt.langfuse_config_id, pto.id as observation_id
+              FROM production_trace_observations pto
+              JOIN production_traces pt ON pto.trace_id = pt.trace_id
+              WHERE pto.output LIKE ?
+              ORDER BY pto.started_at DESC
+              LIMIT 1
+            `).get(`%${apptGuid}%`) as { trace_id: string; session_id: string; langfuse_config_id: number; observation_id: number } | undefined;
+
+            if (langfuseMatch) {
+              console.log(`[ProdTestRecordService] Found Langfuse session ${langfuseMatch.session_id} for appointment ${apptGuid}`);
+            }
+
+            this.db.prepare(`
+              INSERT INTO prod_test_records (
+                record_type, patient_guid, patient_first_name, patient_last_name,
+                appointment_guid, appointment_datetime, appointment_type, appointment_type_guid,
+                appointment_minutes, location_guid, location_name, provider_name,
+                schedule_view_guid, schedule_column_guid, chair, status,
+                trace_id, observation_id, session_id, langfuse_config_id,
+                created_at, updated_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            `).run(
+              'appointment',
+              patientGuid.toUpperCase(),
+              patientFirstName || null,
+              patientLastName || null,
+              apptGuid.toUpperCase(),
+              appointmentDateTime,
+              appointmentType,
+              appointmentTypeGuid,
+              appointmentMinutes,
+              locationGuid,
+              locationName,
+              providerName,
+              scheduleViewGuid,
+              scheduleColumnGuid,
+              chair,
+              'active',
+              langfuseMatch?.trace_id || null,
+              langfuseMatch?.observation_id || null,
+              langfuseMatch?.session_id || null,
+              langfuseMatch?.langfuse_config_id || null
+            );
+
+            result.enriched++;
+            console.log(`[ProdTestRecordService] Created appointment ${apptGuid}: location=${locationName}, provider=${providerName}, type=${appointmentType}, session=${langfuseMatch?.session_id || 'none'}`);
+            continue;
+          }
+
+          // Chair lookup for existing records: Use local schedule_column_guid if Cloud9 didn't provide one
           let chair: string | null = null;
-          if (existing.schedule_column_guid) {
-            chair = scheduleColumnDescriptionMap.get(existing.schedule_column_guid) ||
-                    scheduleColumnDescriptionMap.get(existing.schedule_column_guid.toUpperCase()) ||
+          const finalScheduleColumnGuid = scheduleColumnGuid || existing.schedule_column_guid;
+          if (finalScheduleColumnGuid) {
+            chair = scheduleColumnDescriptionMap.get(finalScheduleColumnGuid) ||
+                    scheduleColumnDescriptionMap.get(finalScheduleColumnGuid.toUpperCase()) ||
                     null;
             if (chair) {
-              console.log(`[ProdTestRecordService] Found chair for ${apptGuid}: ${existing.schedule_column_guid} -> ${chair}`);
+              console.log(`[ProdTestRecordService] Found chair for ${apptGuid}: ${finalScheduleColumnGuid} -> ${chair}`);
             }
           }
 
-          // Update local record with enriched data (preserve existing note)
+          // Update existing local record with enriched data (preserve existing note)
           const updateResult = this.db.prepare(`
             UPDATE prod_test_records SET
               location_name = COALESCE(?, location_name),
@@ -975,6 +1063,82 @@ export class ProdTestRecordService {
           }
         } catch (err: any) {
           result.errors.push(`Error enriching appointment: ${err.message}`);
+        }
+      }
+
+      // Fetch chair info via GetAppointmentsByDate for appointments without chair
+      const appointmentsNeedingChair = this.db.prepare(`
+        SELECT id, appointment_guid, appointment_datetime, location_guid
+        FROM prod_test_records
+        WHERE UPPER(patient_guid) = UPPER(?)
+          AND record_type = 'appointment'
+          AND chair IS NULL
+          AND appointment_datetime IS NOT NULL
+          AND location_guid IS NOT NULL
+      `).all(patientGuid) as any[];
+
+      if (appointmentsNeedingChair.length > 0) {
+        console.log(`[ProdTestRecordService] Fetching chair info for ${appointmentsNeedingChair.length} appointments`);
+
+        // Group by date and location to minimize API calls
+        const dateLocationMap = new Map<string, { locationGuid: string; appointments: any[] }>();
+        for (const appt of appointmentsNeedingChair) {
+          // Parse date from appointment_datetime (format: "M/D/YYYY H:mm:ss AM/PM")
+          const datePart = appt.appointment_datetime.split(' ')[0];
+          const key = `${datePart}:${appt.location_guid}`;
+          let existing = dateLocationMap.get(key);
+          if (!existing) {
+            existing = { locationGuid: appt.location_guid, appointments: [] as any[] };
+            dateLocationMap.set(key, existing);
+          }
+          existing.appointments.push(appt);
+        }
+
+        // Fetch chair info for each date/location combo
+        for (const [key, value] of dateLocationMap.entries()) {
+          const datePart = key.split(':')[0];
+          const scheduleViewGuids = locationScheduleViewMap.get(value.locationGuid) || [];
+
+          if (scheduleViewGuids.length === 0) {
+            console.log(`[ProdTestRecordService] No schedule views found for location ${value.locationGuid}`);
+            continue;
+          }
+
+          // Fetch appointments for each schedule view
+          for (const scheduleViewGuid of scheduleViewGuids) {
+            try {
+              const byDateResponse = await this.cloud9Client.getAppointmentsByDate(datePart, scheduleViewGuid);
+              if (byDateResponse.status !== 'Success') continue;
+
+              // Match appointments to get chair info
+              for (const record of byDateResponse.records || []) {
+                const apptGuid = record.AppointmentGUID?.toUpperCase();
+                if (!apptGuid) continue;
+
+                // Find matching appointment needing chair
+                const matchingAppt = value.appointments.find(
+                  (a: any) => a.appointment_guid?.toUpperCase() === apptGuid
+                );
+
+                if (matchingAppt) {
+                  // Get chair from ScheduleColumnDescription or translate from Chair number via svcOrder
+                  let chair = record.ScheduleColumnDescription || null;
+                  if (!chair && record.Chair && value.locationGuid) {
+                    chair = svcOrderToChairMap.get(`${value.locationGuid}:${record.Chair}`) || null;
+                  }
+
+                  if (chair) {
+                    this.db.prepare(`
+                      UPDATE prod_test_records SET chair = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+                    `).run(chair, matchingAppt.id);
+                    console.log(`[ProdTestRecordService] Updated chair for ${apptGuid}: ${chair}`);
+                  }
+                }
+              }
+            } catch (err: any) {
+              console.log(`[ProdTestRecordService] Error fetching appointments by date: ${err.message}`);
+            }
+          }
         }
       }
 
@@ -1566,8 +1730,19 @@ export class ProdTestRecordService {
 
         if (cloud9Response.status === 'Success' && cloud9Response.records.length > 0) {
           const patientInfo = cloud9Response.records[0];
-          const firstName = patientInfo.FirstName || patientInfo.persFirstName || null;
-          const lastName = patientInfo.LastName || patientInfo.persLastName || null;
+
+          // Cloud9 returns PatientFullName as a combined name (e.g., "FirstName LastName")
+          // Try to extract separate first/last names, falling back to combined name parsing
+          let firstName = patientInfo.FirstName || patientInfo.persFirstName || null;
+          let lastName = patientInfo.LastName || patientInfo.persLastName || null;
+
+          // If no separate names but we have PatientFullName, split it
+          if (!firstName && !lastName && patientInfo.PatientFullName) {
+            const fullName = (patientInfo.PatientFullName || '').trim();
+            const parts = fullName.split(' ');
+            firstName = parts[0] || null;
+            lastName = parts.slice(1).join(' ') || null;
+          }
 
           if (firstName || lastName) {
             // Update all records with this patient_guid
