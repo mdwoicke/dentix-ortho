@@ -101,6 +101,9 @@ export function mapToolSequence(intent: CallerIntent, observations: any[]): Tool
   const expectedSteps = getExpectedSequence(intent);
   const childCount = intent.bookingDetails?.childCount || 1;
 
+  // Pre-scan for patient creations embedded in book_child outputs
+  const embeddedCreations = countEmbeddedPatientCreations(observations);
+
   const stepStatuses: StepStatus[] = expectedSteps.map((step) => {
     const expectedCount = step.occurrences === 'per_child' ? childCount : 1;
 
@@ -119,6 +122,18 @@ export function mapToolSequence(intent: CallerIntent, observations: any[]): Tool
 
       return true;
     });
+
+    // Special case: create_patient step can be satisfied by embedded creations in book_child
+    if (step.action === 'create_patient' && matching.length === 0 && embeddedCreations.count > 0) {
+      return {
+        step,
+        status: 'completed' as StepStatusValue,
+        actualCount: embeddedCreations.count,
+        expectedCount,
+        observationIds: embeddedCreations.observationIds,
+        errors: [],
+      };
+    }
 
     // Detect errors in matching observations
     const errors: string[] = [];
@@ -177,6 +192,51 @@ export function mapToolSequence(intent: CallerIntent, observations: any[]): Tool
 // ============================================================================
 // HELPERS
 // ============================================================================
+
+/**
+ * Count patient creations embedded in book_child outputs.
+ * The book_child action creates patients inline (output.children[].created: true)
+ * rather than using a separate create_patient tool call.
+ */
+function countEmbeddedPatientCreations(observations: any[]): { count: number; observationIds: string[] } {
+  let count = 0;
+  const observationIds: string[] = [];
+
+  for (const obs of observations) {
+    // Look for schedule_appointment_ortho with book_child action
+    if (obs.name !== 'schedule_appointment_ortho') continue;
+
+    const input = parseObservationInput(obs.input);
+    if (input?.action !== 'book_child') continue;
+
+    const output = parseObservationInput(obs.output);
+    if (!output) continue;
+
+    const obsId = obs.observation_id || obs.id || 'unknown';
+    let createdInThisObs = 0;
+
+    // Check parent.created
+    if (output.parent?.created === true) {
+      createdInThisObs++;
+    }
+
+    // Check children[].created
+    if (Array.isArray(output.children)) {
+      for (const child of output.children) {
+        if (child.created === true) {
+          createdInThisObs++;
+        }
+      }
+    }
+
+    if (createdInThisObs > 0) {
+      count += createdInThisObs;
+      observationIds.push(obsId);
+    }
+  }
+
+  return { count, observationIds };
+}
 
 /**
  * Parse observation input to extract action field.
