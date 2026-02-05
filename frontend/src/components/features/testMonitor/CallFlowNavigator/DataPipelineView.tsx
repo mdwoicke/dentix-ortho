@@ -13,11 +13,14 @@
 
 import { useState, useMemo, useRef, useEffect } from 'react';
 import { cn } from '../../../../utils/cn';
-import type { FlowNode } from './types';
+import type { FlowNode, FlowLayer } from './types';
 import { LAYER_CONFIG } from './types';
 import { formatDuration } from './flowTransformers';
 import { transformToPipelineData } from './pipelineTransformers';
 import { TurnPipeline } from './TurnPipeline';
+
+// Layer filter type - "all" or one of the FlowLayer values
+type LayerFilter = 'all' | FlowLayer;
 
 // ============================================================================
 // ICONS
@@ -125,6 +128,7 @@ export function DataPipelineView({
   const [showDebug, setShowDebug] = useState(false);
   const [currentErrorIndex, setCurrentErrorIndex] = useState(0);
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
+  const [layerFilter, setLayerFilter] = useState<LayerFilter>('all');
 
   // Get all error nodes for navigation, sorted by start time
   const errorNodes = useMemo(() => {
@@ -186,12 +190,52 @@ export function DataPipelineView({
 
 
   // Debug: Analyze all nodes by layer and type
+  // IMPORTANT: This must match the logic in pipelineTransformers.ts createPipelineTurn()
   const debugInfo = useMemo(() => {
+    // Filter out conversation nodes (user_input, assistant_response) as they're not in layer groupings
+    const systemNodes = nodes.filter(n => n.type !== 'user_input' && n.type !== 'assistant_response');
+
+    // Use the same inclusive logic as createPipelineTurn in pipelineTransformers.ts
     const byLayer = {
-      flowise: nodes.filter(n => n.layer === 'layer4_flowise'),
-      tools: nodes.filter(n => n.layer === 'layer3_tools'),
-      nodeRed: nodes.filter(n => n.layer === 'layer2_nodered'),
-      cloud9: nodes.filter(n => n.layer === 'layer1_cloud9'),
+      // L4 Flowise: LLM generation nodes
+      flowise: systemNodes.filter(n =>
+        n.layer === 'layer4_flowise' ||
+        n.type === 'llm_generation'
+      ),
+      // L3 Tools: Tool decisions and tool-related API calls
+      tools: systemNodes.filter(n =>
+        n.layer === 'layer3_tools' ||
+        n.type === 'tool_decision' ||
+        (n.type === 'api_call' && (
+          n.label?.toLowerCase().includes('schedule') ||
+          n.label?.toLowerCase().includes('patient') ||
+          n.label?.toLowerCase().includes('tool') ||
+          n.subtitle?.toLowerCase().includes('schedule') ||
+          n.subtitle?.toLowerCase().includes('patient')
+        ))
+      ),
+      // L2 Node-RED: API calls to Node-RED endpoints
+      nodeRed: systemNodes.filter(n =>
+        n.layer === 'layer2_nodered' ||
+        (n.type === 'api_call' && (
+          n.label?.toLowerCase().includes('ortho-prd') ||
+          n.label?.toLowerCase().includes('nodered') ||
+          n.label?.toLowerCase().includes('getlocation') ||
+          n.label?.toLowerCase().includes('getappt') ||
+          n.label?.toLowerCase().includes('createappt') ||
+          n.subtitle?.toLowerCase().includes('ortho-prd')
+        ))
+      ),
+      // L1 Cloud9: Direct Cloud9 API calls
+      cloud9: systemNodes.filter(n =>
+        n.layer === 'layer1_cloud9' ||
+        (n.type === 'api_call' && (
+          n.label?.toLowerCase().includes('cloud9') ||
+          n.label?.toLowerCase().includes('getdata.ashx') ||
+          n.label?.toLowerCase().includes('getonline') ||
+          n.subtitle?.toLowerCase().includes('cloud9')
+        ))
+      ),
     };
     const byType = {
       user_input: nodes.filter(n => n.type === 'user_input'),
@@ -239,9 +283,32 @@ export function DataPipelineView({
   }, [nodes]);
 
   // Transform nodes into pipeline turns
-  const pipelineTurns = useMemo(() => {
+  const allPipelineTurns = useMemo(() => {
     return transformToPipelineData(nodes, totalDurationMs);
   }, [nodes, totalDurationMs]);
+
+  // Filter pipeline turns based on selected layer
+  const pipelineTurns = useMemo(() => {
+    if (layerFilter === 'all') {
+      return allPipelineTurns;
+    }
+
+    // Filter turns to only include those with nodes from the selected layer
+    return allPipelineTurns.filter(turn => {
+      switch (layerFilter) {
+        case 'layer4_flowise':
+          return turn.layerNodes.flowise.length > 0;
+        case 'layer3_tools':
+          return turn.layerNodes.tools.length > 0;
+        case 'layer2_nodered':
+          return turn.layerNodes.nodeRed.length > 0;
+        case 'layer1_cloud9':
+          return turn.layerNodes.cloud9.length > 0;
+        default:
+          return true;
+      }
+    });
+  }, [allPipelineTurns, layerFilter]);
 
   // Find the active turn index
   const activeTurnIndex = useMemo(() => {
@@ -298,6 +365,66 @@ export function DataPipelineView({
       }
     });
   }, [focusedSearchNodeId, nodes, pipelineTurns]);
+
+  // Auto-scroll to first node of selected layer when filter changes
+  useEffect(() => {
+    if (!scrollRef.current || pipelineTurns.length === 0) return;
+
+    // When "all" is selected, scroll to top
+    if (layerFilter === 'all') {
+      scrollRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
+    // Find the first node of the selected layer across all filtered turns
+    let firstLayerNode: FlowNode | null = null;
+    for (const turn of pipelineTurns) {
+      switch (layerFilter) {
+        case 'layer4_flowise':
+          if (turn.layerNodes.flowise.length > 0) {
+            firstLayerNode = turn.layerNodes.flowise[0];
+          }
+          break;
+        case 'layer3_tools':
+          if (turn.layerNodes.tools.length > 0) {
+            firstLayerNode = turn.layerNodes.tools[0];
+          }
+          break;
+        case 'layer2_nodered':
+          if (turn.layerNodes.nodeRed.length > 0) {
+            firstLayerNode = turn.layerNodes.nodeRed[0];
+          }
+          break;
+        case 'layer1_cloud9':
+          if (turn.layerNodes.cloud9.length > 0) {
+            firstLayerNode = turn.layerNodes.cloud9[0];
+          }
+          break;
+      }
+      if (firstLayerNode) break;
+    }
+
+    // Scroll to the first node of the selected layer
+    if (firstLayerNode) {
+      requestAnimationFrame(() => {
+        const nodeElement = scrollRef.current?.querySelector(`[data-node-id="${firstLayerNode!.id}"]`);
+        if (nodeElement) {
+          nodeElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          // Add temporary highlight effect
+          nodeElement.classList.add('ring-2', 'ring-offset-2', 'animate-pulse');
+          // Use layer-specific ring color
+          const ringColor = layerFilter === 'layer4_flowise' ? 'ring-blue-500' :
+                           layerFilter === 'layer3_tools' ? 'ring-amber-500' :
+                           layerFilter === 'layer2_nodered' ? 'ring-purple-500' :
+                           'ring-green-500';
+          nodeElement.classList.add(ringColor);
+          setTimeout(() => {
+            nodeElement.classList.remove('ring-2', 'ring-offset-2', 'animate-pulse', ringColor);
+          }, 2000);
+        }
+      });
+    }
+  }, [layerFilter, pipelineTurns]);
 
   // Handle turn navigation click
   const handleTurnClick = (turnIndex: number) => {
@@ -415,35 +542,51 @@ export function DataPipelineView({
       <div className="flex-shrink-0 flex items-center justify-between gap-4 px-3 py-1.5 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900">
         {/* Left: Turn Navigation (compact) */}
         <div className="flex items-center gap-2 min-w-0">
-          {pipelineTurns.length > 1 && (
+          {pipelineTurns.length > 0 && (
             <>
-              <span className="text-[10px] font-medium text-gray-500 dark:text-gray-400 uppercase">Turn:</span>
+              <span className="text-[10px] font-medium text-gray-500 dark:text-gray-400 uppercase">
+                Turn{layerFilter !== 'all' && (
+                  <span className={cn(
+                    'ml-1 px-1 py-0.5 rounded text-[8px]',
+                    layerFilter === 'layer4_flowise' && 'bg-blue-100 dark:bg-blue-900/30 text-blue-600',
+                    layerFilter === 'layer3_tools' && 'bg-amber-100 dark:bg-amber-900/30 text-amber-600',
+                    layerFilter === 'layer2_nodered' && 'bg-purple-100 dark:bg-purple-900/30 text-purple-600',
+                    layerFilter === 'layer1_cloud9' && 'bg-green-100 dark:bg-green-900/30 text-green-600',
+                  )}>
+                    {pipelineTurns.length}/{allPipelineTurns.length}
+                  </span>
+                )}:
+              </span>
               <div className="flex items-center gap-0.5">
-                {pipelineTurns.map((turn, idx) => (
-                  <button
-                    key={turn.id}
-                    onClick={() => handleTurnClick(idx)}
-                    className={cn(
-                      'w-6 h-6 rounded text-[10px] font-bold transition-all relative',
-                      idx === activeTurnIndex && [
-                        'ring-1 ring-offset-1 scale-110',
-                        turn.hasError ? 'ring-red-500 bg-red-500 text-white' : 'ring-blue-500 bg-blue-500 text-white',
-                      ],
-                      idx !== activeTurnIndex && [
-                        turn.hasError
-                          ? 'bg-red-500 text-white hover:bg-red-600'
-                          : 'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700',
-                      ],
-                    )}
-                    title={turn.hasError ? `Turn ${idx + 1} - Has Error` : `Turn ${idx + 1}`}
-                  >
-                    {idx + 1}
-                    {/* Error indicator dot */}
-                    {turn.hasError && idx !== activeTurnIndex && (
-                      <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-600 border border-white dark:border-gray-900 rounded-full animate-pulse" />
-                    )}
-                  </button>
-                ))}
+                {pipelineTurns.map((turn, idx) => {
+                  // Find the original turn index for display
+                  const originalIdx = allPipelineTurns.findIndex(t => t.id === turn.id);
+                  return (
+                    <button
+                      key={turn.id}
+                      onClick={() => handleTurnClick(idx)}
+                      className={cn(
+                        'w-6 h-6 rounded text-[10px] font-bold transition-all relative',
+                        idx === activeTurnIndex && [
+                          'ring-1 ring-offset-1 scale-110',
+                          turn.hasError ? 'ring-red-500 bg-red-500 text-white' : 'ring-blue-500 bg-blue-500 text-white',
+                        ],
+                        idx !== activeTurnIndex && [
+                          turn.hasError
+                            ? 'bg-red-500 text-white hover:bg-red-600'
+                            : 'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700',
+                        ],
+                      )}
+                      title={turn.hasError ? `Turn ${originalIdx + 1} - Has Error` : `Turn ${originalIdx + 1}`}
+                    >
+                      {originalIdx + 1}
+                      {/* Error indicator dot */}
+                      {turn.hasError && idx !== activeTurnIndex && (
+                        <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-600 border border-white dark:border-gray-900 rounded-full animate-pulse" />
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             </>
           )}
@@ -638,11 +781,34 @@ export function DataPipelineView({
               <div className="text-[9px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
                 Layer Activity
               </div>
+              {/* All - Reset Filter */}
+              <button
+                onClick={() => setLayerFilter('all')}
+                className={cn(
+                  'w-full p-2 rounded-lg border mb-1.5 text-left transition-all',
+                  layerFilter === 'all'
+                    ? 'border-gray-400 dark:border-gray-500 bg-gray-100 dark:bg-gray-800 ring-2 ring-gray-400 dark:ring-gray-500 ring-offset-1'
+                    : 'border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/30 hover:bg-gray-100 dark:hover:bg-gray-800/50 cursor-pointer'
+                )}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-medium text-gray-700 dark:text-gray-300">All Layers</span>
+                  <span className="text-[10px] font-bold text-gray-600 dark:text-gray-400">{nodes.length}</span>
+                </div>
+              </button>
               {/* L4 Flowise - Blue */}
-              <div className={cn(
-                'p-2 rounded-lg border mb-1.5 border-blue-200 dark:border-blue-800',
-                debugInfo.byLayer.flowise.length > 0 ? 'bg-blue-50/50 dark:bg-blue-950/30' : 'bg-gray-50 dark:bg-gray-800/30 opacity-50'
-              )}>
+              <button
+                onClick={() => setLayerFilter('layer4_flowise')}
+                disabled={debugInfo.byLayer.flowise.length === 0}
+                className={cn(
+                  'w-full p-2 rounded-lg border mb-1.5 text-left transition-all',
+                  layerFilter === 'layer4_flowise'
+                    ? 'border-blue-400 dark:border-blue-500 bg-blue-100 dark:bg-blue-900/50 ring-2 ring-blue-400 dark:ring-blue-500 ring-offset-1'
+                    : debugInfo.byLayer.flowise.length > 0
+                      ? 'border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/30 hover:bg-blue-100 dark:hover:bg-blue-900/40 cursor-pointer'
+                      : 'border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/30 opacity-50 cursor-not-allowed'
+                )}
+              >
                 <div className="flex items-center justify-between">
                   <span className="text-[10px] font-medium text-blue-700 dark:text-blue-300">L4 Flowise</span>
                   <span className="text-[10px] font-bold text-blue-600 dark:text-blue-400">{debugInfo.byLayer.flowise.length}</span>
@@ -652,12 +818,20 @@ export function DataPipelineView({
                     {formatDuration(debugInfo.byLayer.flowise.reduce((acc, n) => acc + n.durationMs, 0))}
                   </div>
                 )}
-              </div>
+              </button>
               {/* L3 Tools - Amber */}
-              <div className={cn(
-                'p-2 rounded-lg border mb-1.5 border-amber-200 dark:border-amber-800',
-                debugInfo.byLayer.tools.length > 0 ? 'bg-amber-50/50 dark:bg-amber-950/30' : 'bg-gray-50 dark:bg-gray-800/30 opacity-50'
-              )}>
+              <button
+                onClick={() => setLayerFilter('layer3_tools')}
+                disabled={debugInfo.byLayer.tools.length === 0}
+                className={cn(
+                  'w-full p-2 rounded-lg border mb-1.5 text-left transition-all',
+                  layerFilter === 'layer3_tools'
+                    ? 'border-amber-400 dark:border-amber-500 bg-amber-100 dark:bg-amber-900/50 ring-2 ring-amber-400 dark:ring-amber-500 ring-offset-1'
+                    : debugInfo.byLayer.tools.length > 0
+                      ? 'border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/30 hover:bg-amber-100 dark:hover:bg-amber-900/40 cursor-pointer'
+                      : 'border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/30 opacity-50 cursor-not-allowed'
+                )}
+              >
                 <div className="flex items-center justify-between">
                   <span className="text-[10px] font-medium text-amber-700 dark:text-amber-300">L3 Tools</span>
                   <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400">{debugInfo.byLayer.tools.length}</span>
@@ -667,12 +841,20 @@ export function DataPipelineView({
                     {formatDuration(debugInfo.byLayer.tools.reduce((acc, n) => acc + n.durationMs, 0))}
                   </div>
                 )}
-              </div>
+              </button>
               {/* L2 Node-RED - Purple */}
-              <div className={cn(
-                'p-2 rounded-lg border mb-1.5 border-purple-200 dark:border-purple-800',
-                debugInfo.byLayer.nodeRed.length > 0 ? 'bg-purple-50/50 dark:bg-purple-950/30' : 'bg-gray-50 dark:bg-gray-800/30 opacity-50'
-              )}>
+              <button
+                onClick={() => setLayerFilter('layer2_nodered')}
+                disabled={debugInfo.byLayer.nodeRed.length === 0}
+                className={cn(
+                  'w-full p-2 rounded-lg border mb-1.5 text-left transition-all',
+                  layerFilter === 'layer2_nodered'
+                    ? 'border-purple-400 dark:border-purple-500 bg-purple-100 dark:bg-purple-900/50 ring-2 ring-purple-400 dark:ring-purple-500 ring-offset-1'
+                    : debugInfo.byLayer.nodeRed.length > 0
+                      ? 'border-purple-200 dark:border-purple-800 bg-purple-50/50 dark:bg-purple-950/30 hover:bg-purple-100 dark:hover:bg-purple-900/40 cursor-pointer'
+                      : 'border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/30 opacity-50 cursor-not-allowed'
+                )}
+              >
                 <div className="flex items-center justify-between">
                   <span className="text-[10px] font-medium text-purple-700 dark:text-purple-300">L2 Node-RED</span>
                   <span className="text-[10px] font-bold text-purple-600 dark:text-purple-400">{debugInfo.byLayer.nodeRed.length}</span>
@@ -682,12 +864,20 @@ export function DataPipelineView({
                     {formatDuration(debugInfo.byLayer.nodeRed.reduce((acc, n) => acc + n.durationMs, 0))}
                   </div>
                 )}
-              </div>
+              </button>
               {/* L1 Cloud9 - Green */}
-              <div className={cn(
-                'p-2 rounded-lg border mb-1.5 border-green-200 dark:border-green-800',
-                debugInfo.byLayer.cloud9.length > 0 ? 'bg-green-50/50 dark:bg-green-950/30' : 'bg-gray-50 dark:bg-gray-800/30 opacity-50'
-              )}>
+              <button
+                onClick={() => setLayerFilter('layer1_cloud9')}
+                disabled={debugInfo.byLayer.cloud9.length === 0}
+                className={cn(
+                  'w-full p-2 rounded-lg border mb-1.5 text-left transition-all',
+                  layerFilter === 'layer1_cloud9'
+                    ? 'border-green-400 dark:border-green-500 bg-green-100 dark:bg-green-900/50 ring-2 ring-green-400 dark:ring-green-500 ring-offset-1'
+                    : debugInfo.byLayer.cloud9.length > 0
+                      ? 'border-green-200 dark:border-green-800 bg-green-50/50 dark:bg-green-950/30 hover:bg-green-100 dark:hover:bg-green-900/40 cursor-pointer'
+                      : 'border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/30 opacity-50 cursor-not-allowed'
+                )}
+              >
                 <div className="flex items-center justify-between">
                   <span className="text-[10px] font-medium text-green-700 dark:text-green-300">L1 Cloud9</span>
                   <span className="text-[10px] font-bold text-green-600 dark:text-green-400">{debugInfo.byLayer.cloud9.length}</span>
@@ -697,7 +887,7 @@ export function DataPipelineView({
                     {formatDuration(debugInfo.byLayer.cloud9.reduce((acc, n) => acc + n.durationMs, 0))}
                   </div>
                 )}
-              </div>
+              </button>
             </div>
 
             {/* API Call Summary */}
@@ -723,13 +913,28 @@ export function DataPipelineView({
 
             {/* Turn Overview */}
             <div>
-              <div className="text-[9px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
-                Turns ({pipelineTurns.length})
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-[9px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                  Turns ({pipelineTurns.length}{layerFilter !== 'all' ? `/${allPipelineTurns.length}` : ''})
+                </div>
+                {layerFilter !== 'all' && (
+                  <span className={cn(
+                    'text-[8px] px-1.5 py-0.5 rounded-full font-medium',
+                    layerFilter === 'layer4_flowise' && 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400',
+                    layerFilter === 'layer3_tools' && 'bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400',
+                    layerFilter === 'layer2_nodered' && 'bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400',
+                    layerFilter === 'layer1_cloud9' && 'bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400',
+                  )}>
+                    Filtered
+                  </span>
+                )}
               </div>
               <div className="space-y-1">
                 {pipelineTurns.map((turn, idx) => {
                   const nodeCount = turn.layerNodes.flowise.length + turn.layerNodes.tools.length +
                     turn.layerNodes.nodeRed.length + turn.layerNodes.cloud9.length;
+                  // Find the original turn index for display
+                  const originalIdx = allPipelineTurns.findIndex(t => t.id === turn.id);
                   return (
                     <button
                       key={turn.id}
@@ -743,7 +948,7 @@ export function DataPipelineView({
                       )}
                     >
                       <div className="flex items-center justify-between">
-                        <span className="font-medium text-gray-700 dark:text-gray-300">Turn {idx + 1}</span>
+                        <span className="font-medium text-gray-700 dark:text-gray-300">Turn {originalIdx + 1}</span>
                         {turn.hasError && <span className="text-red-500 text-[9px]">ERR</span>}
                       </div>
                       <div className="text-[9px] text-gray-500 dark:text-gray-400">
