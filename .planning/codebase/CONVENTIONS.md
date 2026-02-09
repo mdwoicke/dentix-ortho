@@ -1,316 +1,262 @@
 # Coding Conventions
 
-**Analysis Date:** 2026-02-02
+**Analysis Date:** 2026-02-09
 
 ## Naming Patterns
 
 **Files:**
-- Controllers: `{resource}Controller.ts` (e.g., `authController.ts`, `patientController.ts`)
-- Services: `{resource}Service.ts` (e.g., `authService.ts`, `cacheService.ts`)
-- Models: `{Resource}.ts` PascalCase (e.g., `User.ts`, `UserModel.ts`)
-- Types: `{domain}.ts` (e.g., `cloud9.ts`, `database.ts`)
-- Utilities: `{function}.ts` (e.g., `logger.ts`, `cn.ts`)
-- React components: `{ComponentName}.tsx` PascalCase
-- Test files: `*.test.js` or `*.spec.js` (minimal testing - see TESTING.md)
+- Backend TypeScript: camelCase for files, PascalCase for models/classes (e.g., `authController.ts`, `User.ts`)
+- Frontend React: PascalCase for components (e.g., `Button.tsx`, `LoginPage.tsx`)
+- Directories: kebab-case (e.g., `test-monitor/`, `goal-tests/`)
+- Test scripts: kebab-case with underscores for internal scripts (e.g., `_check-session.js`, `analyze-flows.js`)
 
 **Functions:**
-- camelCase for all function names
-- Async functions: prefix describes action (`authenticate`, `verifyToken`, `callCloud9`)
-- Event handlers: `on{EventName}` pattern (e.g., `onSelect`, `onRun`, `onEdit`)
-- React hooks: `use{Name}` pattern
-- Services/Utilities: verb-noun pattern (`hashPassword`, `generateToken`, `parseXmlResponse`)
+- Controllers: camelCase async functions exported as named exports (e.g., `login`, `getCurrentUser`, `changePasswordHandler`)
+- Services: camelCase methods, static class methods for models (e.g., `UserModel.getById()`, `authenticate()`)
+- React components: PascalCase function names matching file names (e.g., `function Button()`)
+- Async thunks: camelCase with createAsyncThunk (e.g., `initializeAuth`, `login`)
 
 **Variables:**
-- camelCase for all variables and constants
-- Constants at module level: SCREAMING_SNAKE_CASE (e.g., `JWT_SECRET`, `SALT_ROUNDS`)
-- Configuration objects: camelCase or PascalCase objects with camelCase properties
-- Boolean variables: `is{Property}` or `has{Property}` prefix (e.g., `isLoading`, `isSelected`, `isAdmin`)
+- camelCase for all variables (e.g., `authHeader`, `tenantId`, `passwordHash`)
+- SCREAMING_SNAKE_CASE for constants (e.g., `MASTER_ADMIN_EMAIL`, `STORAGE_KEYS`, `API_CONFIG`)
+- Boolean variables: use `is`, `has`, `can` prefixes (e.g., `isAuthenticated`, `mustChangePassword`, `can_access`)
 
 **Types:**
-- Interface names: `{Name}` PascalCase with optional `I` prefix (e.g., `Cloud9Location`, `ButtonProps`)
-- Union types: descriptive names (e.g., `ButtonVariant`, `Environment`)
-- Generic types: `T`, `U`, `K`, `V` single letters or descriptive (e.g., `TResponse`, `TData`)
-- Field names in interfaces: camelCase (backend models use API field names like `PatientGUID` when matching Cloud9 API)
+- PascalCase for interfaces and types (e.g., `User`, `AuthState`, `Cloud9Response`, `CreatePatientParams`)
+- Suffix interfaces with descriptive names not "Interface" (e.g., `UserWithPermissions`, `CreateUserInput`, `UpdateUserInput`)
+- Type exports: Use named exports for all types
 
 ## Code Style
 
 **Formatting:**
-- No explicit linter config found; code follows general TypeScript conventions
-- Indentation: 2 spaces (inferred from package.json and React components)
-- Line length: No enforced limit (files vary)
-- String quotes: single quotes in most files, backticks for template literals
+- No Prettier config detected in backend
+- Frontend uses ESLint with TypeScript plugin (`eslint.config.js`)
+- 2-space indentation (standard TypeScript convention)
+- Single quotes for strings in TypeScript
+- Template literals for string interpolation
 
 **Linting:**
-- Frontend: ESLint with TypeScript support (`frontend/eslint.config.js`)
-  - Rules: Recommended ESLint + TypeScript ESLint + React Hooks + React Refresh
-  - No custom rule overrides detected
-  - Global ignore: `dist/` directory
-- Backend: No ESLint detected; TypeScript compiler provides type checking
-  - Strict mode enabled in `backend/tsconfig.json`
-  - `noUnusedLocals` and `noUnusedParameters` enabled
-  - `noImplicitReturns` and `noFallthroughCasesInSwitch` enforced
+- Frontend: ESLint 9.x with flat config, TypeScript ESLint, React Hooks plugin, React Refresh plugin
+- Extends: `@eslint/js`, `typescript-eslint`, `react-hooks`, `react-refresh`
+- Backend: No ESLint config detected, relies on TypeScript compiler strict mode
+- TypeScript strict mode enabled in both frontend and backend
 
 **TypeScript Configuration:**
-
-Backend (`backend/tsconfig.json`):
-```json
-{
-  "compilerOptions": {
-    "target": "ES2020",
-    "module": "commonjs",
-    "strict": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "noImplicitReturns": true
-  }
-}
-```
-
-Frontend (`frontend/tsconfig.app.json`):
-```json
-{
-  "compilerOptions": {
-    "target": "ES2022",
-    "module": "ESNext",
-    "strict": false,
-    "noUnusedLocals": false,
-    "jsx": "react-jsx"
-  }
-}
-```
+- Backend: CommonJS modules, ES2020 target, strict mode, path aliases (`@shared/*`)
+- Frontend: Project references pattern (split app/node configs)
+- Strict flags: `noUnusedLocals`, `noUnusedParameters`, `noImplicitReturns`, `noFallthroughCasesInSwitch`
 
 ## Import Organization
 
-**Order (observed pattern):**
-1. Node.js built-in modules (`fs`, `path`, `http`)
-2. Third-party packages (`express`, `axios`, `react`, `winston`)
-3. Type definitions (`type` imports)
-4. Relative imports from `..` (parent dirs)
-5. Relative imports from `.` (same dir)
-6. Module imports with path aliases (`@shared/*`)
+**Order:**
+1. External dependencies (React, Express, axios, etc.)
+2. Internal middleware/utilities (errorHandler, logger)
+3. Models (User, Tenant, etc.)
+4. Services (authService, cloud9/client)
+5. Routes (if in app.ts)
+6. Types (imported last when needed)
 
 **Path Aliases:**
-- Backend: `@shared/*` maps to `shared/*` (configured in `backend/tsconfig.json`)
-- Frontend: Check `frontend/vite.config.ts` for alias configuration
+- Backend: `@shared/*` for shared code
+- Frontend: No path aliases detected, uses relative imports
+- Relative imports preferred: `'../middleware/errorHandler'`, `'../../services/api/client'`
 
-**Example (Backend Service):**
+**Example Pattern (from `backend/src/controllers/authController.ts`):**
 ```typescript
-import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
-import { UserModel, UserWithPermissions } from '../models/User';
-import logger from '../utils/logger';
-```
-
-**Example (Frontend Component):**
-```typescript
-import { useState } from 'react';
-import { clsx } from 'clsx';
-import { CATEGORY_STYLES, type GoalTestCaseRecord } from '../../../types/testMonitor.types';
+import { Request, Response } from 'express';
+import { AppError, asyncHandler } from '../middleware/errorHandler';
+import { UserModel } from '../models/User';
+import { TenantModel } from '../models/Tenant';
+import { authenticate, changePassword, verifyToken } from '../services/authService';
 ```
 
 ## Error Handling
 
 **Patterns:**
-- Custom `AppError` class with `statusCode` property (`backend/src/middleware/errorHandler.ts`)
-- Errors are thrown and caught by `asyncHandler` wrapper
-- Error messages are descriptive and user-facing where appropriate
-- Stack traces logged only in development mode
+- Custom `AppError` class with `statusCode` and `isOperational` properties (`backend/src/middleware/errorHandler.ts`)
+- `asyncHandler()` wrapper for all async controller functions - eliminates try-catch boilerplate
+- Throw `AppError` instances for operational errors (e.g., `throw new AppError('Email and password are required', 400)`)
+- Inline auth verification in controllers using `verifyToken()` helper - no middleware
+- Try-catch used for service-level error transformation (e.g., converting DB errors to AppError)
 
-**Custom Error Class:**
-```typescript
-export class AppError extends Error {
-  statusCode: number;
-  isOperational: boolean;
-
-  constructor(message: string, statusCode: number = 500) {
-    super(message);
-    this.statusCode = statusCode;
-    this.isOperational = true;
-    Error.captureStackTrace(this, this.constructor);
-  }
-}
-```
-
-**Async Route Wrapping:**
-```typescript
-export function asyncHandler(
-  fn: (req: Request, res: Response, next: NextFunction) => Promise<any>
-) {
-  return (req: Request, res: Response, next: NextFunction) => {
-    Promise.resolve(fn(req, res, next)).catch(next);
-  };
-}
-```
-
-**Usage in Controllers:**
+**Controller Pattern (from `backend/src/controllers/authController.ts`):**
 ```typescript
 export const login = asyncHandler(async (req: Request, res: Response) => {
-  const { email, password } = req.body;
   if (!email || !password) {
     throw new AppError('Email and password are required', 400);
   }
-  // ... logic
+  // Business logic - errors bubble up to asyncHandler
 });
 ```
 
-**Try-catch patterns in services:**
-- Explicit error checking for known failure modes
-- Specific `AppError` thrown with appropriate status codes
-- Generic errors converted to meaningful messages
-
+**Model Pattern (from `backend/src/models/User.ts`):**
 ```typescript
-try {
-  const result = await authenticate(email, password);
-  if (!result) {
-    throw new AppError('Invalid email or password', 401);
+static create(input: CreateUserInput): number {
+  try {
+    // DB operation
+  } catch (error) {
+    if ((error as any)?.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+      throw new Error('Email already exists');
+    }
+    throw new Error(`Error creating user: ${error instanceof Error ? error.message : String(error)}`);
   }
-  // ... success path
-} catch (error) {
-  if (error instanceof AppError) {
-    throw error;
-  }
-  if ((error as Error).message === 'Account is disabled') {
-    throw new AppError('Account is disabled...', 403);
-  }
-  throw new AppError('Invalid email or password', 401);
 }
 ```
 
+**Frontend Error Handling:**
+- Axios interceptor catches and formats API errors (`frontend/src/services/api/client.ts`)
+- `handleApiError()` normalizes AxiosError to `ApiError` type
+- Redux async thunks use `rejectWithValue()` for error handling
+- Toast notifications for user-facing errors
+
 ## Logging
 
-**Framework:** Winston (backend only; frontend uses console)
-
-**Backend Logger Usage:**
-```typescript
-import logger from '../utils/logger';
-
-// Log levels: logger.error(), logger.warn(), logger.info(), logger.debug()
-logger.error('Error occurred', {
-  message: err.message,
-  stack: err.stack,
-  statusCode,
-  path: _req.path,
-  metadata: {}
-});
-```
+**Framework:** Winston (`backend/src/utils/logger.ts`)
 
 **Patterns:**
-- Structured logging with metadata object
-- Errors logged with stack trace
-- Log directory: `backend/logs/`
-- Transports: File and console (configuration in `backend/src/utils/logger.ts`)
+- Structured logging with metadata objects
+- Custom logger helpers in `loggers` object for common scenarios
+- Log levels: debug, info, error (controlled via `LOG_LEVEL` env var)
+- Console + file transports (combined.log, error.log)
+- Suppress console in test environment
+
+**Usage Examples:**
+```typescript
+// Cloud 9 API logging
+loggers.cloud9Request(procedure, environment, params);
+loggers.cloud9Response(procedure, status, recordCount, error);
+
+// Database operations
+loggers.dbOperation('INSERT', 'users', { email: input.email });
+
+// Cache operations
+loggers.cacheHit(key, source);
+loggers.cacheMiss(key, source);
+
+// HTTP logging
+loggers.httpRequest(method, path, ip);
+loggers.httpResponse(method, path, statusCode, duration);
+```
 
 **Frontend Logging:**
-- `console.log()`, `console.error()` used directly (no centralized logger)
-- Limited production logging observed
+- No structured logger detected
+- Console methods used for debugging
+- API errors logged via Winston in backend
 
 ## Comments
 
 **When to Comment:**
-- JSDoc comments for exported functions and interfaces
-- Inline comments for complex logic or non-obvious algorithms
-- Section headers in large files (e.g., `// ============================================================================`)
-- Configuration files and domain-specific logic (Cloud9 API, test execution)
+- JSDoc blocks for all exported functions/classes with parameter descriptions
+- File-level comments for purpose (e.g., `/** Auth Controller - Handles authentication endpoints */`)
+- Inline comments for complex business logic or non-obvious code
+- TODO/FIXME for known issues (used in codebase)
 
-**JSDoc/TSDoc Pattern:**
+**JSDoc Pattern:**
 ```typescript
 /**
  * POST /api/auth/login
  * Authenticate user and return token
  */
 export const login = asyncHandler(async (req: Request, res: Response) => {
-  // implementation
+  // Implementation
 });
 ```
 
-```typescript
-/**
- * Hash a password using bcrypt
- */
-export async function hashPassword(password: string): Promise<string> {
-  return bcrypt.hash(password, SALT_ROUNDS);
-}
-```
-
-**Avoid:**
-- Over-commenting obvious code
-- Outdated comments (keep in sync with changes)
-- Commented-out code (remove or document why it's kept)
+**When NOT to Comment:**
+- Self-explanatory code (e.g., `user.is_admin` doesn't need explanation)
+- Variable declarations with clear names
+- Simple utility functions
 
 ## Function Design
 
 **Size:**
-- Backend services: 40-100 lines typical
-- Controllers: 15-50 lines (request validation + service call + response)
-- React components: 100-300 lines (with nested icon components)
-- Utility functions: 5-30 lines
+- Controllers: 20-60 lines typical, focused on single endpoint
+- Models: Static methods, 10-40 lines each
+- Services: Vary widely, 50-150 lines for complex operations acceptable
 
 **Parameters:**
-- Max 3-4 parameters typical; use object destructuring for more
-- Request/Response objects used directly in controllers
-- Config objects spread with `{ ...options }`
+- Controllers: Extract from `req.body`, `req.params`, `req.header()`
+- Services: Typed parameters (primitives or typed objects)
+- Use destructuring for options: `{ email, password } = req.body`
+- Optional parameters: Use TypeScript optional `?` syntax
 
 **Return Values:**
-- Services: Explicit return types in TypeScript
-- Controllers: Always void (res.json() or error thrown)
-- React hooks: State tuple or context value
-- Utilities: Clear return type declarations
+- Controllers: Return void, use `res.json()` for responses
+- Models: Return typed values (number for IDs, objects for records, void for updates)
+- Services: Return typed promises or synchronous values
+- Standard response format: `{ status: 'success', data: {...}, message?: string }`
 
-**Examples:**
-
-Service:
+**Example:**
 ```typescript
-export async function authenticate(
-  email: string,
-  password: string
-): Promise<LoginResult | null> {
-  // ... implementation
-  return { user, token };
-}
-```
-
-Controller:
-```typescript
+// Controller (void return, res.json side effect)
 export const login = asyncHandler(async (req: Request, res: Response) => {
   const result = await authenticate(email, password);
-  res.json({
-    status: 'success',
-    data: { user: result.user, token: result.token }
-  });
+  res.json({ status: 'success', data: result });
 });
+
+// Model (typed return)
+static getById(id: number): UserWithPermissions | null {
+  const user = stmt.get(id) as Omit<User, 'password_hash'> | undefined;
+  return user ? { ...user, permissions: UserModel.getPermissions(user.id) } : null;
+}
+
+// Service (typed promise)
+export async function authenticate(email: string, password: string): Promise<AuthResult | null> {
+  // Implementation
+}
 ```
 
 ## Module Design
 
 **Exports:**
-- Named exports for functions and classes
-- Default exports rare (one per file)
-- Barrel files not consistently used (check specific modules)
+- Named exports preferred (e.g., `export const login = ...`, `export class UserModel`)
+- Default export for main module entity (e.g., Redux slices, API client)
+- Export types separately from implementations
 
-**Example Service Export:**
+**Barrel Files:**
+- Not extensively used
+- Direct imports preferred (e.g., `import { UserModel } from '../models/User'`)
+
+**Module Patterns:**
+- Controllers: Named function exports
+- Models: Static class pattern (e.g., `UserModel.getById()`)
+- Services: Named function exports or classes
+- Redux: Slice with default reducer export + named action/selector exports
+
+**Example (from `frontend/src/store/slices/authSlice.ts`):**
 ```typescript
-export async function hashPassword(password: string): Promise<string> { }
-export async function comparePassword(password: string, hash: string): Promise<boolean> { }
-export function generateTempPassword(): string { }
-export function generateToken(user: UserWithPermissions): string { }
-export function verifyToken(token: string): JwtPayload | null { }
+// Named exports for actions
+export const { setEnvironment, toggleEnvironment, logout } = authSlice.actions;
+
+// Named exports for selectors
+export const selectEnvironment = (state: RootState) => state.auth.environment;
+export const selectIsAuthenticated = (state: RootState) => state.auth.isAuthenticated;
+
+// Default export for reducer
+export default authSlice.reducer;
 ```
 
-**Interfaces grouped with implementation:**
-```typescript
-export interface JwtPayload {
-  userId: number;
-  email: string;
-  isAdmin: boolean;
-}
+## React/Frontend Specific
 
-export interface LoginResult {
-  user: UserWithPermissions;
-  token: string;
-}
-```
+**Component Pattern:**
+- Functional components only (no class components detected)
+- TypeScript with typed props interfaces
+- Props interfaces co-located with component (e.g., `interface ButtonProps extends React.ButtonHTMLAttributes`)
+- Destructure props in function signature with defaults
 
-**React Component Exports:**
+**State Management:**
+- Redux Toolkit with slices pattern
+- `configureStore()` with middleware configuration
+- Async thunks for side effects
+- Selectors exported from slices
+
+**Styling:**
+- Tailwind CSS utility classes
+- `cn()` utility for conditional class merging (from `frontend/src/utils/cn.ts`)
+- Dark mode support via `dark:` prefixes
+- Variant pattern for component styles (e.g., `variantStyles` object in Button.tsx)
+
+**Example Component:**
 ```typescript
 export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant;
@@ -318,11 +264,61 @@ export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
   isLoading?: boolean;
 }
 
-export function Button({ variant = 'primary', ...props }: ButtonProps) {
-  // component implementation
+export function Button({
+  variant = 'primary',
+  size = 'md',
+  isLoading = false,
+  className,
+  children,
+  ...props
+}: ButtonProps) {
+  return <button className={cn(variantStyles[variant], sizeStyles[size], className)} {...props}>{children}</button>;
 }
+```
+
+## Backend Specific
+
+**Model Pattern (Static Class Methods):**
+```typescript
+export class UserModel {
+  static getAll(): UserWithPermissions[] { /* ... */ }
+  static getById(id: number): UserWithPermissions | null { /* ... */ }
+  static create(input: CreateUserInput): number { /* ... */ }
+  static update(id: number, input: UpdateUserInput): void { /* ... */ }
+}
+```
+
+**Controller Pattern (asyncHandler + inline auth):**
+```typescript
+export const protectedRoute = asyncHandler(async (req: Request, res: Response) => {
+  const authHeader = req.header('Authorization');
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    throw new AppError('Authentication required', 401);
+  }
+  const token = authHeader.substring(7);
+  const payload = verifyToken(token);
+  if (!payload) {
+    throw new AppError('Invalid or expired token', 401);
+  }
+  // Business logic with payload.userId
+});
+```
+
+**Middleware:**
+- CORS with custom headers (`X-Environment`, `X-Tenant-Id`) - `backend/src/middleware/cors.ts`
+- Tenant context extraction from headers - `backend/src/middleware/tenantContext.ts`
+- Error handling (global, not per-route) - `backend/src/middleware/errorHandler.ts`
+- No auth middleware - auth checked inline in controllers
+
+**API Response Format:**
+```typescript
+// Success
+res.json({ status: 'success', data: {...}, message?: string });
+
+// Error (via errorHandler middleware)
+res.status(statusCode).json({ status: 'error', message: err.message });
 ```
 
 ---
 
-*Convention analysis: 2026-02-02*
+*Convention analysis: 2026-02-09*

@@ -1,226 +1,191 @@
 # Architecture
 
-**Analysis Date:** 2026-02-02
+**Analysis Date:** 2026-02-09
 
 ## Pattern Overview
 
-**Overall:** Three-tier REST API architecture with separated frontend and backend, communicating via HTTP.
+**Overall:** Multi-Tenant Monorepo with Separate Backend API, Frontend SPA, and Test Agent CLI
 
 **Key Characteristics:**
-- Layered controller-service-model pattern for API logic
-- Centralized Express application with middleware pipeline
-- SQLite database with Better-SQLite3 for fast synchronous operations
-- Redux state management on frontend
-- Cloud 9 Ortho XML-based SOAP-like API integration via proxy
-- Test execution and monitoring infrastructure with real-time streaming
+- Three distinct applications sharing types and services via `shared/` directory
+- Multi-tenant architecture with tenant-specific Cloud9/Flowise/Langfuse configurations
+- Synchronous SQLite database operations (better-sqlite3) for predictable behavior
+- Static model methods pattern for database access (no ORM)
+- Redux Toolkit for frontend state management with RTK Query-like async thunks
+- AI-powered testing infrastructure with Langfuse observability tracing
 
 ## Layers
 
 **Presentation Layer (Frontend):**
-- Purpose: React-based SPA providing user interfaces for patient/appointment management and test monitoring
-- Location: `frontend/src/`
-- Contains: React components, pages, Redux store, API client services
-- Depends on: Backend API at `/api/`, Node-RED, Cloud 9 APIs (via proxy)
-- Used by: End users via browser
+- Purpose: React SPA providing UI for Cloud9 API management and test monitoring
+- Location: `frontend/src`
+- Contains: Pages, components, routing, Redux store slices
+- Depends on: Backend API via Axios client, local state in Redux store
+- Used by: End users (administrators, QA engineers)
 
 **API Layer (Backend):**
-- Purpose: Express.js REST API handling business logic, routing, and Cloud 9 integration
-- Location: `backend/src/`
-- Contains: Controllers, routes, middleware, error handling
-- Depends on: Services layer, database, external APIs (Cloud 9, Flowise, Langfuse)
-- Used by: Frontend application, test runners, external systems
+- Purpose: Express REST API serving as proxy to Cloud9 API with caching and tenant isolation
+- Location: `backend/src`
+- Contains: Routes, controllers, middleware, Cloud9 service integrations
+- Depends on: SQLite databases (dentix.db for app data, test-results.db for test data)
+- Used by: Frontend app, test-agent CLI, external clients
 
 **Service Layer (Backend):**
-- Purpose: Business logic, API client implementations, data transformations
-- Location: `backend/src/services/`
-- Contains: Cloud9 client, test execution logic, prompt management, deployment services
-- Depends on: Models, database, external clients (axios, langfuse)
-- Used by: Controllers
+- Purpose: Business logic, external API integration, caching, AI enhancement
+- Location: `backend/src/services`
+- Contains: 37+ services including Cloud9Client, authService, alertEngine, expertAgentService
+- Depends on: Database models, external APIs (Cloud9, Flowise, Langfuse, Anthropic Claude)
+- Used by: Controllers, other services
 
-**Model/Data Layer (Backend):**
-- Purpose: Database schema, ORM-like patterns, data access
-- Location: `backend/src/models/`, `backend/src/database/`
-- Contains: Patient, Appointment, User, Location models; database config
-- Depends on: Better-SQLite3, database connection
+**Data Access Layer:**
+- Purpose: Static model classes providing type-safe database operations
+- Location: `backend/src/models`, `test-agent/src/storage`
+- Contains: Patient, Appointment, Location, Provider, User, Tenant models
+- Depends on: SQLite databases via better-sqlite3
 - Used by: Services and controllers
 
-**State Management (Frontend):**
-- Purpose: Centralized Redux store for UI and domain state
-- Location: `frontend/src/store/slices/`
-- Contains: Auth, reference data, patients, appointments, test execution state
-- Depends on: API services
-- Used by: React components via react-redux
+**Test Orchestration Layer:**
+- Purpose: E2E testing framework with goal-oriented test execution
+- Location: `test-agent/src`
+- Contains: Test runner, Flowise client, Langfuse tracer, analysis engines
+- Depends on: Backend API, Flowise chatflow, Langfuse observability platform
+- Used by: CI/CD pipelines, QA engineers via CLI
+
+**Shared Layer:**
+- Purpose: Common types, services, and utilities shared across backend/frontend/test-agent
+- Location: `shared/`
+- Contains: Langfuse service, LLM provider, Claude CLI service, type definitions
+- Depends on: External SDKs (Anthropic, Langfuse)
+- Used by: All three applications
 
 ## Data Flow
 
-**Patient/Appointment Operations:**
+**Cloud9 API Request Flow:**
 
-1. User interaction in `frontend/src/components/` (e.g., AppointmentWizard)
-2. Component dispatches Redux action from `frontend/src/store/slices/`
-3. Redux thunk calls API client at `frontend/src/services/api/` (e.g., patientApi, appointmentApi)
-4. Frontend makes HTTP request to backend `/api/patients/` or `/api/appointments/`
-5. Express router at `backend/src/routes/patients.ts` or `appointments.ts` routes to controller
-6. Controller at `backend/src/controllers/` calls Cloud 9 service
-7. Cloud 9 service at `backend/src/services/cloud9/client.ts` builds XML request
-8. Service calls `backend/src/services/cloud9/xmlBuilder.ts` to construct XML
-9. Axios makes HTTP GET to Cloud 9 API (production or sandbox)
-10. Response XML parsed by `backend/src/services/cloud9/xmlParser.ts`
-11. Data transformed and optionally cached via `backend/src/models/`
-12. Response returned to frontend
-13. Redux store updated with results
-14. Component re-renders with new data
+1. Frontend dispatches Redux async thunk (e.g., `fetchPatients`)
+2. API client sends HTTP request with JWT token and X-Tenant-Id header
+3. Backend middleware resolves tenant context from header or user's default tenant
+4. Controller validates auth via `requireAdmin()` helper (inline, not middleware)
+5. Service layer fetches data from Cloud9 API using tenant-specific credentials
+6. Cloud9Client builds XML request, sends HTTP POST to Cloud9 endpoint
+7. XML response parsed and cached in SQLite with tenant_id column
+8. Response returned to frontend with `cached: false` flag (caching disabled)
+9. Frontend stores in Redux slice and renders UI
+
+**Multi-Tenant Isolation:**
+
+1. All database tables include `tenant_id` column (added in migration 001)
+2. Middleware reads `X-Tenant-Id` header or JWT payload to resolve tenant
+3. TenantContext attached to `req.tenantContext` with cloud9/flowise/langfuse configs
+4. All model methods require `tenantId` parameter for queries
+5. Frontend TenantSelector component dispatches tenant switch action
+6. API client includes `X-Tenant-Id` header on all subsequent requests
 
 **Test Execution Flow:**
 
-1. User initiates test run from `frontend/src/pages/TestMonitor/`
-2. Frontend calls `/api/test-monitor/runs/start` with test configuration
-3. Controller at `backend/src/controllers/testMonitorController.ts` receives request
-4. Service `backend/src/services/goalTestService.ts` spawns test process via Node.js child process
-5. Test runner in `test-agent/src/tests/` executes test goals against Flowise
-6. Results streamed back via SSE endpoint `/api/test-monitor/execution/:runId/stream`
-7. Real-time conversation/API call updates sent to frontend
-8. Frontend renders live progress via `TestExecutionSlice` Redux state
-9. Results persisted to `test-agent/data/test-results.db` (separate SQLite database)
+1. CLI invokes `test-agent/src/index.ts` with goal test scenario
+2. GoalTestRunner creates Langfuse trace context via `runWithTrace()`
+3. FlowiseClient sends initial message to chatflow with persona/goals
+4. Flowise chatflow invokes Node-RED tools (patient lookup, scheduling)
+5. Node-RED calls backend API endpoints to fetch Cloud9 data
+6. Test agent evaluates conversation against success criteria
+7. Results stored in `test-results.db` with Langfuse trace ID
+8. Backend alertEngine monitors test results and triggers notifications
 
-**State Management Flow:**
+## State Management
 
-1. User logs in on `frontend/src/pages/Auth/LoginPage.tsx`
-2. Credentials sent to `/api/auth/login`
-3. Backend validates against `backend/src/models/User.ts`
-4. JWT token returned and stored in localStorage via `authSlice`
-5. All subsequent API requests include token in Authorization header
-6. Protected routes use `ProtectedRoute` component to guard access
-7. Redux middleware persists auth state for page reloads
+**Frontend State (Redux Toolkit):**
+- Global state managed in `frontend/src/store/store.ts` with 10+ slices
+- Auth state (token, user, tenants) persisted to localStorage
+- Tenant state (current tenant, available tenants) synced with backend
+- UI state (sidebar, toasts, modals) ephemeral
+- Reference data (locations, providers, appointment types) cached in Redux
+- Async operations use createAsyncThunk pattern with pending/fulfilled/rejected states
 
-**Cache Management:**
-
-1. Reference data (locations, providers, appointment types) cached in models
-2. Patient information cached with 60-second TTL in `Cloud9Client` to prevent rate limiting
-3. Caching disabled by default via `ENABLE_CACHING` environment variable
-4. When enabled, data persisted to SQLite models tables via `Model.bulkUpsert()`
-5. Cache cleared on appointment actions (cancel, confirm)
+**Backend State:**
+- Stateless request handling (no session middleware)
+- JWT tokens carry user identity and default tenant
+- Database serves as single source of truth
+- In-memory caching disabled (ENABLE_CACHING=false) for real-time Cloud9 data
+- Patient info cache (60s TTL) prevents rate limiting on repeated lookups
 
 ## Key Abstractions
 
+**TenantContext:**
+- Purpose: Encapsulates all tenant-specific configuration (Cloud9, Flowise, Langfuse)
+- Examples: `backend/src/middleware/tenantContext.ts`
+- Pattern: Request-scoped context object attached to Express req
+
 **Cloud9Client:**
-- Purpose: Encapsulates XML building, HTTP requests, response parsing for Cloud 9 API
-- Examples: `backend/src/services/cloud9/client.ts`, `xmlBuilder.ts`, `xmlParser.ts`
-- Pattern: Procedural-style methods (getLocations, getPatient, setAppointment) that return parsed Cloud9 response objects
-- Usage: Controllers instantiate via `createCloud9Client(environment)` and call methods
+- Purpose: Abstraction over Cloud9 XML-based API with retry logic and rate limit handling
+- Examples: `backend/src/services/cloud9/client.ts`
+- Pattern: Class-based service with environment-aware configuration
 
-**Model Classes:**
-- Purpose: Data access layer abstraction for database operations
-- Examples: `backend/src/models/Patient.ts`, `Appointment.ts`, User.ts
-- Pattern: Static class with methods (getAll, getById, upsert, delete)
-- Usage: Services call Model.method() to access/modify data
+**Model (Static Methods):**
+- Purpose: Type-safe database access without ORM overhead
+- Examples: `PatientModel.getByGuid(tenantId, guid)`, `TenantModel.getById(id)`
+- Pattern: Static class methods returning typed results from prepared statements
 
-**Redux Slices:**
-- Purpose: Encapsulate domain state shape and async thunk actions
-- Examples: `frontend/src/store/slices/patientSlice.ts`, `appointmentSlice.ts`
-- Pattern: Slice creator with reducers and async thunks using createAsyncThunk
-- Usage: Components dispatch actions and select state via useAppSelector, useAppDispatch hooks
+**Redux Slice:**
+- Purpose: Domain-specific state management with actions and reducers
+- Examples: `authSlice`, `tenantSlice`, `testMonitorSlice`
+- Pattern: RTK createSlice with extraReducers for async thunks
 
-**API Services (Frontend):**
-- Purpose: Abstraction over axios for API endpoints
-- Examples: `frontend/src/services/api/patientApi.ts`, `appointmentApi.ts`, `testMonitorApi.ts`
-- Pattern: Named exports for get/post/put operations (patientApi.getPatients, appointmentApi.createAppointment)
-- Usage: Redux thunks call these services; components never call HTTP directly
-
-**Controllers:**
-- Purpose: HTTP request/response handling and orchestration
-- Examples: `backend/src/controllers/patientController.ts`, `appointmentController.ts`
-- Pattern: Exported async functions wrapped in asyncHandler middleware for error catching
-- Usage: Routes map HTTP verbs to controller functions
+**GoalOrientedTestCase:**
+- Purpose: Declarative test definition with persona, goals, and success criteria
+- Examples: Tests in `test-agent/src/tests/scenarios/goal-happy-path.ts`
+- Pattern: TypeScript interface with JSON-serializable config
 
 ## Entry Points
 
 **Backend Server:**
 - Location: `backend/src/server.ts`
-- Triggers: `npm run dev` in backend directory
-- Responsibilities:
-  - Loads environment variables from `.env`
-  - Initializes database connection with WAL mode
-  - Seeds master admin account
-  - Starts Express server on PORT (default 3002) and HOST (default 0.0.0.0)
-  - Sets up graceful shutdown handlers
-  - Initializes test run cleanup service
+- Triggers: `npm run dev` or `node dist/server.js`
+- Responsibilities: Initialize database, run migrations, seed admin, start Express server on port 3002
 
-**Frontend Application:**
+**Frontend SPA:**
 - Location: `frontend/src/main.tsx`
-- Triggers: `npm run dev` in frontend directory (Vite server on port 5174)
-- Responsibilities:
-  - Mounts React app to DOM root
-  - Wraps app in Redux Provider and ThemeProvider
-  - Initializes auth state on load
-  - Sets up protected routes and navigation
+- Triggers: Browser loads `index.html`, Vite dev server at port 5174
+- Responsibilities: Mount React app, initialize Redux Provider and ThemeProvider
 
-**Express Application:**
-- Location: `backend/src/app.ts`
-- Triggers: Imported by server.ts
-- Responsibilities:
-  - Creates Express instance
-  - Registers global middleware (CORS, body parsers, request logging)
-  - Mounts all route modules (reference, patients, appointments, auth, admin, testMonitor, etc.)
-  - Registers error handlers
+**Test Agent CLI:**
+- Location: `test-agent/src/index.ts`
+- Triggers: `npm run start` with CLI arguments
+- Responsibilities: Parse commands (run/diagnose/report), execute tests, generate reports
 
-**Router Modules:**
-- Location: `backend/src/routes/*.ts` (appointments.ts, patients.ts, reference.ts, testMonitor.ts, etc.)
-- Responsibilities: Define HTTP endpoints and map to controller functions
+**Application Router:**
+- Location: `frontend/src/routes/AppRouter.tsx`
+- Triggers: React Router initialization
+- Responsibilities: Route protection, layout nesting, auth state initialization
 
 ## Error Handling
 
-**Strategy:** Centralized middleware-based approach with custom error class.
+**Strategy:** Centralized error middleware with typed error responses and Langfuse observability
 
 **Patterns:**
-- Custom `AppError` class in `backend/src/middleware/errorHandler.ts` with statusCode property
-- `asyncHandler` wrapper function catches async errors and passes to global handler
-- Global error middleware logs error and returns JSON response with status code
-- 404 handler returns 404 for unmatched routes
-- Error responses include stack trace only in development mode
-
-**Example:**
-```typescript
-// Controller
-export const getPatient = asyncHandler(async (req, res) => {
-  if (!patientGuid) {
-    throw new AppError('Patient GUID required', 400);
-  }
-  // ...
-});
-
-// Middleware catches and handles error response
-```
+- Controllers wrapped in `asyncHandler()` for consistent error catching
+- Cloud9Client retries on transient failures (timeout, rate limit)
+- Frontend API client intercepts 401/403 and redirects to login
+- Langfuse traces capture errors with severity scoring (CRITICAL/HIGH/MEDIUM/LOW)
+- AlertEngine monitors error patterns and triggers notifications
+- Rate limit errors (Cloud9 error code 8) logged to `backend/logs/rate-limit-errors.md`
 
 ## Cross-Cutting Concerns
 
-**Logging:**
-- Winston logger in `backend/src/utils/logger.ts` with categorized loggers (httpRequest, httpResponse, cloud9Request, etc.)
-- Logs to console (development) and file (production-ready)
-- Request/response middleware logs all HTTP traffic with duration
+**Logging:** Winston logger with structured logs (JSON format), separate loggers for HTTP, DB, Cloud9 operations
 
-**Validation:**
-- Zod schema validation in frontend (forms with react-hook-form)
-- Backend validates environment values via `isValidEnvironment()` checks
-- Cloud 9 API validation via XML parsing (any parse errors thrown)
+**Validation:** Zod schemas for API request/response validation, TypeScript strict mode for compile-time checks
 
-**Authentication:**
-- JWT tokens issued by `/api/auth/login` endpoint
-- Tokens verified in `authSlice` middleware on app load
-- Protected routes use `ProtectedRoute` component checking auth state
-- Backend controllers can check JWT via request header (if authenticated routes added)
+**Authentication:** JWT tokens (8hr expiry) with bcryptjs password hashing, inline auth checks in controllers via `requireAdmin()`
 
-**CORS:**
-- Configured in `backend/src/middleware/cors.ts`
-- Allows frontend development server (localhost:5174) and production origins
-- Vite dev server proxies API requests to backend to avoid CORS issues in development
+**Tenant Isolation:** Middleware resolves tenant from X-Tenant-Id header, all queries filtered by tenant_id
 
-**Environment Management:**
-- Cloud 9 environment (sandbox/production) specified via:
-  - `X-Environment` header
-  - `environment` query parameter
-  - Defaults to sandbox
-- Validated in controllers before use
+**AI Observability:** Langfuse tracing for all test executions, chatbot conversations, and AI-generated fixes
+
+**Caching:** Disabled by default (ENABLE_CACHING=false), infrastructure exists but database writes commented out
+
+**Version Management:** V1 files in `docs/v1/` synced to Langfuse and SQLite, version history tracked in `prompt_version_history` table
 
 ---
 
-*Architecture analysis: 2026-02-02*
+*Architecture analysis: 2026-02-09*
