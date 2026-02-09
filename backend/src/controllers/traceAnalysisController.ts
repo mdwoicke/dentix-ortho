@@ -121,6 +121,221 @@ interface CallReport {
   issues: string[];
 }
 
+// ============================================================================
+// INTENT VS DELIVERY COMPARISON TYPES
+// ============================================================================
+
+interface ChildComparison {
+  childName: string;
+  requested: {
+    name: string;
+    date: string | null;
+  };
+  delivered: {
+    appointmentBooked: boolean;
+    appointmentGUID: string | null;
+    actualSlot: string | null;
+    error: string | null;
+  };
+  status: 'match' | 'date_mismatch' | 'failed' | 'queued' | 'not_attempted';
+  discrepancy: string | null;
+}
+
+interface TransferComparison {
+  requested: boolean;
+  delivered: boolean;
+  status: 'match' | 'mismatch';
+}
+
+interface IntentDeliveryComparison {
+  children: ChildComparison[];
+  transfer: TransferComparison | null;
+  overallStatus: 'match' | 'partial' | 'mismatch' | 'pending';
+}
+
+/**
+ * Fuzzy name matching: checks if two names refer to the same person
+ * Handles case insensitivity and partial matches
+ */
+function fuzzyNameMatch(name1: string | null, name2: string | null): boolean {
+  if (!name1 || !name2) return false;
+  const n1 = name1.toLowerCase().trim();
+  const n2 = name2.toLowerCase().trim();
+  // Exact match
+  if (n1 === n2) return true;
+  // One contains the other (handles "Johnny" vs "Johnny Smith")
+  if (n1.includes(n2) || n2.includes(n1)) return true;
+  // First name match (split by space and compare first parts)
+  const parts1 = n1.split(/\s+/);
+  const parts2 = n2.split(/\s+/);
+  if (parts1[0] === parts2[0]) return true;
+  return false;
+}
+
+/**
+ * Build a comparison between caller intent and system delivery
+ */
+function buildIntentDeliveryComparison(
+  intent: CallerIntent | null,
+  callReport: CallReport,
+  hasTransfer: boolean
+): IntentDeliveryComparison {
+  const comparison: IntentDeliveryComparison = {
+    children: [],
+    transfer: null,
+    overallStatus: 'match',
+  };
+
+  // Handle booking intent comparison
+  if (intent?.bookingDetails?.childNames && intent.bookingDetails.childNames.length > 0) {
+    const requestedChildren = intent.bookingDetails.childNames;
+    const requestedDates = intent.bookingDetails.requestedDates || [];
+
+    for (const requestedName of requestedChildren) {
+      // Find matching booking result (fuzzy match on name)
+      const matchingResult = callReport.bookingResults.find(br =>
+        fuzzyNameMatch(br.childName, requestedName)
+      );
+
+      // Get the first requested date for this child (if any)
+      const requestedDate = requestedDates.length > 0 ? requestedDates[0] : null;
+
+      if (!matchingResult) {
+        // Child mentioned but no booking attempt found
+        comparison.children.push({
+          childName: requestedName,
+          requested: { name: requestedName, date: requestedDate },
+          delivered: {
+            appointmentBooked: false,
+            appointmentGUID: null,
+            actualSlot: null,
+            error: 'No booking attempt found for this child',
+          },
+          status: 'not_attempted',
+          discrepancy: `Caller mentioned ${requestedName} but no booking was attempted`,
+        });
+      } else {
+        // Found a matching booking result
+        const isBooked = matchingResult.booked;
+        const isQueued = matchingResult.queued && !matchingResult.booked;
+        const actualSlot = matchingResult.slot;
+
+        let status: ChildComparison['status'] = 'match';
+        let discrepancy: string | null = null;
+
+        if (!isBooked && !isQueued) {
+          status = 'failed';
+          discrepancy = matchingResult.error || 'Booking failed';
+        } else if (isQueued) {
+          status = 'queued';
+          discrepancy = 'Booking was queued for async processing';
+        } else if (isBooked && requestedDate && actualSlot) {
+          // Check if the booked date matches the requested date
+          const requestedDateLower = requestedDate.toLowerCase();
+          const actualSlotLower = actualSlot.toLowerCase();
+
+          // Simple date comparison - extract date portion
+          const requestedDateParts = requestedDateLower.match(/(\d{1,2})[\/\-](\d{1,2})|(\w+)\s+(\d{1,2})/);
+          const actualDateParts = actualSlotLower.match(/(\d{1,2})[\/\-](\d{1,2})|(\w+)\s+(\d{1,2})/);
+
+          if (requestedDateParts && actualDateParts) {
+            const reqMatch = requestedDateParts[0];
+            const actMatch = actualDateParts[0];
+            if (reqMatch !== actMatch && !actualSlotLower.includes(requestedDateLower)) {
+              status = 'date_mismatch';
+              discrepancy = `Requested: ${requestedDate}, Got: ${actualSlot}`;
+            }
+          }
+        }
+
+        comparison.children.push({
+          childName: requestedName,
+          requested: { name: requestedName, date: requestedDate },
+          delivered: {
+            appointmentBooked: isBooked,
+            appointmentGUID: matchingResult.appointmentGUID,
+            actualSlot: actualSlot,
+            error: matchingResult.error,
+          },
+          status,
+          discrepancy,
+        });
+      }
+    }
+
+    // Also check for children in bookingResults that weren't in the intent
+    for (const br of callReport.bookingResults) {
+      const alreadyCompared = comparison.children.some(c =>
+        fuzzyNameMatch(c.childName, br.childName)
+      );
+      if (!alreadyCompared && br.childName) {
+        comparison.children.push({
+          childName: br.childName,
+          requested: { name: br.childName, date: null },
+          delivered: {
+            appointmentBooked: br.booked,
+            appointmentGUID: br.appointmentGUID,
+            actualSlot: br.slot,
+            error: br.error,
+          },
+          status: br.booked ? 'match' : br.queued ? 'queued' : 'failed',
+          discrepancy: null,
+        });
+      }
+    }
+  } else if (callReport.bookingResults.length > 0) {
+    // No intent booking details but we have booking results - add them all
+    for (const br of callReport.bookingResults) {
+      comparison.children.push({
+        childName: br.childName || 'Unknown',
+        requested: { name: br.childName || 'Unknown', date: null },
+        delivered: {
+          appointmentBooked: br.booked,
+          appointmentGUID: br.appointmentGUID,
+          actualSlot: br.slot,
+          error: br.error,
+        },
+        status: br.booked ? 'match' : br.queued ? 'queued' : 'failed',
+        discrepancy: null,
+      });
+    }
+  }
+
+  // Handle transfer comparison
+  // Note: 'info_lookup' intent type may indicate the caller wanted information rather than booking,
+  // which often results in transfer to a human agent
+  const transferExpected = intent?.type === 'info_lookup';
+  if (transferExpected || hasTransfer) {
+    comparison.transfer = {
+      requested: transferExpected,
+      delivered: hasTransfer,
+      status: transferExpected === hasTransfer ? 'match' : 'mismatch',
+    };
+  }
+
+  // Calculate overall status
+  if (comparison.children.length === 0 && !comparison.transfer) {
+    comparison.overallStatus = 'match'; // Nothing to compare
+  } else {
+    const hasFailures = comparison.children.some(c => c.status === 'failed' || c.status === 'not_attempted');
+    const hasMismatches = comparison.children.some(c => c.status === 'date_mismatch');
+    const hasQueued = comparison.children.some(c => c.status === 'queued');
+    const transferMismatch = comparison.transfer?.status === 'mismatch';
+
+    if (hasFailures || transferMismatch) {
+      comparison.overallStatus = 'mismatch';
+    } else if (hasMismatches) {
+      comparison.overallStatus = 'partial';
+    } else if (hasQueued) {
+      comparison.overallStatus = 'pending';
+    } else {
+      comparison.overallStatus = 'match';
+    }
+  }
+
+  return comparison;
+}
+
 interface CurrentBookingData {
   parent: {
     patientGUID: string;
@@ -145,7 +360,7 @@ interface CurrentBookingData {
   errors: string[];
 }
 
-function buildCallReport(_traces: any[], observations: any[], transcript: any[]): CallReport {
+function buildCallReport(_traces: any[], observations: any[], transcript: any[], sessionId?: string): CallReport {
   const report: CallReport = {
     callerName: null, callerPhone: null, callerDOB: null, callerEmail: null,
     parentPatientGUID: null,
@@ -257,6 +472,167 @@ function buildCallReport(_traces: any[], observations: any[], transcript: any[])
     // Extract location from clinic_info
     if (action === 'clinic_info' && output.locationName) {
       report.location = `${output.locationName}${output.address ? ', ' + output.address : ''}`;
+    }
+
+    // Extract patient GUIDs from lookup action (even if no booking was attempted)
+    // This allows booking corrections when we have a GUID but booking failed/never happened
+    if (action === 'lookup' && output.success) {
+      // Extract parent info if available
+      if (output.parent?.patientGUID && !report.parentPatientGUID) {
+        report.parentPatientGUID = output.parent.patientGUID;
+        if (output.parent.firstName) {
+          report.callerName = `${output.parent.firstName} ${output.parent.lastName || ''}`.trim();
+        }
+        if (output.parent.dob) report.callerDOB = output.parent.dob;
+        if (output.parent.email) report.callerEmail = output.parent.email;
+        if (output.parent.phone) report.callerPhone = output.parent.phone;
+      }
+
+      // Extract children from lookup results
+      const lookupChildren = output.children || output.patients || [];
+      for (const child of lookupChildren) {
+        if (!child.patientGUID) continue;
+
+        // Check if this child is already in bookingResults
+        const existingResult = report.bookingResults.find(br => br.patientGUID === child.patientGUID);
+        if (existingResult) continue;
+
+        // Add child to bookingResults with no booking (allows manual booking)
+        const childName = `${child.firstName || ''} ${child.lastName || ''}`.trim();
+        report.children.push({ name: childName, dob: child.dob || null });
+        report.bookingResults.push({
+          childName: child.firstName || childName || null,
+          patientGUID: child.patientGUID,
+          appointmentGUID: null,
+          booked: false,
+          queued: false,
+          error: 'No booking attempted - available for manual booking',
+          slot: null,
+        });
+      }
+
+      // Also check for family members in different formats
+      if (output.family?.children) {
+        for (const child of output.family.children) {
+          if (!child.patientGUID) continue;
+          const existingResult = report.bookingResults.find(br => br.patientGUID === child.patientGUID);
+          if (existingResult) continue;
+
+          const childName = `${child.firstName || ''} ${child.lastName || ''}`.trim();
+          report.children.push({ name: childName, dob: child.dob || null });
+          report.bookingResults.push({
+            childName: child.firstName || childName || null,
+            patientGUID: child.patientGUID,
+            appointmentGUID: null,
+            booked: false,
+            queued: false,
+            error: 'No booking attempted - available for manual booking',
+            slot: null,
+          });
+        }
+      }
+    }
+  }
+
+  // NEW: Extract booking results from LLM PAYLOAD outputs (for cases where book_child observation wasn't captured)
+  // This handles sibling bookings where appointmentGUIDs appear in the PAYLOAD as Child1_appointmentGUID, Child2_appointmentGUID
+  if (report.bookingResults.length === 0) {
+    for (const obs of observations) {
+      const output = typeof obs.output === 'string' ? obs.output : JSON.stringify(obs.output || '');
+
+      // Look for Child_appointmentGUID patterns in PAYLOAD
+      const child1GuidMatch = output.match(/Child1_appointmentGUID["']?\s*[:=]\s*["']?([0-9A-Fa-f-]{36})/);
+      const child2GuidMatch = output.match(/Child2_appointmentGUID["']?\s*[:=]\s*["']?([0-9A-Fa-f-]{36})/);
+      const child1PatientMatch = output.match(/Child1_patientGUID["']?\s*[:=]\s*["']?([0-9A-Fa-f-]{36})/);
+      const child2PatientMatch = output.match(/Child2_patientGUID["']?\s*[:=]\s*["']?([0-9A-Fa-f-]{36})/);
+      const child1NameMatch = output.match(/Child1_Name["']?\s*[:=]\s*["']?([^"'\n,}]+)/);
+      const child2NameMatch = output.match(/Child2_Name["']?\s*[:=]\s*["']?([^"'\n,}]+)/);
+      const child1SlotMatch = output.match(/Child1_startTime["']?\s*[:=]\s*["']?([^"'\n,}]+)/);
+      const child2SlotMatch = output.match(/Child2_startTime["']?\s*[:=]\s*["']?([^"'\n,}]+)/);
+
+      if (child1GuidMatch) {
+        const existingResult = report.bookingResults.find(br => br.appointmentGUID === child1GuidMatch[1]);
+        if (!existingResult) {
+          report.bookingResults.push({
+            childName: child1NameMatch ? child1NameMatch[1].trim() : 'Child 1',
+            patientGUID: child1PatientMatch ? child1PatientMatch[1] : null,
+            appointmentGUID: child1GuidMatch[1],
+            slot: child1SlotMatch ? child1SlotMatch[1].trim() : null,
+            booked: true,
+            queued: false,
+            error: null,
+          });
+        }
+      }
+
+      if (child2GuidMatch) {
+        const existingResult = report.bookingResults.find(br => br.appointmentGUID === child2GuidMatch[1]);
+        if (!existingResult) {
+          report.bookingResults.push({
+            childName: child2NameMatch ? child2NameMatch[1].trim() : 'Child 2',
+            patientGUID: child2PatientMatch ? child2PatientMatch[1] : null,
+            appointmentGUID: child2GuidMatch[1],
+            slot: child2SlotMatch ? child2SlotMatch[1].trim() : null,
+            booked: true,
+            queued: false,
+            error: null,
+          });
+        }
+      }
+
+      // If we found booking results from PAYLOAD, break out of the loop
+      if (report.bookingResults.length > 0) break;
+    }
+  }
+
+  // FALLBACK: Check prod_test_records table for booking data when observations don't contain the GUIDs
+  // This handles cases where the booking succeeded but the appointment GUIDs weren't logged to Langfuse
+  if (report.bookingResults.length === 0 && sessionId) {
+    try {
+      const testDb = new BetterSqlite3(path.join(__dirname, '../../test-agent/data/test-results.db'));
+      const bookingRecords = testDb.prepare(`
+        SELECT patient_guid, appointment_guid, patient_first_name, patient_last_name,
+               appointment_datetime, is_child, status
+        FROM prod_test_records
+        WHERE session_id = ? AND record_type = 'appointment' AND appointment_guid IS NOT NULL
+      `).all(sessionId) as Array<{
+        patient_guid: string;
+        appointment_guid: string;
+        patient_first_name: string;
+        patient_last_name: string;
+        appointment_datetime: string;
+        is_child: number;
+        status: string;
+      }>;
+      testDb.close();
+
+      for (const rec of bookingRecords) {
+        const childName = `${rec.patient_first_name || ''} ${rec.patient_last_name || ''}`.trim();
+        report.bookingResults.push({
+          childName: childName || 'Unknown',
+          patientGUID: rec.patient_guid,
+          appointmentGUID: rec.appointment_guid,
+          slot: rec.appointment_datetime,
+          booked: rec.status === 'active',
+          queued: false,
+          error: null,
+        });
+      }
+
+      // Also populate children array if empty
+      if (report.children.length === 0 && bookingRecords.length > 0) {
+        for (const rec of bookingRecords) {
+          if (rec.is_child) {
+            report.children.push({
+              name: `${rec.patient_first_name || ''} ${rec.patient_last_name || ''}`.trim(),
+              dob: null,
+            });
+          }
+        }
+      }
+    } catch (dbError) {
+      // Silently fail - this is a fallback mechanism
+      console.error('Failed to check prod_test_records for booking data:', dbError);
     }
   }
 
@@ -440,7 +816,7 @@ export async function analyzeSession(req: Request, res: Response): Promise<void>
           // Rebuild transcript from traces
           const transcript = buildTranscript(sessionData.traces, sessionData.observations);
 
-          const callReport = buildCallReport(sessionData.traces, sessionData.observations, transcript);
+          const callReport = buildCallReport(sessionData.traces, sessionData.observations, transcript, sessionId);
 
           // Include cached verification if available
           let verification: FulfillmentVerdict | null = null;
@@ -475,6 +851,16 @@ export async function analyzeSession(req: Request, res: Response): Promise<void>
             }
           }
 
+          // Build intent vs delivery comparison
+          const cachedIntentForComparison: CallerIntent | null = cached.caller_intent_type ? {
+            type: cached.caller_intent_type,
+            confidence: cached.caller_intent_confidence,
+            summary: cached.caller_intent_summary,
+            bookingDetails: cached.booking_details_json ? JSON.parse(cached.booking_details_json) : undefined,
+          } : null;
+          const hasTransfer = sessionData.traces.some((t: any) => t.has_transfer === 1);
+          const intentDeliveryComparison = buildIntentDeliveryComparison(cachedIntentForComparison, callReport, hasTransfer);
+
           res.json({
             sessionId,
             traces,
@@ -488,6 +874,7 @@ export async function analyzeSession(req: Request, res: Response): Promise<void>
               bookingDetails: cached.booking_details_json ? JSON.parse(cached.booking_details_json) : undefined,
             },
             toolSequence: cached.tool_sequence_json ? JSON.parse(cached.tool_sequence_json) : null,
+            intentDeliveryComparison,
             ...(verify && verification ? { verification } : {}),
             analyzedAt: cached.analyzed_at,
             cached: true,
@@ -539,7 +926,7 @@ export async function analyzeSession(req: Request, res: Response): Promise<void>
     // Build transcript from all traces
     const transcript = buildTranscript(sessionData.traces, sessionData.observations);
 
-    const callReport = buildCallReport(sessionData.traces, sessionData.observations, transcript);
+    const callReport = buildCallReport(sessionData.traces, sessionData.observations, transcript, sessionId);
 
     // Classify intent
     let intent: CallerIntent | null = null;
@@ -606,6 +993,10 @@ export async function analyzeSession(req: Request, res: Response): Promise<void>
       }
     }
 
+    // Build intent vs delivery comparison
+    const hasTransfer = sessionData.traces.some((t: any) => t.has_transfer === 1);
+    const intentDeliveryComparison = buildIntentDeliveryComparison(intent, callReport, hasTransfer);
+
     res.json({
       sessionId,
       traces,
@@ -614,6 +1005,7 @@ export async function analyzeSession(req: Request, res: Response): Promise<void>
       currentBookingData,
       intent,
       toolSequence,
+      intentDeliveryComparison,
       ...(verify && verification ? { verification } : {}),
       analyzedAt,
       cached: false,

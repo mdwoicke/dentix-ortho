@@ -21,7 +21,6 @@ import {
   getProductionTrace,
   getProductionTraces,
   importProductionTraces,
-  rebuildProductionSessions,
 } from '../../services/api/testMonitorApi';
 import type { MonitoringResult } from '../../services/api/testMonitorApi';
 import { getLangfuseConfigs, getAppSettings } from '../../services/api/appSettingsApi';
@@ -162,6 +161,47 @@ const US_TIMEZONES: TimezoneOption[] = [
 ];
 
 const TIMEZONE_STORAGE_KEY = 'productionCalls_timezone';
+const AUTO_REFRESH_ENABLED_KEY = 'productionCalls_autoRefreshEnabled';
+const AUTO_REFRESH_INTERVAL_KEY = 'productionCalls_autoRefreshInterval';
+
+const AUTO_REFRESH_INTERVALS = [
+  { value: 15, label: '15s' },
+  { value: 30, label: '30s' },
+  { value: 60, label: '1m' },
+  { value: 120, label: '2m' },
+  { value: 300, label: '5m' },
+  { value: 600, label: '10m' },
+  { value: -1, label: 'Custom' },
+];
+
+function getStoredAutoRefreshEnabled(): boolean {
+  try {
+    const stored = localStorage.getItem(AUTO_REFRESH_ENABLED_KEY);
+    return stored === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function getStoredAutoRefreshInterval(): number {
+  try {
+    const stored = localStorage.getItem(AUTO_REFRESH_INTERVAL_KEY);
+    if (stored) {
+      const num = parseInt(stored, 10);
+      // Allow any positive number (for custom intervals) or preset values
+      if (num > 0) {
+        return num;
+      }
+    }
+  } catch {
+    // Ignore localStorage errors
+  }
+  return 30; // Default 30 seconds
+}
+
+function isCustomInterval(interval: number): boolean {
+  return !AUTO_REFRESH_INTERVALS.some(i => i.value === interval && i.value !== -1);
+}
 
 function getStoredTimezone(): string {
   try {
@@ -812,7 +852,6 @@ export default function CallTracePage() {
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [rebuildingSessions, setRebuildingessions] = useState(false);
   const [hasImported, setHasImported] = useState(true); // Auto-load cached data on page load
 
   // Filter state - default to last 24 hours
@@ -845,6 +884,17 @@ export default function CallTracePage() {
 
   // Langfuse project ID (for URL linking)
   const [langfuseProjectId, setLangfuseProjectId] = useState<string | undefined>(undefined);
+
+  // Auto-refresh state
+  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState<boolean>(getStoredAutoRefreshEnabled);
+  const [autoRefreshInterval, setAutoRefreshInterval] = useState<number>(getStoredAutoRefreshInterval);
+  const [autoRefreshCountdown, setAutoRefreshCountdown] = useState<number>(0);
+  const [autoRefreshing, setAutoRefreshing] = useState<boolean>(false);
+  const [customIntervalInput, setCustomIntervalInput] = useState<string>(() => {
+    const stored = getStoredAutoRefreshInterval();
+    return isCustomInterval(stored) ? String(stored) : '180';
+  });
+  const [showCustomInput, setShowCustomInput] = useState<boolean>(() => isCustomInterval(getStoredAutoRefreshInterval()));
 
   // Check if any filters are active
   const hasActiveFilters = filterFromDate || filterToDate || filterSessionId;
@@ -1036,6 +1086,39 @@ export default function CallTracePage() {
     // insights view doesn't need to load data here - component handles its own loading
   }, [viewMode, loadSessions, loadTraces, loadMonitoringResults]);
 
+  // Silent auto-import for auto-refresh (doesn't block UI like full import)
+  const handleAutoRefreshImport = useCallback(async () => {
+    if (!selectedConfigId || !lastImportDate || importing || autoRefreshing) return;
+
+    try {
+      setAutoRefreshing(true);
+      const result = await importProductionTraces({
+        configId: selectedConfigId,
+        fromDate: lastImportDate,
+        refreshObservations: true,
+      });
+
+      if (result.status === 'completed') {
+        // Only refresh UI if new traces were actually imported (optimization)
+        if (result.tracesImported > 0) {
+          // Reload data based on current view mode (same as Import Latest)
+          await loadData();
+          // Update import history to show the new import
+          const history = await getImportHistory(selectedConfigId, 5);
+          setImportHistory(history);
+        }
+        // Always update last import date so next refresh uses correct fromDate
+        const date = await getLastImportDate(selectedConfigId);
+        setLastImportDate(date);
+      }
+      // Silently ignore errors during auto-refresh to avoid disrupting the user
+    } catch {
+      // Silent fail for auto-refresh - don't show errors to user
+    } finally {
+      setAutoRefreshing(false);
+    }
+  }, [selectedConfigId, lastImportDate, importing, autoRefreshing, loadData]);
+
   // Handler for drill-down from insights view
   const handleViewIssueSessions = useCallback((sessionIds: string[], issueType: string, description: string) => {
     setFilteredSessionIds(sessionIds);
@@ -1057,24 +1140,6 @@ export default function CallTracePage() {
     setActiveIssueDescription(null);
   }, []);
 
-  // Rebuild sessions from existing traces
-  const handleRebuildSessions = async () => {
-    if (!selectedConfigId) return;
-
-    try {
-      setRebuildingessions(true);
-      setError(null);
-      const result = await rebuildProductionSessions(selectedConfigId);
-      // Reload sessions
-      await loadSessions();
-      alert(`Rebuilt ${result.sessionsCreated} sessions`);
-    } catch (err: any) {
-      setError(err.message || 'Failed to rebuild sessions');
-    } finally {
-      setRebuildingessions(false);
-    }
-  };
-
   // Clear all filters
   const clearFilters = () => {
     setFilterFromDate('');
@@ -1086,10 +1151,13 @@ export default function CallTracePage() {
     setPage(0);
   };
 
-  // Apply filters (reset to page 0)
+  // Apply filters - useEffect handles refetch via dependency chain
+  // (filterFromDate → loadSessions → loadData → useEffect)
+  // We use a refresh counter to force refetch even when filters haven't changed
+  const [refreshCounter, setRefreshCounter] = useState(0);
   const applyFilters = () => {
     setPage(0);
-    loadData();
+    setRefreshCounter(c => c + 1);
   };
 
   // Load data when config, page, or view mode changes (only after initial import)
@@ -1097,7 +1165,8 @@ export default function CallTracePage() {
     if (hasImported) {
       loadData();
     }
-  }, [loadData, hasImported]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadData, hasImported, refreshCounter]);
 
   // Auto-load monitoring results when filters change
   useEffect(() => {
@@ -1117,6 +1186,47 @@ export default function CallTracePage() {
     setMonitoringSearchDebounce(timer);
     return () => clearTimeout(timer);
   }, [monitoringSessionSearch]);
+
+  // Auto-refresh polling - imports new traces from Langfuse like "Import Latest"
+  useEffect(() => {
+    if (!autoRefreshEnabled || !hasImported || !selectedConfigId || !lastImportDate) {
+      setAutoRefreshCountdown(0);
+      return;
+    }
+
+    // Set initial countdown
+    setAutoRefreshCountdown(autoRefreshInterval);
+
+    // Countdown timer (updates every second)
+    const countdownId = setInterval(() => {
+      setAutoRefreshCountdown(prev => {
+        if (prev <= 1) {
+          return autoRefreshInterval; // Reset countdown
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    // Import timer - actually imports new traces from Langfuse
+    const refreshId = setInterval(() => {
+      handleAutoRefreshImport();
+    }, autoRefreshInterval * 1000);
+
+    return () => {
+      clearInterval(countdownId);
+      clearInterval(refreshId);
+    };
+  }, [autoRefreshEnabled, autoRefreshInterval, handleAutoRefreshImport, hasImported, selectedConfigId, lastImportDate]);
+
+  // Persist auto-refresh preferences
+  useEffect(() => {
+    try {
+      localStorage.setItem(AUTO_REFRESH_ENABLED_KEY, String(autoRefreshEnabled));
+      localStorage.setItem(AUTO_REFRESH_INTERVAL_KEY, String(autoRefreshInterval));
+    } catch {
+      // Ignore localStorage errors
+    }
+  }, [autoRefreshEnabled, autoRefreshInterval]);
 
   // Reset page when view mode changes
   useEffect(() => {
@@ -1301,19 +1411,106 @@ export default function CallTracePage() {
               Refresh
             </Button>
 
-            {/* Rebuild Sessions (for existing data) */}
-            {viewMode === 'sessions' && (
-              <Button
-                variant="secondary"
-                onClick={handleRebuildSessions}
-                disabled={rebuildingSessions || !selectedConfigId}
-                className="flex items-center gap-2 text-xs"
-                title="Rebuild session groups from existing traces"
+            {/* Auto-Refresh Controls */}
+            <div className="flex items-center gap-1.5 ml-2 pl-2 border-l border-gray-300 dark:border-gray-600">
+              {/* Toggle */}
+              <span className="text-xs text-gray-500 dark:text-gray-400">Auto</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={autoRefreshEnabled}
+                onClick={() => setAutoRefreshEnabled(!autoRefreshEnabled)}
+                className={`relative inline-flex h-4 w-7 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 ${
+                  autoRefreshEnabled ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'
+                }`}
               >
-                {rebuildingSessions ? <Spinner size="sm" /> : null}
-                Rebuild Sessions
-              </Button>
-            )}
+                <span
+                  className={`pointer-events-none inline-block h-3 w-3 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                    autoRefreshEnabled ? 'translate-x-3' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+
+              {/* Interval Selector & Countdown */}
+              {autoRefreshEnabled && (
+                <>
+                  <select
+                    value={showCustomInput ? -1 : autoRefreshInterval}
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      if (val === -1) {
+                        setShowCustomInput(true);
+                        const customVal = parseInt(customIntervalInput, 10);
+                        if (customVal > 0) {
+                          setAutoRefreshInterval(customVal);
+                        }
+                      } else {
+                        setShowCustomInput(false);
+                        setAutoRefreshInterval(val);
+                      }
+                    }}
+                    className="text-xs px-1.5 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  >
+                    {AUTO_REFRESH_INTERVALS.map(opt => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+
+                  {/* Custom Interval Input */}
+                  {showCustomInput && (
+                    <>
+                      <input
+                        type="number"
+                        min="10"
+                        max="3600"
+                        value={customIntervalInput}
+                        onChange={(e) => setCustomIntervalInput(e.target.value)}
+                        onBlur={() => {
+                          const val = parseInt(customIntervalInput, 10);
+                          if (val >= 10 && val <= 3600) {
+                            setAutoRefreshInterval(val);
+                          } else {
+                            setCustomIntervalInput(String(autoRefreshInterval));
+                          }
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            const val = parseInt(customIntervalInput, 10);
+                            if (val >= 10 && val <= 3600) {
+                              setAutoRefreshInterval(val);
+                            }
+                          }
+                        }}
+                        className="w-14 text-xs px-1.5 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        placeholder="sec"
+                      />
+                      <span className="text-xs text-gray-400">s</span>
+                    </>
+                  )}
+
+                  {/* Countdown/Status Indicator */}
+                  {autoRefreshing ? (
+                    <div className="flex items-center gap-1 text-xs text-blue-500">
+                      <Spinner size="sm" />
+                      <span>importing</span>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400 tabular-nums">
+                      <span className="relative flex h-1.5 w-1.5">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-green-500"></span>
+                      </span>
+                      <span>
+                        {autoRefreshCountdown >= 60
+                          ? `${Math.floor(autoRefreshCountdown / 60)}:${String(autoRefreshCountdown % 60).padStart(2, '0')}`
+                          : `${autoRefreshCountdown}s`
+                        }
+                      </span>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
           </div>
 
           {/* View Mode Toggle and Timezone */}
@@ -1457,26 +1654,29 @@ export default function CallTracePage() {
 
             <div className="flex items-center gap-2">
               {/* Quick filter buttons */}
-              <button
-                onClick={() => {
-                  setFilterFromDate(getDateDaysAgo(1));
-                  setFilterToDate('');
-                  applyFilters();
-                }}
-                className="px-2 py-1 text-xs bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 rounded hover:bg-blue-200 dark:hover:bg-blue-800"
-              >
-                Last 24h
-              </button>
-              <button
-                onClick={() => {
-                  setFilterFromDate(getDateDaysAgo(7));
-                  setFilterToDate('');
-                  applyFilters();
-                }}
-                className="px-2 py-1 text-xs bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-600"
-              >
-                Last 7d
-              </button>
+              {[
+                { label: 'Last 24h', days: 1 },
+                { label: 'Last 7d', days: 7 },
+              ].map(({ label, days }) => {
+                const isActive = filterFromDate === getDateDaysAgo(days) && !filterToDate;
+                return (
+                  <button
+                    key={label}
+                    onClick={() => {
+                      setFilterFromDate(getDateDaysAgo(days));
+                      setFilterToDate('');
+                      applyFilters();
+                    }}
+                    className={`px-2 py-1 text-xs rounded ${
+                      isActive
+                        ? 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300'
+                        : 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
               {hasActiveFilters && (
                 <button
                   onClick={clearFilters}
@@ -1559,6 +1759,7 @@ export default function CallTracePage() {
                   onClick={() => {
                     setFilterFromDate(getDateDaysAgo(1));
                     setFilterToDate('');
+                    applyFilters();
                   }}
                   className="px-2 py-1 text-xs font-medium text-gray-600 dark:text-gray-400 bg-gray-100 dark:bg-gray-700 rounded hover:bg-gray-200 dark:hover:bg-gray-600"
                 >
@@ -1568,6 +1769,7 @@ export default function CallTracePage() {
                   onClick={() => {
                     setFilterFromDate(getDateDaysAgo(7));
                     setFilterToDate('');
+                    applyFilters();
                   }}
                   className="px-2 py-1 text-xs font-medium text-gray-600 dark:text-gray-400 bg-gray-100 dark:bg-gray-700 rounded hover:bg-gray-200 dark:hover:bg-gray-600"
                 >
@@ -1577,6 +1779,7 @@ export default function CallTracePage() {
                   onClick={() => {
                     setFilterFromDate(getDateDaysAgo(30));
                     setFilterToDate('');
+                    applyFilters();
                   }}
                   className="px-2 py-1 text-xs font-medium text-gray-600 dark:text-gray-400 bg-gray-100 dark:bg-gray-700 rounded hover:bg-gray-200 dark:hover:bg-gray-600"
                 >
@@ -1587,6 +1790,7 @@ export default function CallTracePage() {
                     const today = new Date().toISOString().split('T')[0];
                     setFilterFromDate(today);
                     setFilterToDate(today);
+                    applyFilters();
                   }}
                   className="px-2 py-1 text-xs font-medium text-gray-600 dark:text-gray-400 bg-gray-100 dark:bg-gray-700 rounded hover:bg-gray-200 dark:hover:bg-gray-600"
                 >
@@ -1597,6 +1801,27 @@ export default function CallTracePage() {
           )}
         </div>
       </Card>
+
+      {/* Import Progress Overlay */}
+      {importing && (
+        <Card>
+          <div className="p-8 flex flex-col items-center justify-center gap-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+            <Spinner size="lg" />
+            <div className="text-center">
+              <div className="text-lg font-medium text-blue-700 dark:text-blue-300">
+                Importing Traces...
+              </div>
+              <div className="text-sm text-blue-600 dark:text-blue-400 mt-1">
+                Fetching traces from Langfuse and rebuilding sessions.
+              </div>
+              <div className="text-xs text-blue-500 dark:text-blue-500 mt-2">
+                This may take a while for large datasets.
+              </div>
+            </div>
+          </div>
+        </Card>
+      )}
+
 
       {/* Error Message */}
       {error && (
