@@ -3,6 +3,7 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ---
+
 ## ⚠️ MANDATORY - App UI Version Sync (READ THIS FIRST)
 
 **EVERY TIME you edit ANY of these files, you MUST run the update script IMMEDIATELY after:**
@@ -21,6 +22,380 @@ The hook at `.claude/hooks/sync-v1-to-langfuse.js` may auto-sync, but ALWAYS ver
 
 ---
 
+## Project Overview
+
+A full-stack SaaS application for Cloud 9 Ortho (Dentrix Orthodontic) practice management integration. It combines a CRM dashboard, an E2E testing framework for a Flowise chatbot (IVA "Allie"), Node-RED workflow automation, and Langfuse LLM observability.
+
+### High-Level Data Flow
+
+```
+User input → Flowise Prompt → Flowise Tool → Node-RED API → Cloud9 API
+```
+
+---
+
+## Repository Structure
+
+```
+dentix-ortho/
+├── backend/                # Express.js + TypeScript API server (port 3003)
+├── frontend/               # React 19 + Vite + Tailwind CSS dashboard (port 5174)
+├── test-agent/             # E2E testing framework for Flowise chatbot
+├── shared/                 # Shared TypeScript types & services (Langfuse, LLM provider)
+├── docs/
+│   ├── v1/                 # CANONICAL V1 production files (prompts, tools, flows)
+│   └── archive/            # Historical/archived versions
+├── nodered/                # Node-RED flow definitions & working copies
+├── scripts/                # Root-level utility scripts
+├── .claude/                # Claude Code settings, hooks, and skills
+├── .planning/              # Project planning & milestones
+├── CLAUDE.md               # This file
+├── Cloud9_API_Markdown.md  # Cloud 9 API reference (March 2024 / 11.3)
+└── Export Test Response Cloud 9 APIs.postman_collection.json  # Postman collection
+```
+
+---
+
+## Technology Stack
+
+### Backend (`backend/`)
+- **Runtime**: Node.js + Express.js + TypeScript
+- **Database**: SQLite via `better-sqlite3`
+- **Build**: `tsc` → `dist/server.js`
+- **Key deps**: axios, xml2js, winston, bcryptjs, jsonwebtoken, langfuse, ssh2, node-pty, zod, mammoth, pdf-parse
+
+### Frontend (`frontend/`)
+- **Framework**: React 19 + TypeScript + Vite 7
+- **Styling**: Tailwind CSS 4 + PostCSS
+- **State**: Redux Toolkit + react-redux
+- **Routing**: React Router v7
+- **Key deps**: FullCalendar, xterm.js, Monaco Editor, recharts, react-hook-form + zod, allotment, dnd-kit
+
+### Test Agent (`test-agent/`)
+- **Framework**: TypeScript CLI (commander)
+- **LLM**: Anthropic SDK + Langfuse
+- **Database**: SQLite (`test-agent/data/test-results.db`)
+- **Key deps**: @faker-js/faker, chalk, ioredis, zod
+
+### External Services
+- **Cloud 9 Ortho API**: XML/SOAP-like endpoints (Prod + Sandbox)
+- **Flowise**: Chatbot platform (IVA "Allie")
+- **Langfuse**: LLM trace observability
+- **Node-RED**: Workflow automation (hosted at `c1-aicoe-nodered-lb.prod.c1conversations.io`)
+- **Anthropic Claude**: AI/LLM capabilities
+
+---
+
+## Development Commands
+
+### Root-level
+```bash
+npm run install:all        # Install backend + frontend deps
+npm run build:all          # Build backend + frontend
+npm run serve:all          # Start backend + frontend preview
+npm run validate:prompt    # Validate prompt files
+```
+
+### Backend (`cd backend`)
+```bash
+npm run dev                # ts-node-dev with hot reload
+npm run build              # TypeScript compile
+npm start                  # Run compiled dist/server.js
+```
+
+### Frontend (`cd frontend`)
+```bash
+npm run dev                # Vite dev server + Node-RED test server (concurrently)
+npm run dev:vite-only      # Vite dev server only
+npm run build              # Production build
+npm run build:typecheck    # TypeScript check + build
+npm run lint               # ESLint
+npm run preview            # Preview production build
+```
+
+### Test Agent (`cd test-agent`)
+```bash
+npm start                  # Interactive CLI mode
+npm run run                # Run all tests
+npm run run:happy          # Happy path tests only
+npm run run:failed         # Re-run failed tests
+npm run results            # Show last results
+npm run diagnose           # Diagnose happy-path failures
+npm run diagnose:all       # Diagnose all failures
+npm run report             # Generate markdown report
+npm run analyze            # Analyze test patterns
+npm run llm-prompt         # LLM prompt tool
+```
+
+---
+
+## Backend Architecture
+
+**Entry point**: `backend/src/server.ts` → `backend/src/app.ts`
+**Default port**: 3003 (configurable via `PORT` env var)
+
+### API Route Prefixes
+
+| Prefix | Router | Description |
+|--------|--------|-------------|
+| `/api/reference` | `referenceRoutes` | Locations, providers, appointment types |
+| `/api/patients` | `patientRoutes` | Patient CRUD via Cloud 9 API |
+| `/api/appointments` | `appointmentRoutes` | Appointment scheduling/management |
+| `/api/postman` | `postmanRoutes` | Postman collection endpoints |
+| `/api/test-monitor` | `testMonitorRoutes` | Test execution, goal tests, Node-RED, V1 files, sandboxes |
+| `/api/auth` | `authRoutes` | Login, JWT authentication |
+| `/api/admin` | `adminRoutes` | User management, permissions |
+| `/api/skills-runner` | `skillsRunnerRoutes` | Claude skill execution |
+| `/api/heartbeat` | `heartbeatRoutes` | Health monitoring |
+| `/api/trace-analysis` | `traceAnalysisRoutes` | Langfuse trace analysis |
+| `/health` | inline | Health check |
+
+### Key Controllers (by size/importance)
+
+| Controller | LOC | Purpose |
+|------------|-----|---------|
+| `testMonitorController.ts` | ~11,000 | Test run management, goal tests, Node-RED deploy, sandbox files |
+| `traceAnalysisController.ts` | ~1,600 | Langfuse trace querying and analysis |
+| `skillsRunnerController.ts` | ~800 | Claude skill execution via SSH/PTY |
+| `appointmentController.ts` | ~800 | Cloud 9 appointment operations |
+| `heartbeatController.ts` | ~770 | System health checks |
+| `prodTestRecordController.ts` | ~700 | Production test data tracking/cleanup |
+| `patientController.ts` | ~350 | Cloud 9 patient operations |
+| `adminController.ts` | ~300 | User/permission management |
+| `referenceController.ts` | ~200 | Reference data (locations, types, providers) |
+| `authController.ts` | ~125 | JWT authentication |
+
+### Key Services
+
+| Service | Purpose |
+|---------|---------|
+| `cloud9/client.ts` | Cloud 9 API HTTP client |
+| `cloud9/xmlBuilder.ts` / `xmlParser.ts` | XML request/response handling |
+| `langfuseTraceService.ts` | Langfuse integration (63 KB) |
+| `promptService.ts` | Prompt version management (54 KB) |
+| `goalTestService.ts` | Goal test execution (29 KB) |
+| `goalAnalysisService.ts` | Goal test analysis (52 KB) |
+| `goalSuggestionService.ts` | AI-powered goal suggestions (29 KB) |
+| `replayService.ts` | Conversation replay (38 KB) |
+| `noderedDeployService.ts` | Node-RED flow deployment |
+| `v1FileService.ts` | V1 file management |
+| `alertEngine.ts` | Production monitoring alerts |
+| `authService.ts` | JWT + bcrypt auth logic |
+| `heartbeatService.ts` | System monitoring |
+| `sshService.ts` / `ptyService.ts` | SSH connectivity & pseudo-terminal |
+| `ab-testing/` | A/B sandbox testing services |
+| `sandbox/` | Sandbox file services |
+
+### Database (SQLite)
+
+**Backend DB**: `backend/dentix.db`
+**Test Agent DB**: `test-agent/data/test-results.db`
+
+#### Backend Schema Tables (`backend/src/database/schema.sql`)
+
+| Table | Purpose |
+|-------|---------|
+| `locations` | Practice location cache |
+| `appointment_types` | Appointment type cache |
+| `providers` | Provider/schedule view cache |
+| `patients` | Patient data cache |
+| `appointments` | Appointment data cache |
+| `cache_metadata` | Cache TTL tracking |
+| `prompt_working_copies` | Current working copies of prompts/tools |
+| `prompt_version_history` | Immutable version history |
+| `users` | Authentication (email, password_hash, is_admin) |
+| `user_permissions` | Tab-level access control |
+| `prod_test_records` | Production test data for cleanup tracking |
+| `session_analysis` | Langfuse session analysis cache |
+| `artifact_deploy_events` | Version deployment tracking |
+
+#### User Permission Tab Keys
+`dashboard`, `patients`, `appointments`, `calendar`, `test_monitor`, `settings`, `goal_tests`, `goal_test_generator`, `history`, `tuning`, `ab_testing_sandbox`, `ai_prompting`, `api_testing`, `advanced`
+
+---
+
+## Frontend Architecture
+
+**Entry point**: `frontend/src/main.tsx` → `App.tsx` → `AppRouter.tsx`
+**Dev URL**: `http://localhost:5174` (accessible on all interfaces via `0.0.0.0`)
+
+### Frontend Pages & Routes
+
+| Route | Page | Tab Key |
+|-------|------|---------|
+| `/` | Dashboard | `dashboard` |
+| `/admin` | Admin (requires admin) | — |
+| `/patients` | PatientList | `patients` |
+| `/patients/:id` | PatientDetail | — |
+| `/appointments` | AppointmentList | `appointments` |
+| `/calendar` | AppointmentCalendar | `calendar` |
+| `/settings` | Settings | `settings` |
+| `/test-monitor` | TestMonitorDashboard | `test_monitor` |
+| `/test-monitor/tests` | TestsPage | — |
+| `/test-monitor/analysis` | AnalysisPage | — |
+| `/test-monitor/call-trace` | CallTracePage | — |
+| `/test-monitor/sandbox-lab` | SandboxLabPage | — |
+| `/test-monitor/experiments` | ABTestingDashboard | — |
+| `/test-monitor/skills-runner` | SkillsRunnerPage | — |
+| `/test-monitor/prod-tracker` | ProdTestTrackerPage | — |
+| `/test-monitor/queue-activity` | QueueActivityPage | — |
+| `/test-monitor/alerts` | AlertsPage | — |
+| `/test-monitor/cache-health` | CacheHealthPage | — |
+| `/test-monitor/trace-analysis` | TraceAnalysisPage | — |
+| `/test-monitor/cases` | TestCasesPage | — |
+| `/test-monitor/goal-cases` | GoalTestsDashboard | — |
+| `/test-monitor/create` | CreateGoalTestPage | — |
+| `/test-monitor/history` | TestRunHistory | — |
+| `/test-monitor/tuning` | AgentTuning | — |
+| `/test-monitor/sandbox` | ABTestingSandbox | — |
+| `/test-monitor/ai-prompting` | AIPromptingPage | — |
+| `/test-monitor/api-testing` | APITestingPage | — |
+| `/test-monitor/run/:runId` | TestRunDetail | — |
+
+### Redux Store Slices (`frontend/src/store/slices/`)
+
+| Slice | Purpose |
+|-------|---------|
+| `authSlice` | Authentication state, JWT handling |
+| `appointmentSlice` | Appointment data |
+| `patientSlice` | Patient data |
+| `referenceSlice` | Reference data (locations, types, providers) |
+| `testMonitorSlice` | Test monitoring state (~50 KB) |
+| `testExecutionSlice` | Active test execution |
+| `testCasesSlice` | Test case management |
+| `createGoalTestSlice` | Goal test creation wizard |
+| `goalTestCasesSlice` | Goal test cases |
+| `sandboxSlice` | Sandbox A/B configuration |
+| `uiSlice` | UI state (sidebar, theme) |
+| `workflowSlice` | Workflow management |
+
+### Component Organization (`frontend/src/components/`)
+
+```
+components/
+├── features/           # Feature-specific components (18 subdirectories)
+│   ├── admin/          # User management, permissions
+│   ├── aiPrompting/    # AI prompt editor & testing
+│   ├── appointments/   # Appointment components
+│   ├── auth/           # Login, ProtectedRoute
+│   ├── cacheHealth/    # Cache monitoring
+│   ├── dashboard/      # Dashboard widgets
+│   ├── goalTestCases/  # Goal test case management
+│   ├── goalTestWizard/ # Guided test creation
+│   ├── patients/       # Patient components
+│   ├── postman/        # Postman integration UI
+│   ├── sandbox/        # Sandbox testing A/B UI
+│   ├── settings/       # Configuration panels
+│   ├── skillsRunner/   # Skill execution interface
+│   ├── test-monitor/   # Test monitoring dashboard
+│   └── testMonitor/    # Extended test monitoring
+├── forms/              # Reusable form components
+├── layout/             # Navigation, sidebar, MainLayout
+└── ui/                 # Basic UI primitives
+```
+
+### API Services (`frontend/src/services/api/`)
+
+| File | Backend Route |
+|------|---------------|
+| `client.ts` | Axios instance with JWT interceptor |
+| `authApi.ts` | `/api/auth` |
+| `adminApi.ts` | `/api/admin` |
+| `appointmentApi.ts` | `/api/appointments` |
+| `patientApi.ts` | `/api/patients` |
+| `referenceApi.ts` | `/api/reference` |
+| `testMonitorApi.ts` | `/api/test-monitor` (~72 KB) |
+| `testCasesApi.ts` | `/api/test-monitor` (test cases) |
+| `skillsRunner.ts` | `/api/skills-runner` |
+| `sandboxApi.ts` | `/api/test-monitor` (sandbox) |
+| `appSettingsApi.ts` | `/api/test-monitor` (settings) |
+| `postmanApi.ts` | `/api/postman` |
+
+---
+
+## Vite Proxy Configuration
+
+The frontend uses Vite dev server proxies to route API requests. Defined in `frontend/vite.config.ts`:
+
+| Proxy Path | Target | Purpose |
+|------------|--------|---------|
+| `/api` | `http://localhost:3003` | Backend API |
+| `/FabricWorkflow` | `https://c1-aicoe-nodered-lb.prod.c1conversations.io` | Node-RED prod |
+| `/cloud9-api-prod` | `https://us-ea1-partner.cloud9ortho.com` | Cloud 9 production |
+| `/cloud9-api` | `https://us-ea1-partnertest.cloud9ortho.com` | Cloud 9 sandbox |
+
+**IMPORTANT**: `frontend/.env` must use `VITE_API_URL=/api` (relative), NOT an absolute localhost URL. Absolute URLs break network access from other devices.
+
+---
+
+## Test Agent Architecture (`test-agent/`)
+
+The test agent is a CLI tool for E2E testing of the Flowise chatbot integration.
+
+### Core Components
+- `src/core/agent.ts` - Test agent orchestrator
+- `src/core/flowise-client.ts` - Flowise chatbot HTTP client
+- `src/core/cloud9-client.ts` - Cloud 9 API client
+- `src/core/adaptive-concurrency.ts` - Concurrency control
+
+### Test Scenarios (`src/tests/scenarios/`)
+- `happy-path.ts` - Standard booking flows (~23 KB)
+- `goal-happy-path.ts` - Goal-based test paths
+- `error-handling.ts` - Error recovery scenarios
+- `edge-cases.ts` - Boundary conditions
+
+### Test Personas (`src/tests/personas/`)
+- `standard-personas.ts` - Pre-defined user types (~8.5 KB)
+
+### Key Services
+- `llm-analysis-service.ts` - LLM-powered test analysis (~35 KB)
+- `goal-evaluator.ts` - Goal pass/fail evaluation
+- `semantic-evaluator.ts` - Semantic response evaluation
+- `category-classifier.ts` - Test categorization
+- `intent-detector.ts` - Intent detection
+- `conversation-context-tracker.ts` - Multi-turn tracking
+- `ab-testing/` - A/B test variant services
+- `sandbox/` - Sandbox file management
+
+### Storage
+- `storage/database.ts` - SQLite operations (~169 KB, largest file)
+- `storage/batch-writer.ts` - Batch database writes
+- `storage/retention-service.ts` - Data retention policies
+
+### Scripts (`test-agent/scripts/`)
+90+ utility scripts including:
+- `deploy-nodered.js` - Deploy flows to Node-RED
+- `copy-nodered-flow.js` - Copy flow tabs
+- `update-prompt-version.js` - Update prompt/tool versions in DB
+
+---
+
+## V1 Production Files (`docs/v1/`)
+
+These are the canonical source files for the Flowise + Node-RED integration:
+
+| File | Type | Escaped? | Deploy To |
+|------|------|----------|-----------|
+| `Chord_Cloud9_SystemPrompt.md` | System prompt | No | Source/reference |
+| `system_prompt_escaped.md` | System prompt | Yes (`{` → `{{`) | Flowise |
+| `nodered_Cloud9_flows.json` | Node-RED flows | N/A | Node-RED |
+| `chord_dso_patient_Tool.json` | Tool JSON | N/A | Reference |
+| `schedule_appointment_dso_Tool.json` | Tool JSON | N/A | Reference |
+| `patient_tool_func.js` | Tool JavaScript | No (NEVER escape) | Flowise |
+| `scheduling_tool_func.js` | Tool JavaScript | No (NEVER escape) | Flowise |
+
+### V1 File Sync Locations
+
+When updating V1 files, sync to ALL of these:
+
+1. **File on disk** (`docs/v1/`)
+2. **Local SQLite DB** (`test-agent/data/test-results.db` - tables: `prompt_working_copies`, `prompt_version_history`)
+3. **Langfuse Cloud** (`https://langfuse-6x3cj-u15194.vm.elestio.app`)
+4. **Sandbox DB entries** (`ab_sandbox_files` table - `sandbox_a` and `sandbox_b`)
+5. **Node-RED working copies** (`nodered/` directory, synced from V1)
+
+---
+
 ## ⚠️ Node-RED Safety Rules
 
 **DO NOT perform any Node-RED delete operations until further notice:**
@@ -31,58 +406,42 @@ The hook at `.claude/hooks/sync-v1-to-langfuse.js` may auto-sync, but ALWAYS ver
 | `POST /flows` - Deploy/replace flows | Remove individual nodes/flows |
 | Backup before deploy | Delete tabs or subflows |
 
-**Why:**
-- The deploy service uses **replace-only** operations
-- It replaces the entire flow configuration with the source file contents
-- Never deletes individual flows, tabs, or nodes
-- Always create a backup before deploying new flows
+**Why:** The deploy service uses **replace-only** operations. It replaces the entire flow configuration. Never deletes individual flows, tabs, or nodes.
 
-**Node-RED Deployment Endpoints:**
-- `GET /api/test-monitor/nodered/status` - Check connection status
+**Node-RED Endpoints:**
+- `GET /api/test-monitor/nodered/status` - Connection status
 - `GET /api/test-monitor/nodered/flows` - List all flow tabs
-- `GET /api/test-monitor/nodered/flows/:flowId` - Get specific flow with nodes
-- `POST /api/test-monitor/nodered/deploy` - Deploy flows from V1 source file
-- `POST /api/test-monitor/nodered/copy-flow` - Copy an existing flow to a new name
+- `GET /api/test-monitor/nodered/flows/:flowId` - Get specific flow
+- `POST /api/test-monitor/nodered/deploy` - Deploy from V1 source
+- `POST /api/test-monitor/nodered/copy-flow` - Copy a flow tab
 
 **Deploy Options:**
 ```json
-{
-  "backup": true,     // Create backup before deploy (default: true)
-  "dryRun": false     // Validate only, no changes (default: false)
-}
+{ "backup": true, "dryRun": false }
 ```
 
 **Copy Flow Options:**
 ```json
 {
-  "sourceFlowId": "cloud9-ortho-tab",    // ID of source flow (or use sourceFlowLabel)
-  "sourceFlowLabel": "Chord-Cloud9-Ortho-Prd",  // Label of source flow
-  "newLabel": "Chord-Cloud9-Ortho-Dev",  // Label for the new flow
-  "disabled": false,   // Create new flow as disabled (default: false)
-  "backup": true,      // Create backup before copy (default: true)
-  "dryRun": false      // Validate only, no changes (default: false)
+  "sourceFlowId": "cloud9-ortho-tab",
+  "sourceFlowLabel": "Chord-Cloud9-Ortho-Prd",
+  "newLabel": "Chord-Cloud9-Ortho-Dev",
+  "disabled": false,
+  "backup": true,
+  "dryRun": false
 }
 ```
 
 **CLI Scripts:**
 ```bash
-# Deploy - dry run
-cd test-agent && node scripts/deploy-nodered.js --dry-run
-
-# Deploy - full deploy with backup
-cd test-agent && node scripts/deploy-nodered.js --backup
-
-# Copy - list available flows
-cd test-agent && node scripts/copy-nodered-flow.js --list
-
-# Copy - dry run
+cd test-agent && node scripts/deploy-nodered.js --dry-run       # Dry run
+cd test-agent && node scripts/deploy-nodered.js --backup         # Deploy with backup
+cd test-agent && node scripts/copy-nodered-flow.js --list        # List flows
 cd test-agent && node scripts/copy-nodered-flow.js --source "Chord-Cloud9-Ortho-Prd" --name "Test-Flow" --dry-run
-
-# Copy - create a new flow (starts disabled)
 cd test-agent && node scripts/copy-nodered-flow.js --source "Chord-Cloud9-Ortho-Prd" --name "Chord-Cloud9-Ortho-Dev" --disabled
 ```
 
-**Backups are saved to:** `nodered/bk_up/flow-backup-{timestamp}.json`
+**Backups saved to:** `nodered/bk_up/flow-backup-{timestamp}.json`
 
 ---
 
@@ -95,33 +454,16 @@ cd test-agent && node scripts/copy-nodered-flow.js --source "Chord-Cloud9-Ortho-
 | `Chord-Cloud9-Ortho-Prd` | Production Cloud9 API | **Production (ID 1, Default)** |
 | `Chord-Cloud9-Ortho-Sandbox` | Sandbox Cloud9 API | Sandbox config |
 
-**Current Setup:** Node-RED `ortho-prd` endpoints point to **Production**, so tests MUST use the **Production Flowise config (ID 1)**.
-
-**Why This Matters:**
-- Using the wrong Flowise config (e.g., `Ortho-Test-JL-UAT` instead of `Production`) can cause tests to fail
-- Different Flowise chatflows may have different tools configured (e.g., missing `CurrentDateTime` tool)
-- The system prompt and tool configurations must be consistent across Flowise and Node-RED
-
 **Flowise Configs in Database (`flowise_configs` table):**
+
 | ID | Name | Use For |
 |----|------|---------|
-| 1 | Production (Default) | ✅ Use for all Prd Node-RED testing |
-| 2 | Ortho-Test-JL-UAT | ⚠️ May have different/outdated config |
+| 1 | Production (Default) | Use for all Prd Node-RED testing |
+| 2 | Ortho-Test-JL-UAT | May have different/outdated config |
 | 3 | A/B Sandbox A | Sandbox A testing only |
 | 4 | A/B Sandbox B | Sandbox B testing only |
 
-**To verify which config a test used:**
-```sql
-SELECT g.run_id, t.flowise_config_id, t.flowise_config_name
-FROM goal_test_results g
-LEFT JOIN test_runs t ON g.run_id = t.run_id
-ORDER BY g.started_at DESC LIMIT 5;
-```
-
-**Environment Presets (check these match!):**
-```sql
-SELECT id, name, flowise_config_id FROM environment_presets;
-```
+**Environment Presets:**
 
 | Preset | flowise_config_id | Notes |
 |--------|-------------------|-------|
@@ -129,73 +471,61 @@ SELECT id, name, flowise_config_id FROM environment_presets;
 | Sandbox A | 3 | For sandbox testing |
 | Sandbox B | 4 | For sandbox testing |
 
-**Fix applied 2026-01-18:** The "Prod" preset was incorrectly pointing to `flowise_config_id=2` (Ortho-Test-JL-UAT) instead of `flowise_config_id=1` (Production). This caused tests to use a chatflow without the `CurrentDateTime` tool, leading to age calculation failures.
+**Verify test config:**
+```sql
+SELECT g.run_id, t.flowise_config_id, t.flowise_config_name
+FROM goal_test_results g
+LEFT JOIN test_runs t ON g.run_id = t.run_id
+ORDER BY g.started_at DESC LIMIT 5;
+```
 
 ---
 
-## Project Overview
+## ⚠️⚠️⚠️ CRITICAL - ESCAPING RULES ⚠️⚠️⚠️
 
-This repository contains API integration specifications for Cloud 9 Ortho (Dentrix Orthodontic practice management system). The primary artifact is a Postman collection that documents and tests the Cloud 9 Partner API endpoints.
+### ONLY ESCAPE SYSTEM PROMPTS - NEVER ESCAPE TOOLS!
 
-## Architecture
+| Content Type | Escape `{` to `{{`? | Why |
+|--------------|---------------------|-----|
+| **System Prompts** (`.md`) | YES | Flowise uses Mustache templates for prompts |
+| **Tool JavaScript** (`.js`) | **NEVER** | Tools are raw JS - escaping breaks the code |
+| **JSON configs** | NEVER | JSON needs valid syntax |
+| **Regular code** | NEVER | Code needs valid syntax |
 
-**API Integration Pattern**: The Cloud 9 API uses XML-based SOAP-like requests with the following structure:
-- **Authentication**: Each request includes ClientID, UserName, and Password in the XML body
-- **Environments**: Two environments exist - Production and Sandbox (test)
-  - Production: `https://us-ea1-partner.cloud9ortho.com/GetData.ashx`
-  - Sandbox: `https://us-ea1-partnertest.cloud9ortho.com/GetData.ashx`
-- **Request Format**: XML payloads with a `<Procedure>` element defining the operation
-- **HTTP Method**: Most operations use GET requests with XML in the request body
+### Why Prompts MUST Be Escaped
+Flowise applies Mustache templating to system prompts. Variables like `{{input}}` are replaced by Flowise. To show literal `{` in prompts, escape as `{{`.
 
-## V1 Production Files
+### Why Tools Must NOT Be Escaped
+Tools contain JavaScript that runs directly in Node.js. `const obj = {{ key: value }}` is broken JavaScript. Flowise does NOT apply Mustache templating to tool code.
 
-The canonical V1 production files are located in `/docs/v1/`. These files define the Flowise + Node Red integration architecture:
+**NEVER save the entire tool JSON to the database** - only the JavaScript `func` portion is needed for versioning and deployment.
 
-**Data Flow:**
+---
+
+## ⚠️ MANDATORY - Sandbox File Sync
+
+**EVERY TIME you update a source file in `/docs/v1/`, you MUST ALSO update the corresponding sandbox files in the database:**
+
+| Source File | Database Table | Sandbox Columns |
+|-------------|----------------|-----------------|
+| `docs/v1/scheduling_tool_func.js` | `ab_sandbox_files` | `sandbox_a`, `sandbox_b` |
+| `docs/v1/patient_tool_func.js` | `ab_sandbox_files` | `sandbox_a`, `sandbox_b` |
+| `docs/v1/Chord_Cloud9_SystemPrompt.md` | `ab_sandbox_files` | `sandbox_a`, `sandbox_b` |
+
+```javascript
+// In test-agent directory:
+const BetterSqlite3 = require('better-sqlite3');
+const fs = require('fs');
+const db = new BetterSqlite3('./data/test-results.db');
+const content = fs.readFileSync('../docs/v1/scheduling_tool_func.js', 'utf-8');
+db.prepare(`UPDATE ab_sandbox_files SET content = ?, version = version + 1, updated_at = ? WHERE file_type = ? AND sandbox = ?`)
+  .run(content, new Date().toISOString(), 'scheduling_tool', 'sandbox_b');
+db.close();
 ```
-User input → Flowise Prompt → Flowise Tool → Node Red API → Cloud9 API
-```
 
-**V1 Files:**
+---
 
-| File | Type | Description |
-|------|------|-------------|
-| `Chord_Cloud9_SystemPrompt.md` | Prompt | IVA system prompt for Allie |
-| `nodered_Cloud9_flows.json` | Flow | Node Red flow definitions |
-| `chord_dso_patient_Tool.json` | Tool | Patient operations tool |
-| `schedule_appointment_dso_Tool.json` | Tool | Scheduling operations tool |
-
-**V1 File Management Endpoints:**
-- `GET /api/test-monitor/v1-files/status` - Health check
-- `GET /api/test-monitor/v1-files` - List files
-- `GET /api/test-monitor/v1-files/:fileKey` - Get file content
-- `POST /api/test-monitor/v1-files/:fileKey/validate` - Validate content
-- `POST /api/test-monitor/v1-files/sync` - Sync to nodered directory
-
-**File Locations:**
-- `/docs/v1/` - Canonical source for V1 files
-- `/docs/archive/` - Archived old files
-- `/nodered/` - Working copies (synced from V1)
-
-**IMPORTANT - Prompt Sync Requirements:**
-
-When updating V1 prompts (especially `Chord_Cloud9_SystemPrompt.md`), you MUST sync to BOTH locations:
-
-1. **Local SQLite Database** (for App UI):
-   - Database: `test-agent/data/test-results.db`
-   - Tables: `prompt_working_copies`, `prompt_version_history`
-   - Script: `backend/scripts/save-v31-prompt.js` (or similar)
-   - Content must have double curly brackets `{{` escaped for Flowise Mustache templates
-
-2. **Langfuse Cloud** (for prompt management):
-   - Host: `https://langfuse-6x3cj-u15194.vm.elestio.app`
-   - Prompt name: "System Prompt"
-   - Use MCP tools or direct API to create new version
-   - Same double curly bracket escaping required
-
-The hook `.claude/hooks/sync-v1-to-langfuse.js` attempts to sync both automatically on Write/Edit to `/docs/v1/` files, but manual sync may be needed if the hook doesn't trigger.
-
-## Tool Version Updates (IMPORTANT)
+## Tool Version Updates
 
 **When updating Flowise tools (`scheduling_tool`, `patient_tool`):**
 
@@ -209,231 +539,22 @@ The hook `.claude/hooks/sync-v1-to-langfuse.js` attempts to sync both automatica
    - Saves it to a separate `.js` file (e.g., `docs/v1/scheduling_tool_func.js`)
    - Updates the database with just the JavaScript content
 
----
-## ⚠️⚠️⚠️ CRITICAL - ESCAPING RULES (READ CAREFULLY) ⚠️⚠️⚠️
-
-### ONLY ESCAPE SYSTEM PROMPTS - NEVER ESCAPE TOOLS!
-
-| Content Type | Escape Curly Brackets? | Why |
-|--------------|----------------------|-----|
-| **System Prompts** (`.md`) | ✅ YES - `{` → `{{` | Flowise uses Mustache templates for prompts |
-| **Tool JavaScript** (`.js`) | ❌ **NEVER** | Tools are raw JavaScript - escaping breaks the code! |
-| **JSON configs** | ❌ NEVER | JSON needs valid syntax |
-| **Regular code** | ❌ NEVER | Code needs valid syntax |
-
-### Files and Their Escaping Status:
-
-| File | Escaped? | Use For |
-|------|----------|---------|
-| `docs/v1/system_prompt_escaped.md` | ✅ YES | **DEPLOY TO FLOWISE** |
-| `docs/v1/Chord_Cloud9_SystemPrompt.md` | ❌ NO | Source/reference only |
-| `docs/v1/scheduling_tool_func.js` | ❌ NO | **DEPLOY TO FLOWISE** |
-| `docs/v1/patient_tool_func.js` | ❌ NO | **DEPLOY TO FLOWISE** |
-
-### Why Tools Must NOT Be Escaped:
-- Tools contain JavaScript code that runs directly in Node.js
-- Escaping `{` to `{{` creates invalid JavaScript syntax
-- Example: `const obj = {{ key: value }}` is BROKEN JavaScript
-- Flowise does NOT apply Mustache templating to tool code
-
-### Why Prompts MUST Be Escaped:
-- Flowise applies Mustache templating to system prompts
-- Variables like `{{input}}` are replaced by Flowise
-- To show literal `{` in prompts, escape as `{{`
+**ALWAYS add new versions to App UI** with version number in file header (e.g., `<!-- v45 -->` or `// v45`).
 
 ---
 
-**NEVER save the entire tool JSON to the database** - only the JavaScript func portion is needed for versioning and deployment.
-
----
-## ⚠️ MANDATORY - Sandbox File Sync (DO NOT FORGET!)
-
-**EVERY TIME you update a source file in `/docs/v1/`, you MUST ALSO update the corresponding sandbox files in the database!**
-
-| Source File | Database Table | Sandbox Column |
-|-------------|----------------|----------------|
-| `docs/v1/scheduling_tool_func.js` | `ab_sandbox_files` | `sandbox_a`, `sandbox_b` |
-| `docs/v1/patient_tool_func.js` | `ab_sandbox_files` | `sandbox_a`, `sandbox_b` |
-| `docs/v1/Chord_Cloud9_SystemPrompt.md` | `ab_sandbox_files` | `sandbox_a`, `sandbox_b` |
-
-**How to update sandbox files:**
-```javascript
-// In test-agent directory:
-const BetterSqlite3 = require('better-sqlite3');
-const fs = require('fs');
-const db = new BetterSqlite3('./data/test-results.db');
-
-// Read the source file
-const content = fs.readFileSync('../docs/v1/scheduling_tool_func.js', 'utf-8');
-
-// Update sandbox_b (file_type = 'scheduling_tool', sandbox = 'sandbox_b')
-db.prepare(`UPDATE ab_sandbox_files SET content = ?, version = version + 1, updated_at = ? WHERE file_type = ? AND sandbox = ?`)
-  .run(content, new Date().toISOString(), 'scheduling_tool', 'sandbox_b');
-
-db.close();
-```
-
-**NO EXCEPTIONS. Source file changes MUST be synced to sandbox files or A/B testing will use stale code!**
-
----
-
-**ALWAYS add new versions to App UI:**
-
-When updating prompts, Node-RED flows, or tools:
-1. **Include version number in file header** (e.g., `<!-- v45 -->` or `// v45`)
-2. **Add the new version to the App UI** via the update script or database
-3. Never skip the App UI update - this ensures version history is tracked
-
-## Caching Configuration
-
-**Real-Time Data Fetching**: Caching is disabled by default to ensure all data is fetched in real-time from the Cloud 9 API.
-
-- **Configuration**: Set via `ENABLE_CACHING` environment variable in `.env` file
-  - `ENABLE_CACHING=false` (default) - All API calls fetch fresh data directly from Cloud 9 API
-  - `ENABLE_CACHING=true` - Enable TTL-based caching (requires database writes to be restored in controllers)
-
-- **Current Behavior** (with caching disabled):
-  - No database writes occur - all data is returned directly from Cloud 9 API
-  - All endpoints return `cached: false` in their responses
-  - Higher latency as every request hits the Cloud 9 API
-  - No stale data - always real-time
-  - If Cloud 9 API is down, no fallback data is available
-
-- **Performance Implications**:
-  - Every API request results in a call to Cloud 9 API
-  - No cache buffer - users experience actual Cloud 9 API response times
-  - Reference data (locations, appointment types, providers) is fetched fresh on every request
-  - Patient and appointment data is always current
-
-- **Deprecated Endpoints**:
-  - `GET /api/appointments/date-range` - Returns HTTP 410 (Gone) since Cloud 9 API doesn't support date range queries
-  - `POST /api/reference/refresh` - Returns success but is a no-op (caching disabled)
-  - `GET /api/reference/cache/stats` - Returns empty stats with `cachingEnabled: false`
-
-- **Re-enabling Caching** (if needed):
-  1. Set `ENABLE_CACHING=true` in `.env` file
-  2. Restore database write operations in controllers:
-     - `referenceController.ts` - Add back `Model.bulkUpsert()` calls
-     - `patientController.ts` - Add back `PatientModel.upsert()` calls
-     - `appointmentController.ts` - Add back `AppointmentModel.upsert()` calls
-  3. Restart the backend server
-  4. Caching infrastructure (database tables, cache service) is still present and functional
-
-## Available API Operations
-
-The Postman collection includes endpoints for:
-
-**Practice Data**:
-- GetLocations - Retrieve practice locations
-- GetDoctors - Retrieve doctor information
-- GetProviders - Retrieve provider information
-- GetLocationInfo - Get detailed location information
-
-**Patient Data**:
-- GetRecords - Retrieve patient records (filtered)
-- GetAllRecords - Retrieve all patient records
-- GetEmail - Retrieve patient email information
-- CreatePatient - Create new patient record
-- UpdatePatient - Update existing patient record
-
-**Appointment Management**:
-- GetApptTypes - Retrieve available appointment types
-- GetAvailableAppts - Check appointment availability
-- GetExistingAppts - Retrieve scheduled appointments
-- ScheduleNewAppt - Schedule a new appointment
-- ConfirmExistingAppts - Confirm appointments
-- CancelExistingAppts - Cancel appointments
-
-## Working with the Postman Collection
-
-**File**: `Export Test Response Cloud 9 APIs.postman_collection.json`
-
-This is a Postman Collection v2.1.0 format file containing:
-- Request definitions with XML body templates
-- Saved response examples (primarily from Sandbox environment)
-- Authentication credentials (separate for Prod and Sandbox)
-
-**Important Notes**:
-- The Postman collection contains hardcoded credentials - these should be treated as sensitive
-- Many sandbox requests include saved response examples for reference
-- The XML namespace is `http://schemas.practica.ws/cloud9/partners/`
-- All XML requests should include proper XML declaration and encoding
-
-## Development Server Configuration (IMPORTANT)
-
-**Network Access Requirements**: The frontend must be accessible from any IP (not just localhost) for development on multiple devices.
-
-**Required Configuration:**
-
-1. **`frontend/.env`** - API URL must be relative (uses Vite proxy):
-   ```
-   VITE_API_URL=/api
-   ```
-   **DO NOT** use `http://localhost:3002/api` - this breaks network access.
-
-2. **`frontend/vite.config.ts`** - Must include the `/api` proxy:
-   ```typescript
-   proxy: {
-     '/api': {
-       target: 'http://localhost:3002',
-       changeOrigin: true,
-     },
-     // ... other proxies
-   }
-   ```
-
-**Why This Matters:**
-- When accessing via network IP (e.g., `http://192.168.1.247:5174`), `localhost` resolves to the client machine, not the dev server
-- The Vite proxy routes `/api` requests through the dev server to the backend
-- This allows the same frontend to work from `localhost:5174` AND network IPs
-
-**If login fails with `ERR_CONNECTION_REFUSED`:**
-1. Check `frontend/.env` has `VITE_API_URL=/api` (not `http://localhost:...`)
-2. Verify `vite.config.ts` has the `/api` proxy configured
-3. Restart the frontend dev server after changes
-
----
-
-## Development Workflow
-
-When working with Cloud 9 API integrations:
-
-1. **Use Sandbox First**: Test all operations against the sandbox environment before production
-2. **XML Structure**: Maintain proper XML structure with namespace declarations
-3. **Parameter Validation**: The `<Parameters>` section varies by procedure - reference existing examples
-4. **Response Handling**: Responses are in XML format - parse accordingly
-5. **Error Handling**: Check API responses for error nodes/status codes
-
-## Credentials
-
-The collection contains two sets of credentials:
-- **Production**: ClientID `b42c51be-2529-4d31-92cb-50fd1a58c084`
-- **Sandbox**: ClientID `c15aa02a-adc1-40ae-a2b5-d2e39173ae56`
-
-Note: Credentials are embedded in the Postman collection and should be secured appropriately in production implementations.
-
-**App UI Login:**
-- Username: `mwoicke@intelepeer.ai`
-- Password: `Cyclones`
-
----
-
-## Cloud 9 API Reference
-
-**Source:** Cloud9_API_Markdown.md (Updated March 2024 / 11.3 C9 Release)
-**Support Contact:** cloud9.integrations@planetdds.com
+## Cloud 9 API Integration
 
 ### Environments & Endpoints
 
-| Environment | Endpoint URL | Availability | Notes |
-| :--- | :--- | :--- | :--- |
-| **Testing** | `https://us-ea1-partnertest.cloud9ortho.com/GetData.ashx` | 24/7 (except maintenance) | Sandbox deactivated after 6 months of inactivity |
-| **Production** | `https://us-ea1-partner.cloud9ortho.com/GetData.ashx` | 24/7 | Approved for extended hours access |
+| Environment | Endpoint | Notes |
+|-------------|----------|-------|
+| **Production** | `https://us-ea1-partner.cloud9ortho.com/GetData.ashx` | 24/7 |
+| **Sandbox** | `https://us-ea1-partnertest.cloud9ortho.com/GetData.ashx` | Deactivated after 6 months inactivity |
 
 ### Request Format
 
-All requests are **HTTP POST** containing an **XML body**:
-
+All requests are **HTTP POST** with an XML body:
 ```xml
 <?xml version="1.0" encoding="utf-8" ?>
 <GetDataRequest xmlns="http://schemas.practica.ws/cloud9/partners/">
@@ -447,141 +568,157 @@ All requests are **HTTP POST** containing an **XML body**:
 ```
 
 ### Response Format
-
 ```xml
 <GetDataResponse>
     <ResponseStatus>Success</ResponseStatus>
-    <Records>
-        <Record>
-        </Record>
-    </Records>
+    <Records><Record></Record></Records>
 </GetDataResponse>
 ```
 
 ### Data Types
-
 - **bit:** `1` (True) / `0` (False)
 - **datetime:** `MM/DD/YYYY` or `MM/DD/YYYY 12:00:00 AM`
-- **uniqueidentifier:** GUID format (e.g., `59D26B3E-2725-460D-9FD7-BD9C03452B86`)
+- **uniqueidentifier:** GUID format
 
 ### Error Codes
 
 | Code | Message |
-| --- | --- |
-| **0** | An unknown error occurred |
-| **1** | Invalid client / username / password combination |
-| **2** | A required parameter was not specified |
-| **3** | Invalid value for parameter |
-| **6** | Not authorized to access client |
-| **7** | Not authorized to collect data outside of allowance window |
-| **10** | Procedure is not authorized |
+|------|---------|
+| 0 | Unknown error |
+| 1 | Invalid client/username/password |
+| 2 | Required parameter missing |
+| 3 | Invalid parameter value |
+| 6 | Not authorized to access client |
+| 7 | Not authorized outside allowance window |
+| 10 | Procedure not authorized |
+
+### GET APIs (Read)
+
+| Procedure | Purpose | Key Parameters |
+|-----------|---------|----------------|
+| `GetPortalPatientLookup` | Patient search | `filter` (req), `lookupByPatient`, `showInactive` |
+| `GetPatient` | Patient GUIDs | `patGUID` (req) |
+| `GetPatientInformation` | Patient demographics | `patguid` (req) |
+| `GetPatientAddress` | All patient addresses | — |
+| `GetBirthdayList` | Patients by birthday | `dtBirthday` (req) |
+| `GetAppointmentListByDate` | Appointments by date range | `dtAppointment` (req), `dtAppointmentEnd` |
+| `GetAppointmentListByPatient` | Appointments by patient | `patGUID` (req) |
+| `GetAppointmentsByDate` | Appointments by date + view | `dtAppointment` (req), `schdvwGUID` (req) |
+| `GetOnlineReservations` | Available slots | `startDate` (req), `endDate` (req), max 28 weeks |
+| `GetInsurancePolicies` | Insurance details | `modifiedDate` |
+| `GetPatientInsurancePolicies` | All patient insurance | `ExcludeInactivePatients` |
+| `GetResponsiblePartiesForPatient` | Responsible parties | `PatientGUID` (req) |
+| `GetLedger` | Transaction ledger | `patGUIDString`, `fromDate`, `toDate` |
+| `GetPayments` | Payments by date range | `StartDateParam` (req), `EndDateParam` (req) |
+
+### SET APIs (Write)
+
+| Procedure | Purpose | Key Parameters |
+|-----------|---------|----------------|
+| `SetPatient` | Create patient | `patientFirstName`, `patientLastName`, `providerGUID`, `locationGUID`, `VendorUserName` (all req) |
+| `SetPatientDemographicInfo` | Update demographics | `patGUID` (req) |
+| `SetPatientComment` | Add/edit comment | `patGUID` (req), `patComment` (req) |
+| `SetAppointment` | Create appointment | `PatientGUID`, `StartTime`, `ScheduleViewGUID`, `ScheduleColumnGUID`, `AppointmentTypeGUID`, `Minutes`, `VendorUserName` (all req) |
+| `SetAppointmentInsuranceVerified` | Mark insurance verified | `apptGUIDs` (pipe-separated) |
 
 ---
 
-## GET APIs (Read Operations)
+## Caching Configuration
 
-### Patient Search & Demographics
+Caching is **disabled by default** (`ENABLE_CACHING=false`). All data is fetched in real-time from Cloud 9 API.
 
-#### `GetPortalPatientLookup`
-Returns a list of patients or responsible parties ordered by name.
-- **Parameters:**
-  - `filter` (Req): "LastName, FirstName" or Patient ID
-  - `lookupByPatient`: `1` for Patient (Default), `0` for Resp. Party
-  - `showInactive`: `0` (Default) or `1`
-- **Returns:** PatientName, PatientID, PatientBirthDate, ResponsiblePartyName
+- No database writes occur; all endpoints return `cached: false`
+- If Cloud 9 API is down, no fallback data available
 
-#### `GetPatient`
-Returns GUIDs associated to a patient.
-- **Parameters:** `patGUID` (Req)
+**Deprecated Endpoints** (still present but non-functional):
+- `GET /api/appointments/date-range` - Returns HTTP 410
+- `POST /api/reference/refresh` - No-op
+- `GET /api/reference/cache/stats` - Returns empty stats
 
-#### `GetPatientInformation`
-Returns 'Edit Patient' details (Demographics, Staff, Contact Info).
-- **Parameters:** `patguid` (Req)
-- **Returns:** FullName, BirthDate, Orthodontist, TreatmentCoordinator, Email, Phone
-
-#### `GetPatientAddress`
-Returns address details for all patients.
-- **Returns:** PatientStreetAddress, PatientCity, PatientState, PatientPostalCode
-
-#### `GetBirthdayList`
-Returns a list of patients with birthdates on a designated month/day.
-- **Parameters:** `dtBirthday` (Req)
-
-### Scheduling & Appointments
-
-#### `GetAppointmentListByDate`
-Returns scheduled appointments for a date range.
-- **Parameters:** `dtAppointment` (Req), `dtAppointmentEnd`
-
-#### `GetAppointmentListByPatient`
-Returns all appointment details for a specific patient.
-- **Parameters:** `patGUID` (Req)
-
-#### `GetAppointmentsByDate`
-Returns appointments for a specific date and schedule view.
-- **Parameters:** `dtAppointment` (Req), `schdvwGUID` (Req)
-
-#### `GetOnlineReservations`
-Returns available slots for online scheduling.
-- **Parameters:** `startDate` (Req), `endDate` (Req), `schdvwGUIDs`
-- **Note:** Date range must be within 28 weeks
-
-### Insurance & Responsible Parties
-
-#### `GetInsurancePolicies`
-Returns details for patient insurance policies.
-- **Parameters:** `modifiedDate`
-- **Returns:** PolicyNumber, GroupNumber, SubscriberName, CarrierName (`oipName`)
-
-#### `GetPatientInsurancePolicies`
-Returns details for all patient insurance policies.
-- **Parameters:** `ExcludeInactivePatients` (Default 0)
-
-#### `GetResponsiblePartiesForPatient`
-Returns financially responsible parties linked to a patient.
-- **Parameters:** `PatientGUID` (Req)
-
-### Financial Data
-
-#### `GetLedger`
-Returns transaction details for all ledger entries.
-- **Parameters:** `patGUIDString`, `fromDate`, `toDate`
-
-#### `GetPayments`
-Returns a list of payments within a date range.
-- **Parameters:** `StartDateParam` (Req), `EndDateParam` (Req)
+**To re-enable caching:** Set `ENABLE_CACHING=true` in `.env`, restore `Model.bulkUpsert()` / `Model.upsert()` calls in controllers, restart backend.
 
 ---
 
-## SET APIs (Write Operations)
+## Development Server Configuration
 
-### Patient Management
+### Frontend `.env`
+```
+VITE_API_URL=/api
+```
+**DO NOT** use `http://localhost:3003/api` - this breaks network access from other devices.
 
-#### `SetPatient`
-Creates a new patient.
-- **Required Parameters:**
-  - `patientFirstName`, `patientLastName`
-  - `providerGUID` (Must be Orthodontist with Specialty)
-  - `locationGUID`
-  - `VendorUserName`
-- **Optional Parameters:** `birthdayDateTime`, `gender`, `phoneNumber`, `addressStreet`
-- **Important:** Database must have a Patient Status code of **"NEW"**
+### Backend `.env` (key variables)
+```
+PORT=3003
+CLOUD9_PROD_ENDPOINT=https://us-ea1-partner.cloud9ortho.com/GetData.ashx
+CLOUD9_SANDBOX_ENDPOINT=https://us-ea1-partnertest.cloud9ortho.com/GetData.ashx
+DATABASE_PATH=./dentix.db
+ENABLE_CACHING=false
+REPLIT_MODE=false
+USE_CLAUDE_CLI=true
+ANTHROPIC_API_KEY=   # Required when REPLIT_MODE=true or USE_CLAUDE_CLI=false
+```
 
-#### `SetPatientDemographicInfo`
-Updates demographics for an existing patient.
-- **Parameters:** `patGUID` (Req), `persFirstName`, `persLastName`, `addStreet`, `pcodCity`
+---
 
-#### `SetPatientComment`
-Adds or edits a patient comment.
-- **Parameters:** `patGUID` (Req), `patComment` (Req)
+## Claude Code Integration (`.claude/`)
 
-### Appointments
+### Settings (`.claude/settings.local.json`)
+- Permissions for npm, npx, taskkill
+- MCP server configuration
 
-#### `SetAppointment`
-Creates an appointment.
-- **Required Parameters:** `PatientGUID`, `StartTime`, `ScheduleViewGUID`, `ScheduleColumnGUID`, `AppointmentTypeGUID`, `Minutes`, `VendorUserName`
-- **Returns:** `Appointment GUID Added: {GUID}`
+### Skills (`.claude/skills/`)
 
-#### `SetAppointmentInsuranceVerified`
-Checks the "Insurance Verified" box for an appointment.
-- **Parameters:** `apptGUIDs` (Pipe separated)
+| Skill | Purpose |
+|-------|---------|
+| `start-and-verify.md` | Startup and verification procedures |
+| `e2e-test.md` | E2E testing guide |
+| `iva-prompt-tuning.md` | IVA prompt tuning workflow |
+| `prompt-tool-update.md` | Prompt and tool update procedures |
+| `claude-cli-llm.md` | Claude CLI documentation |
+
+---
+
+## Shared Module (`shared/`)
+
+Shared TypeScript types and services used across backend and test-agent:
+
+| File | Purpose |
+|------|---------|
+| `types/Appointment.ts` | Appointment interfaces |
+| `types/Location.ts` | Location interfaces |
+| `types/Patient.ts` | Patient interfaces |
+| `types/langfuse.types.ts` | Langfuse type definitions |
+| `services/langfuse-service.ts` | Langfuse API service |
+| `services/langfuse-scorer.ts` | Scoring logic |
+| `services/langfuse-context.ts` | Context management |
+| `services/llm-provider.ts` | LLM provider abstraction |
+| `services/claude-cli-service.ts` | Claude CLI integration |
+| `config/llm-config.ts` | LLM configuration |
+
+---
+
+## Development Workflow
+
+1. **Use Sandbox First**: Test all Cloud 9 API operations against sandbox before production
+2. **XML Structure**: Maintain proper XML structure with namespace `http://schemas.practica.ws/cloud9/partners/`
+3. **Always backup before Node-RED deploy**: Use `--backup` flag or `"backup": true`
+4. **Version tracking**: Update the App UI version history after every V1 file change
+5. **Environment matching**: Ensure Flowise config matches the Node-RED environment being tested
+6. **Sandbox sync**: After updating V1 source files, sync to sandbox database entries
+
+---
+
+## Credentials
+
+**Cloud 9 API:**
+- Production ClientID: `b42c51be-2529-4d31-92cb-50fd1a58c084`
+- Sandbox ClientID: `c15aa02a-adc1-40ae-a2b5-d2e39173ae56`
+
+**App UI Login:**
+- Username: `mwoicke@intelepeer.ai`
+- Password: `Cyclones`
+
+**Langfuse Cloud:**
+- Host: `https://langfuse-6x3cj-u15194.vm.elestio.app`
+- Prompt name: "System Prompt"
