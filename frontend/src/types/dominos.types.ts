@@ -73,6 +73,7 @@ export interface ParsedOrder {
   storeNumber: string;
   orderConfirmed: boolean;
   couponCode: string;
+  couponDescription: string;
   sessionId: string;
   categories: { category: string; icon: string; items: ParsedOrderItem[] }[];
   totalItems: number;
@@ -133,6 +134,20 @@ export interface DominosMenuItem {
   price: number;
   category: string;
   available: boolean;
+}
+
+export interface DominosCoupon {
+  code: string;
+  name: string;
+  description: string;
+  price: number;
+  imageCode?: string;
+  validServiceMethods?: string[];
+  effectiveDate?: string;
+  isLocal?: boolean;
+  isBundle?: boolean;
+  isMultiSame?: boolean;
+  combineType?: string;
 }
 
 export interface DominosOrderSubmission {

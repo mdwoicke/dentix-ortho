@@ -353,6 +353,7 @@ function parseOrderRequest(requestBody: unknown): ParsedOrder | null {
       storeNumber: orderData?.store_number || orderData?.storeId || '',
       orderConfirmed: rb.orderConfirmed === 'true' || rb.orderConfirmed === true,
       couponCode: orderData?.coupon_code || '',
+      couponDescription: orderData?.coupon_description || orderData?.coupon_name || '',
       sessionId: rb.sessionId || rb.elly_session_id || '',
       categories,
       totalItems: parsedItems.reduce((sum, item) => sum + item.quantity, 0),
@@ -365,6 +366,20 @@ function parseOrderRequest(requestBody: unknown): ParsedOrder | null {
 function ParsedOrderCard({ order, detail }: { order: ParsedOrder; detail: DominosLogDetail }) {
   const customerName = detail.customer_name;
   const orderType = detail.order_type;
+  const [couponDescription, setCouponDescription] = useState('');
+
+  useEffect(() => {
+    if (!order.couponCode || !order.storeNumber) return;
+    let cancelled = false;
+    dominosApi.getStoreCoupons(order.storeNumber).then(coupons => {
+      if (cancelled) return;
+      const match = coupons.find(c => c.code === order.couponCode);
+      if (match) {
+        setCouponDescription(match.name || match.description || '');
+      }
+    }).catch(() => { /* ignore - just won't show description */ });
+    return () => { cancelled = true; };
+  }, [order.couponCode, order.storeNumber]);
 
   return (
     <div className="border border-blue-200 dark:border-blue-800 rounded-lg overflow-hidden bg-gradient-to-br from-blue-50 to-white dark:from-blue-950/30 dark:to-gray-800">
@@ -469,7 +484,12 @@ function ParsedOrderCard({ order, detail }: { order: ParsedOrder; detail: Domino
       {order.couponCode && (
         <div className="px-4 py-2 bg-yellow-50 dark:bg-yellow-900/20 border-t border-yellow-200 dark:border-yellow-800/50 flex items-center gap-2">
           <span className="text-sm">{'\uD83C\uDFF7\uFE0F'}</span>
-          <span className="text-xs font-medium text-yellow-700 dark:text-yellow-300">Coupon: {order.couponCode}</span>
+          <span className="text-xs font-medium text-yellow-700 dark:text-yellow-300">
+            Coupon: {order.couponCode}
+            {couponDescription && (
+              <span className="ml-1.5 font-normal text-yellow-600 dark:text-yellow-400">&mdash; {couponDescription}</span>
+            )}
+          </span>
         </div>
       )}
     </div>
