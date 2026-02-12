@@ -187,15 +187,34 @@ export async function getStoreMenu(storeId: string): Promise<{
     const raw = data.menu || data.data || data;
 
     // Extract products from the Dominos menu structure
+    // Prices live in a top-level Variants object, keyed by variant code
     const items: DominosMenuItem[] = [];
-    const products = raw?.Products || raw?.Categorization?.Food?.Products || {};
+    const products = raw?.Products || {};
+    const variants = raw?.Variants || {};
 
     for (const [code, product] of Object.entries(products as Record<string, any>)) {
+      // product.Variants is an array of variant code strings (e.g. ["B16PBIT","B32PBIT"])
+      // Look up the default variant (from Tags.DefaultVariant) or first variant in the top-level Variants map
+      let price = 0;
+      const defaultVariant = product.Tags?.DefaultVariant;
+      const variantCodes: string[] = Array.isArray(product.Variants) ? product.Variants : [];
+
+      if (defaultVariant && variants[defaultVariant]?.Price) {
+        price = parseFloat(variants[defaultVariant].Price);
+      } else {
+        for (const vc of variantCodes) {
+          if (variants[vc]?.Price && parseFloat(variants[vc].Price) > 0) {
+            price = parseFloat(variants[vc].Price);
+            break;
+          }
+        }
+      }
+
       items.push({
         code,
         name: product.Name || code,
         description: product.Description || '',
-        price: product.DefaultPrice ? parseFloat(product.DefaultPrice) : 0,
+        price,
         category: product.ProductType || product.Category || '',
         available: product.AvailableToppings !== undefined || true,
       });
