@@ -18,6 +18,7 @@ import type {
   DominosHealthStatus,
   DominosSessionDetail,
   DominosMenuItem,
+  DominosCoupon,
   DominosOrderSubmission,
 } from '../../types/dominos.types';
 
@@ -225,6 +226,80 @@ export async function getStoreMenu(storeId: string): Promise<{
     const msg = err.response?.data?.error || err.message || 'Failed to fetch menu';
     throw new Error(msg);
   }
+}
+
+// Coupons
+export async function getStoreCoupons(storeId: string): Promise<DominosCoupon[]> {
+  try {
+    // Try dedicated coupons endpoint first
+    const { data } = await dominosClient.get(`/coupons/${storeId}`);
+    const raw = data.coupons || data.data || data;
+    if (Array.isArray(raw) && raw.length > 0) {
+      console.log('[DominosApi] Coupons fetched via dedicated /coupons endpoint');
+      return parseCouponsArray(raw);
+    }
+    // If the dedicated endpoint returns a keyed object (like the menu Coupons structure)
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      const couponsObj = raw.Coupons || raw;
+      if (Object.keys(couponsObj).length > 0 && typeof Object.values(couponsObj)[0] === 'object') {
+        console.log('[DominosApi] Coupons fetched via dedicated endpoint (object format)');
+        return parseCouponsFromMenuObject(couponsObj);
+      }
+    }
+  } catch (err: any) {
+    console.warn('[DominosApi] Dedicated coupons endpoint failed, falling back to menu parse:', err.message);
+  }
+
+  // Fallback: fetch menu and parse Coupons object from it
+  try {
+    const { data } = await dominosClient.get(`/menu/${storeId}`);
+    const raw = data.menu || data.data || data;
+    const couponsObj = raw?.Coupons;
+    if (couponsObj && typeof couponsObj === 'object') {
+      console.log('[DominosApi] Coupons parsed from menu response');
+      return parseCouponsFromMenuObject(couponsObj);
+    }
+    return [];
+  } catch (err: any) {
+    const msg = err.response?.data?.error || err.message || 'Failed to fetch coupons';
+    throw new Error(msg);
+  }
+}
+
+function parseCouponsArray(arr: any[]): DominosCoupon[] {
+  return arr.map((c) => ({
+    code: c.Code || c.code || '',
+    name: c.Name || c.name || '',
+    description: c.Description || c.description || '',
+    price: parseFloat(c.Price || c.price || '0') || 0,
+    imageCode: c.ImageCode || c.imageCode,
+    validServiceMethods: c.ServiceMethodEstimatedWaitMinutes
+      ? Object.keys(c.ServiceMethodEstimatedWaitMinutes)
+      : c.validServiceMethods || [],
+    effectiveDate: c.EffectiveOn || c.effectiveDate,
+    isLocal: c.Tags?.Local ?? c.Local ?? c.isLocal ?? false,
+    isBundle: c.Tags?.Bundle === true || c.isBundle,
+    isMultiSame: c.Tags?.MultiSame === true || c.isMultiSame,
+    combineType: c.Tags?.CombineType || c.combineType,
+  }));
+}
+
+function parseCouponsFromMenuObject(obj: Record<string, any>): DominosCoupon[] {
+  return Object.entries(obj).map(([code, c]) => ({
+    code,
+    name: c.Name || '',
+    description: c.Description || '',
+    price: parseFloat(c.Price || '0') || 0,
+    imageCode: c.ImageCode,
+    validServiceMethods: c.ServiceMethodEstimatedWaitMinutes
+      ? Object.keys(c.ServiceMethodEstimatedWaitMinutes)
+      : [],
+    effectiveDate: c.EffectiveOn,
+    isLocal: c.Tags?.Local ?? c.Local ?? false,
+    isBundle: c.Tags?.Bundle === true,
+    isMultiSame: c.Tags?.MultiSame === true,
+    combineType: c.Tags?.CombineType,
+  }));
 }
 
 // Import

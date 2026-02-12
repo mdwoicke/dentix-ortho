@@ -23,6 +23,7 @@ export default function DominosMenu() {
   const [couponsError, setCouponsError] = useState<string | null>(null);
   const [couponsFetched, setCouponsFetched] = useState(false);
   const [couponSearch, setCouponSearch] = useState('');
+  const [couponScope, setCouponScope] = useState<'all' | 'local' | 'national'>('all');
 
   const fetchMenu = async () => {
     if (!storeId.trim()) return;
@@ -88,14 +89,17 @@ export default function DominosMenu() {
   );
 
   const filteredCoupons = useMemo(() => {
-    if (!couponSearch) return coupons;
+    let filtered = coupons;
+    if (couponScope === 'local') filtered = filtered.filter(c => c.isLocal === true);
+    else if (couponScope === 'national') filtered = filtered.filter(c => c.isLocal === false);
+    if (!couponSearch) return filtered;
     const s = couponSearch.toLowerCase();
-    return coupons.filter(c =>
+    return filtered.filter(c =>
       c.name?.toLowerCase().includes(s) ||
       c.code?.toLowerCase().includes(s) ||
       c.description?.toLowerCase().includes(s)
     );
-  }, [coupons, couponSearch]);
+  }, [coupons, couponSearch, couponScope]);
 
   const scrollToCategory = (cat: string) => {
     const el = categoryRefs.current[cat];
@@ -183,6 +187,15 @@ export default function DominosMenu() {
                   </button>
                 )}
               </div>
+              <select
+                value={couponScope}
+                onChange={(e) => setCouponScope(e.target.value as 'all' | 'local' | 'national')}
+                className="px-3 py-1.5 text-sm rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+              >
+                <option value="all">All Coupons</option>
+                <option value="local">Local Only</option>
+                <option value="national">National Only</option>
+              </select>
               <span className="text-sm text-gray-500 dark:text-gray-400 ml-auto">
                 {filteredCoupons.length} of {coupons.length} coupons
               </span>
@@ -197,17 +210,9 @@ export default function DominosMenu() {
                   className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4 hover:shadow-md transition-shadow"
                 >
                   <div className="flex items-start justify-between gap-2 mb-2">
-                    <div className="min-w-0">
-                      <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
-                        {coupon.name}
-                      </h4>
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-xs text-gray-500 dark:text-gray-400">Coupon Code:</span>
-                        <span className="text-base font-bold font-mono text-blue-600 dark:text-blue-400">
-                          {coupon.code}
-                        </span>
-                      </div>
-                    </div>
+                    <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100 min-w-0">
+                      {coupon.name}
+                    </h4>
                     {coupon.price > 0 && (
                       <span className="text-lg font-bold text-green-600 dark:text-green-400 whitespace-nowrap">
                         ${coupon.price.toFixed(2)}
@@ -221,7 +226,7 @@ export default function DominosMenu() {
                     </p>
                   )}
 
-                  <div className="flex flex-wrap gap-1.5">
+                  <div className="flex flex-wrap gap-1.5 mb-3">
                     {coupon.validServiceMethods?.map((method) => (
                       <span
                         key={method}
@@ -230,19 +235,9 @@ export default function DominosMenu() {
                         {method}
                       </span>
                     ))}
-                    {coupon.isLocal && (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-800 dark:bg-purple-900/50 dark:text-purple-400">
-                        Local
-                      </span>
-                    )}
                     {coupon.isBundle && (
                       <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-400">
                         Bundle
-                      </span>
-                    )}
-                    {coupon.isMultiSame && (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-teal-100 text-teal-800 dark:bg-teal-900/50 dark:text-teal-400">
-                        Multi-Same
                       </span>
                     )}
                     {coupon.combineType && (
@@ -250,6 +245,31 @@ export default function DominosMenu() {
                         {coupon.combineType}
                       </span>
                     )}
+                  </div>
+
+                  <div className="flex items-center justify-between pt-2 border-t border-gray-100 dark:border-gray-700">
+                    <div className="flex flex-wrap gap-1.5">
+                      {coupon.isLocal != null && (
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                          coupon.isLocal
+                            ? 'bg-purple-100 text-purple-800 dark:bg-purple-900/50 dark:text-purple-400'
+                            : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-400'
+                        }`}>
+                          {coupon.isLocal ? 'Local' : 'National'}
+                        </span>
+                      )}
+                      {coupon.isMultiSame && (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-teal-100 text-teal-800 dark:bg-teal-900/50 dark:text-teal-400">
+                          Multi-Same
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs text-gray-500 dark:text-gray-400">Coupon Code:</span>
+                      <span className="text-base font-bold font-mono text-blue-600 dark:text-blue-400">
+                        {coupon.code}
+                      </span>
+                    </div>
                   </div>
                 </div>
               ))}

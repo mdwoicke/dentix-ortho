@@ -274,6 +274,10 @@ export const submitOrder = (req: Request, res: Response) =>
 export const getStoreMenu = (req: Request, res: Response) =>
   proxyGet(req, res, `/api/v1/direct-order/menu/${req.params.storeId}`);
 
+// Coupons - proxy
+export const getStoreCoupons = (req: Request, res: Response) =>
+  proxyGet(req, res, `/api/v1/direct-order/coupons/${req.params.storeId}`);
+
 // Import order logs from external data source
 export const importOrderLogs = async (req: Request, res: Response): Promise<void> => {
   try {
