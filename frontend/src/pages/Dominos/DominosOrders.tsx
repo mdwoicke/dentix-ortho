@@ -13,6 +13,46 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import * as dominosApi from '../../services/api/dominosApi';
 import type { DominosOrderLog, DominosLogDetail, ParsedOrder, ParsedOrderItem } from '../../types/dominos.types';
 
+// ============================================================================
+// AUTO-REFRESH CONSTANTS & HELPERS
+// ============================================================================
+
+const AUTO_REFRESH_ENABLED_KEY = 'dominosOrders_autoRefreshEnabled';
+const AUTO_REFRESH_INTERVAL_KEY = 'dominosOrders_autoRefreshInterval';
+
+const AUTO_REFRESH_INTERVALS = [
+  { value: 15, label: '15s' },
+  { value: 30, label: '30s' },
+  { value: 60, label: '1m' },
+  { value: 120, label: '2m' },
+  { value: 300, label: '5m' },
+  { value: 600, label: '10m' },
+  { value: -1, label: 'Custom' },
+];
+
+function getStoredAutoRefreshEnabled(): boolean {
+  try {
+    return localStorage.getItem(AUTO_REFRESH_ENABLED_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function getStoredAutoRefreshInterval(): number {
+  try {
+    const stored = localStorage.getItem(AUTO_REFRESH_INTERVAL_KEY);
+    if (stored) {
+      const num = parseInt(stored, 10);
+      if (num > 0) return num;
+    }
+  } catch {}
+  return 30;
+}
+
+function isCustomInterval(interval: number): boolean {
+  return !AUTO_REFRESH_INTERVALS.some(i => i.value === interval && i.value !== -1);
+}
+
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout>>();
@@ -62,6 +102,17 @@ function CopyButton({ text }: { text: string }) {
       {copied ? 'Copied!' : 'Copy'}
     </button>
   );
+}
+
+function formatPhone(phone: string): string {
+  const digits = phone.replace(/\D/g, '');
+  if (digits.length === 10) {
+    return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+  }
+  if (digits.length === 11 && digits[0] === '1') {
+    return `(${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7)}`;
+  }
+  return phone;
 }
 
 function formatJson(data: unknown): string {
@@ -355,6 +406,8 @@ function parseOrderRequest(requestBody: unknown): ParsedOrder | null {
       couponCode: orderData?.coupon_code || '',
       couponDescription: orderData?.coupon_description || orderData?.coupon_name || '',
       sessionId: rb.sessionId || rb.elly_session_id || '',
+      serviceMethod: orderData?.ServiceMethod || orderData?.serviceMethod || orderData?.service_method
+        || rb?.ServiceMethod || rb?.serviceMethod || rb?.service_method || '',
       categories,
       totalItems: parsedItems.reduce((sum, item) => sum + item.quantity, 0),
     };
@@ -365,8 +418,25 @@ function parseOrderRequest(requestBody: unknown): ParsedOrder | null {
 
 function ParsedOrderCard({ order, detail }: { order: ParsedOrder; detail: DominosLogDetail }) {
   const customerName = detail.customer_name;
-  const orderType = detail.order_type;
+  const orderType = detail.order_type || order.serviceMethod || (() => {
+    try {
+      const rb = typeof detail.response_body === 'string' ? JSON.parse(detail.response_body) : detail.response_body;
+      const o = rb?.orderData?.validatedOrder?.Order || rb?.orderData?.createOrderData?.order || rb?.Order || rb;
+      return o?.ServiceMethod || o?.serviceMethod || '';
+    } catch { return ''; }
+  })();
   const [couponDescription, setCouponDescription] = useState('');
+  const [storeLabel, setStoreLabel] = useState('');
+
+  useEffect(() => {
+    if (!order.storeNumber) return;
+    let cancelled = false;
+    dominosApi.getStoreInfo(order.storeNumber).then(info => {
+      if (cancelled || !info) return;
+      setStoreLabel(info.address || [info.city, info.region].filter(Boolean).join(', '));
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [order.storeNumber]);
 
   useEffect(() => {
     if (!order.couponCode || !order.storeNumber) return;
@@ -391,10 +461,19 @@ function ParsedOrderCard({ order, detail }: { order: ParsedOrder; detail: Domino
         </div>
         <div className="flex items-center gap-3">
           {order.storeNumber && (
-            <span className="text-blue-100 text-xs">Store #{order.storeNumber}</span>
+            <span className="text-white text-sm font-medium flex items-center gap-2">
+              {storeLabel && <span className="text-blue-100">({storeLabel})</span>}
+              {storeLabel && <span className="text-blue-300">|</span>}
+              Store #{order.storeNumber}
+            </span>
+          )}
+          {order.storeNumber && (orderType || order.orderConfirmed) && (
+            <span className="text-blue-300">|</span>
           )}
           {orderType && (
-            <span className="px-2 py-0.5 rounded-full bg-blue-500 text-white text-xs font-medium capitalize">
+            <span className={`px-2 py-0.5 rounded-full text-xs font-medium capitalize ${
+              orderType.toLowerCase() === 'carryout' ? 'bg-lime-400 text-gray-900' : 'bg-purple-500 text-white'
+            }`}>
               {orderType}
             </span>
           )}
@@ -419,7 +498,7 @@ function ParsedOrderCard({ order, detail }: { order: ParsedOrder; detail: Domino
             {detail.customer_phone && (
               <div className="flex items-center gap-1.5">
                 <span className="text-gray-400 text-sm">{'\uD83D\uDCDE'}</span>
-                <span className="text-sm text-gray-600 dark:text-gray-400">{detail.customer_phone}</span>
+                <span className="text-sm text-gray-600 dark:text-gray-400">{formatPhone(detail.customer_phone)}</span>
               </div>
             )}
           </div>
@@ -515,10 +594,15 @@ function parseLogTimestamp(ts: string): Date | null {
 
 /** Extract nested order object - Dominos API may nest under .Order or .result.Order */
 function extractOrder(result: Record<string, any>): Record<string, any> | null {
+  // Direct top-level
   if (result.Order) return result.Order;
   if (result.result?.Order) return result.result.Order;
   if (result.order) return result.order;
   if (result.result?.order) return result.result.order;
+  // Nested inside orderData (matches site /test response structure)
+  if (result.orderData?.validatedOrder?.Order) return result.orderData.validatedOrder.Order;
+  if (result.orderData?.createOrderData?.order) return result.orderData.createOrderData.order;
+  if (result.orderData?.priceOrderData?.order) return result.orderData.priceOrderData.order;
   // If result itself looks like an order (has Products or Amounts)
   if (result.Products || result.Amounts || result.StoreID) return result;
   return null;
@@ -580,6 +664,23 @@ function OrderResultSummary({ result, showRawJson, onToggleRaw }: { result: Reco
   const coupons = order?.Coupons || order?.coupons || [];
   const totalAmount = amounts.find(a => a.label === 'Total');
 
+  // Extra fields from site /test response
+  const executionTime = result.executionTime || '';
+  const requestId = result.requestId || '';
+  const sessionId = result.sessionId || '';
+  const summary = result.summary || '';
+  const message = result.message || '';
+  const topLevelTotal = result.totalPrice != null ? result.totalPrice : null;
+  const displayTotal = totalAmount ? totalAmount.value : topLevelTotal;
+
+  // Pricing breakdown from orderData
+  const pricingData = result.orderData?.priceOrderData?.pricing;
+  const amountsBreakdown = result.orderData?.priceOrderData?.amountsBreakdown || order?.AmountsBreakdown;
+
+  // StatusItems from validated order
+  const statusItems = result.orderData?.validatedOrder?.StatusItems || [];
+  const offerData = result.orderData?.validatedOrder?.Offer;
+
   return (
     <div className="space-y-3">
       {/* Status Banner */}
@@ -596,12 +697,15 @@ function OrderResultSummary({ result, showRawJson, onToggleRaw }: { result: Reco
               {isSuccess ? 'Order Submitted Successfully' : 'Order Failed'}
             </span>
           </div>
-          {totalAmount && (
+          {displayTotal != null && (
             <span className="text-2xl font-bold text-gray-900 dark:text-gray-100">
-              ${totalAmount.value.toFixed(2)}
+              ${Number(displayTotal).toFixed(2)}
             </span>
           )}
         </div>
+        {message && (
+          <p className={`mt-1 text-sm ${isSuccess ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>{message}</p>
+        )}
         {orderId && (
           <div className="mt-1 text-xs text-gray-600 dark:text-gray-400 font-mono">
             Order ID: {orderId}
@@ -612,8 +716,32 @@ function OrderResultSummary({ result, showRawJson, onToggleRaw }: { result: Reco
         )}
       </div>
 
+      {/* Stats Cards - matches site /test interface */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <div className="bg-white dark:bg-gray-800 rounded-lg p-3 border border-gray-200 dark:border-gray-700 text-center">
+          <div className="text-lg font-bold text-blue-600 dark:text-blue-400">{executionTime || '-'}</div>
+          <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Execution Time</div>
+        </div>
+        <div className="bg-white dark:bg-gray-800 rounded-lg p-3 border border-gray-200 dark:border-gray-700 text-center">
+          <div className="text-lg font-bold text-green-600 dark:text-green-400">
+            {displayTotal != null ? `$${Number(displayTotal).toFixed(2)}` : '$0.00'}
+          </div>
+          <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Total Price</div>
+        </div>
+        <div className="bg-white dark:bg-gray-800 rounded-lg p-3 border border-gray-200 dark:border-gray-700 text-center">
+          <div className="text-lg font-bold text-purple-600 dark:text-purple-400">{products.length}</div>
+          <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Items</div>
+        </div>
+        <div className="bg-white dark:bg-gray-800 rounded-lg p-3 border border-gray-200 dark:border-gray-700 text-center">
+          <div className={`text-lg font-bold ${isSuccess ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+            {isSuccess ? 'SUCCESS' : 'FAILED'}
+          </div>
+          <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Status</div>
+        </div>
+      </div>
+
       {/* Order Info Grid */}
-      {(storeId || serviceMethod || phone || estimatedWait || priceOrderTime) && (
+      {(storeId || serviceMethod || phone || estimatedWait || priceOrderTime || sessionId || requestId || summary) && (
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
           {storeId && (
             <div className="bg-gray-50 dark:bg-gray-900 rounded-md p-3 border border-gray-200 dark:border-gray-700">
@@ -647,8 +775,26 @@ function OrderResultSummary({ result, showRawJson, onToggleRaw }: { result: Reco
           )}
           {statusCode && (
             <div className="bg-gray-50 dark:bg-gray-900 rounded-md p-3 border border-gray-200 dark:border-gray-700">
-              <div className="text-xs text-gray-500 dark:text-gray-400 uppercase">Status</div>
+              <div className="text-xs text-gray-500 dark:text-gray-400 uppercase">Status Code</div>
               <div className="text-sm font-semibold text-gray-900 dark:text-gray-100 mt-0.5">{String(statusCode)}</div>
+            </div>
+          )}
+          {sessionId && (
+            <div className="bg-gray-50 dark:bg-gray-900 rounded-md p-3 border border-gray-200 dark:border-gray-700">
+              <div className="text-xs text-gray-500 dark:text-gray-400 uppercase">Session</div>
+              <div className="text-sm font-semibold text-gray-900 dark:text-gray-100 mt-0.5 truncate" title={sessionId}>{sessionId}</div>
+            </div>
+          )}
+          {requestId && (
+            <div className="bg-gray-50 dark:bg-gray-900 rounded-md p-3 border border-gray-200 dark:border-gray-700">
+              <div className="text-xs text-gray-500 dark:text-gray-400 uppercase">Request ID</div>
+              <div className="text-sm font-semibold text-gray-900 dark:text-gray-100 mt-0.5 truncate font-mono" title={requestId}>{requestId}</div>
+            </div>
+          )}
+          {summary && (
+            <div className="bg-gray-50 dark:bg-gray-900 rounded-md p-3 border border-gray-200 dark:border-gray-700 col-span-2 sm:col-span-3">
+              <div className="text-xs text-gray-500 dark:text-gray-400 uppercase">Summary</div>
+              <div className="text-sm font-semibold text-gray-900 dark:text-gray-100 mt-0.5">{summary}</div>
             </div>
           )}
         </div>
@@ -712,8 +858,68 @@ function OrderResultSummary({ result, showRawJson, onToggleRaw }: { result: Reco
         </div>
       )}
 
+      {/* Pricing from orderData.priceOrderData (fallback when amounts not in order object) */}
+      {amounts.length === 0 && pricingData && (
+        <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+          <div className="px-3 py-2 bg-gray-100 dark:bg-gray-700 text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase">
+            Pricing
+          </div>
+          <div className="divide-y divide-gray-100 dark:divide-gray-700/50">
+            {pricingData.subtotal != null && (
+              <div className="flex justify-between px-3 py-1.5 text-sm">
+                <span className="text-gray-700 dark:text-gray-300">Subtotal</span>
+                <span className="font-mono text-gray-900 dark:text-gray-100">${Number(pricingData.subtotal).toFixed(2)}</span>
+              </div>
+            )}
+            {pricingData.tax != null && (
+              <div className="flex justify-between px-3 py-1.5 text-sm">
+                <span className="text-gray-700 dark:text-gray-300">Tax</span>
+                <span className="font-mono text-gray-900 dark:text-gray-100">${Number(pricingData.tax).toFixed(2)}</span>
+              </div>
+            )}
+            {pricingData.surcharge != null && pricingData.surcharge !== 0 && (
+              <div className="flex justify-between px-3 py-1.5 text-sm">
+                <span className="text-gray-700 dark:text-gray-300">Service Fee</span>
+                <span className="font-mono text-gray-900 dark:text-gray-100">${Number(pricingData.surcharge).toFixed(2)}</span>
+              </div>
+            )}
+            {pricingData.discount != null && pricingData.discount !== 0 && (
+              <div className="flex justify-between px-3 py-1.5 text-sm">
+                <span className="text-green-600 dark:text-green-400">Discount</span>
+                <span className="font-mono text-green-600 dark:text-green-400">-${Math.abs(Number(pricingData.discount)).toFixed(2)}</span>
+              </div>
+            )}
+            {pricingData.total != null && (
+              <div className="flex justify-between px-3 py-1.5 text-sm bg-gray-50 dark:bg-gray-800 font-bold">
+                <span className="text-gray-700 dark:text-gray-300">Total</span>
+                <span className="font-mono text-gray-900 dark:text-gray-100 text-base">${Number(pricingData.total).toFixed(2)}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* AmountsBreakdown (detailed Dominos breakdown) */}
+      {amountsBreakdown && typeof amountsBreakdown === 'object' && Object.keys(amountsBreakdown).length > 0 && (
+        <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+          <div className="px-3 py-2 bg-gray-100 dark:bg-gray-700 text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase">
+            Amounts Breakdown
+          </div>
+          <div className="divide-y divide-gray-100 dark:divide-gray-700/50">
+            {Object.entries(amountsBreakdown).map(([key, val]) => (
+              <div key={key} className="flex justify-between px-3 py-1.5 text-sm">
+                <span className="text-gray-700 dark:text-gray-300">{key}</span>
+                <span className="font-mono text-gray-900 dark:text-gray-100">
+                  {typeof val === 'number' ? `$${val.toFixed(2)}` : String(val)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Promotions */}
-      {(availablePromos || (Array.isArray(coupons) && coupons.length > 0)) && (
+      {(availablePromos || (Array.isArray(coupons) && coupons.length > 0) || offerData) && (
         <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
           <div className="px-3 py-2 bg-yellow-50 dark:bg-yellow-900/20 text-xs font-semibold text-yellow-700 dark:text-yellow-300 uppercase">
             Promotions
@@ -731,6 +937,40 @@ function OrderResultSummary({ result, showRawJson, onToggleRaw }: { result: Reco
                 <span className="text-green-600 dark:text-green-400 font-mono">
                   {c.Price ? `-$${parseFloat(c.Price).toFixed(2)}` : 'Applied'}
                 </span>
+              </div>
+            ))}
+            {offerData?.CouponList && Array.isArray(offerData.CouponList) && offerData.CouponList.length > 0 && (
+              <div className="pt-1 border-t border-gray-200 dark:border-gray-700">
+                <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">Offer Coupons</div>
+                {offerData.CouponList.map((c: any, i: number) => (
+                  <div key={i} className="flex justify-between">
+                    <span className="text-gray-600 dark:text-gray-400">{c.Code || `Coupon ${i + 1}`}</span>
+                    <span className="text-green-600 dark:text-green-400 font-mono">
+                      {c.Price ? `-$${parseFloat(c.Price).toFixed(2)}` : 'Applied'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Status Items */}
+      {statusItems.length > 0 && (
+        <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+          <div className="px-3 py-2 bg-gray-100 dark:bg-gray-700 text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase">
+            Status Items
+          </div>
+          <div className="p-3 space-y-1 text-sm">
+            {statusItems.map((si: any, i: number) => (
+              <div key={i} className="flex items-center gap-2">
+                <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${
+                  si.Code === 'Success' || si.Code === 'Warning'
+                    ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300'
+                    : 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300'
+                }`}>{si.Code}</span>
+                {si.Message && <span className="text-gray-600 dark:text-gray-400">{si.Message}</span>}
               </div>
             ))}
           </div>
@@ -779,6 +1019,17 @@ export default function DominosOrders() {
   const [submitResult, setSubmitResult] = useState<Record<string, any> | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [showRawJson, setShowRawJson] = useState(false);
+
+  // Auto-refresh state
+  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState<boolean>(getStoredAutoRefreshEnabled);
+  const [autoRefreshInterval, setAutoRefreshInterval] = useState<number>(getStoredAutoRefreshInterval);
+  const [autoRefreshCountdown, setAutoRefreshCountdown] = useState<number>(0);
+  const [autoRefreshing, setAutoRefreshing] = useState<boolean>(false);
+  const [customIntervalInput, setCustomIntervalInput] = useState<string>(() => {
+    const stored = getStoredAutoRefreshInterval();
+    return isCustomInterval(stored) ? String(stored) : '180';
+  });
+  const [showCustomInput, setShowCustomInput] = useState<boolean>(() => isCustomInterval(getStoredAutoRefreshInterval()));
 
   // Filters
   const [filterStatus, setFilterStatus] = useState('');
@@ -981,6 +1232,50 @@ export default function DominosOrders() {
     }
   };
 
+  // Silent auto-refresh: re-fetch logs
+  const handleAutoRefresh = useCallback(async () => {
+    if (loading || autoRefreshing) return;
+    try {
+      setAutoRefreshing(true);
+      const res = await dominosApi.getDashboardLogs({ limit: 1000 });
+      setAllLogs(res.logs || []);
+    } catch {
+      // Silent fail for auto-refresh
+    } finally {
+      setAutoRefreshing(false);
+    }
+  }, [loading, autoRefreshing]);
+
+  // Auto-refresh polling
+  useEffect(() => {
+    if (!autoRefreshEnabled) {
+      setAutoRefreshCountdown(0);
+      return;
+    }
+    setAutoRefreshCountdown(autoRefreshInterval);
+
+    const countdownId = setInterval(() => {
+      setAutoRefreshCountdown(prev => prev <= 1 ? autoRefreshInterval : prev - 1);
+    }, 1000);
+
+    const refreshId = setInterval(() => {
+      handleAutoRefresh();
+    }, autoRefreshInterval * 1000);
+
+    return () => {
+      clearInterval(countdownId);
+      clearInterval(refreshId);
+    };
+  }, [autoRefreshEnabled, autoRefreshInterval, handleAutoRefresh]);
+
+  // Persist auto-refresh preferences
+  useEffect(() => {
+    try {
+      localStorage.setItem(AUTO_REFRESH_ENABLED_KEY, String(autoRefreshEnabled));
+      localStorage.setItem(AUTO_REFRESH_INTERVAL_KEY, String(autoRefreshInterval));
+    } catch {}
+  }, [autoRefreshEnabled, autoRefreshInterval]);
+
   return (
     <div className="p-6 space-y-4 overflow-y-auto h-full">
       {/* Filtered Statistics header + Clear All */}
@@ -1016,6 +1311,102 @@ export default function DominosOrders() {
           >
             Refresh
           </button>
+
+          {/* Auto-Refresh Controls */}
+          <div className="flex items-center gap-1.5 ml-2 pl-2 border-l border-gray-300 dark:border-gray-600">
+            <span className="text-xs text-gray-500 dark:text-gray-400">Auto</span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={autoRefreshEnabled}
+              onClick={() => setAutoRefreshEnabled(!autoRefreshEnabled)}
+              className={`relative inline-flex h-4 w-7 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 ${
+                autoRefreshEnabled ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'
+              }`}
+            >
+              <span
+                className={`pointer-events-none inline-block h-3 w-3 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                  autoRefreshEnabled ? 'translate-x-3' : 'translate-x-0'
+                }`}
+              />
+            </button>
+
+            {autoRefreshEnabled && (
+              <>
+                <select
+                  value={showCustomInput ? -1 : autoRefreshInterval}
+                  onChange={(e) => {
+                    const val = Number(e.target.value);
+                    if (val === -1) {
+                      setShowCustomInput(true);
+                      const customVal = parseInt(customIntervalInput, 10);
+                      if (customVal > 0) setAutoRefreshInterval(customVal);
+                    } else {
+                      setShowCustomInput(false);
+                      setAutoRefreshInterval(val);
+                    }
+                  }}
+                  className="text-xs px-1.5 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                >
+                  {AUTO_REFRESH_INTERVALS.map(opt => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+
+                {showCustomInput && (
+                  <>
+                    <input
+                      type="number"
+                      min="10"
+                      max="3600"
+                      value={customIntervalInput}
+                      onChange={(e) => setCustomIntervalInput(e.target.value)}
+                      onBlur={() => {
+                        const val = parseInt(customIntervalInput, 10);
+                        if (val >= 10 && val <= 3600) {
+                          setAutoRefreshInterval(val);
+                        } else {
+                          setCustomIntervalInput(String(autoRefreshInterval));
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          const val = parseInt(customIntervalInput, 10);
+                          if (val >= 10 && val <= 3600) setAutoRefreshInterval(val);
+                        }
+                      }}
+                      className="w-14 text-xs px-1.5 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      placeholder="sec"
+                    />
+                    <span className="text-xs text-gray-400">s</span>
+                  </>
+                )}
+
+                {autoRefreshing ? (
+                  <div className="flex items-center gap-1 text-xs text-blue-500">
+                    <svg className="animate-spin h-3 w-3" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    </svg>
+                    <span>refreshing</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400 tabular-nums">
+                    <span className="relative flex h-1.5 w-1.5">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-green-500"></span>
+                    </span>
+                    <span>
+                      {autoRefreshCountdown >= 60
+                        ? `${Math.floor(autoRefreshCountdown / 60)}:${String(autoRefreshCountdown % 60).padStart(2, '0')}`
+                        : `${autoRefreshCountdown}s`
+                      }
+                    </span>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
         </div>
       </div>
 
@@ -1264,7 +1655,21 @@ export default function DominosOrders() {
                     <div className="flex items-center mb-2">
                       <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Request Body</h4>
                       {selectedLog.request_body && (
-                        <CopyButton text={formatJson(selectedLog.request_body)} />
+                        <>
+                          <CopyButton text={formatJson(selectedLog.request_body)} />
+                          <button
+                            onClick={() => {
+                              setOrderJson(formatJson(selectedLog.request_body));
+                              setSubmitResult(null);
+                              setSubmitError(null);
+                              setSelectedLog(null);
+                              setShowSubmitModal(true);
+                            }}
+                            className="ml-2 px-2 py-0.5 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors"
+                          >
+                            Re-Test Order
+                          </button>
+                        </>
                       )}
                     </div>
                     {selectedLog.request_body ? (

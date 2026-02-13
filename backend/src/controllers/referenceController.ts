@@ -1,12 +1,13 @@
 import { Request, Response } from 'express';
 import { createCloud9Client } from '../services/cloud9/client';
-import { Environment, isValidEnvironment } from '../config/cloud9';
+import { Cloud9Config, Environment, isValidEnvironment } from '../config/cloud9';
 import { AppError, asyncHandler } from '../middleware/errorHandler';
 import {
   Cloud9Location,
   Cloud9AppointmentType,
   Cloud9Provider,
 } from '../types/cloud9';
+import { getCloud9ConfigForTenant } from '../middleware/tenantContext';
 import logger from '../utils/logger';
 
 /**
@@ -30,13 +31,18 @@ function getEnvironment(req: Request): Environment {
   return env;
 }
 
+/** Get Cloud9 config override from tenant context (undefined = use global defaults) */
+function getTenantCloud9Config(req: Request, env: Environment): Cloud9Config | undefined {
+  return req.tenantContext ? getCloud9ConfigForTenant(req.tenantContext, env) : undefined;
+}
+
 /**
  * GET /api/reference/locations
  * Get all practice locations (always fetches from Cloud 9 API in real-time)
  */
 export const getLocations = asyncHandler(async (req: Request, res: Response) => {
   const environment = getEnvironment(req);
-  const client = createCloud9Client(environment);
+  const client = createCloud9Client(environment, getTenantCloud9Config(req, environment));
 
   // Fetch from Cloud 9 API
   const response = await client.getLocations(false);
@@ -77,7 +83,7 @@ export const getLocations = asyncHandler(async (req: Request, res: Response) => 
  */
 export const getAppointmentTypes = asyncHandler(async (req: Request, res: Response) => {
   const environment = getEnvironment(req);
-  const client = createCloud9Client(environment);
+  const client = createCloud9Client(environment, getTenantCloud9Config(req, environment));
 
   // Fetch from Cloud 9 API
   const response = await client.getAppointmentTypes(false);
@@ -119,7 +125,7 @@ export const getProviders = asyncHandler(async (req: Request, res: Response) => 
   const environment = getEnvironment(req);
   const locationGuid = req.query.locationGuid as string | undefined;
 
-  const client = createCloud9Client(environment);
+  const client = createCloud9Client(environment, getTenantCloud9Config(req, environment));
 
   // Fetch from Cloud 9 API
   const response = await client.getChairSchedules();

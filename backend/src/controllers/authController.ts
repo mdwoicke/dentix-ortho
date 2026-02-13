@@ -1,6 +1,8 @@
 import { Request, Response } from 'express';
 import { AppError, asyncHandler } from '../middleware/errorHandler';
 import { UserModel } from '../models/User';
+import { TenantModel } from '../models/Tenant';
+import { TenantTabModel } from '../models/TenantTab';
 import { authenticate, changePassword, verifyToken } from '../services/authService';
 
 /**
@@ -26,11 +28,25 @@ export const login = asyncHandler(async (req: Request, res: Response) => {
       throw new AppError('Invalid email or password', 401);
     }
 
+    // Get enabled tabs for the user's default tenant
+    let enabledTabs: string[] = [];
+    try {
+      const tenantId = result.defaultTenantId;
+      if (tenantId) {
+        enabledTabs = TenantTabModel.getEnabledTabs(tenantId);
+      }
+    } catch {
+      // tenant_tabs table may not exist yet
+    }
+
     res.json({
       status: 'success',
       data: {
         user: result.user,
-        token: result.token
+        token: result.token,
+        tenants: result.tenants,
+        defaultTenantId: result.defaultTenantId,
+        enabledTabs,
       }
     });
   } catch (error) {
@@ -119,8 +135,97 @@ export const getCurrentUser = asyncHandler(async (req: Request, res: Response) =
     throw new AppError('Account is disabled', 403);
   }
 
+  // Get tenant info
+  let tenants: any[] = [];
+  let defaultTenantId: number | null = null;
+  let enabledTabs: string[] = [];
+  try {
+    tenants = TenantModel.getUserTenants(payload.userId);
+    defaultTenantId = TenantModel.getUserDefaultTenantId(payload.userId);
+    if (defaultTenantId) {
+      enabledTabs = TenantTabModel.getEnabledTabs(defaultTenantId);
+    }
+  } catch {
+    // Tenants table may not exist yet
+  }
+
   res.json({
     status: 'success',
-    data: { user }
+    data: { user, tenants, defaultTenantId, enabledTabs }
+  });
+});
+
+/**
+ * GET /api/auth/tenants
+ * List current user's tenants
+ */
+export const getUserTenants = asyncHandler(async (req: Request, res: Response) => {
+  const authHeader = req.header('Authorization');
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    throw new AppError('Authentication required', 401);
+  }
+
+  const token = authHeader.substring(7);
+  const payload = verifyToken(token);
+
+  if (!payload) {
+    throw new AppError('Invalid or expired token', 401);
+  }
+
+  const tenants = TenantModel.getUserTenants(payload.userId);
+  const defaultTenantId = TenantModel.getUserDefaultTenantId(payload.userId);
+
+  res.json({
+    status: 'success',
+    data: { tenants, defaultTenantId }
+  });
+});
+
+/**
+ * POST /api/auth/tenants/:id/switch
+ * Switch user's active (default) tenant
+ */
+export const switchTenant = asyncHandler(async (req: Request, res: Response) => {
+  const authHeader = req.header('Authorization');
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    throw new AppError('Authentication required', 401);
+  }
+
+  const token = authHeader.substring(7);
+  const payload = verifyToken(token);
+
+  if (!payload) {
+    throw new AppError('Invalid or expired token', 401);
+  }
+
+  const tenantId = parseInt(req.params.id);
+  if (isNaN(tenantId)) {
+    throw new AppError('Invalid tenant ID', 400);
+  }
+
+  // Verify user has access to this tenant
+  if (!TenantModel.userHasAccess(payload.userId, tenantId)) {
+    throw new AppError('You do not have access to this tenant', 403);
+  }
+
+  // Verify tenant is active
+  const tenant = TenantModel.getById(tenantId);
+  if (!tenant || !tenant.is_active) {
+    throw new AppError('Tenant not found or inactive', 404);
+  }
+
+  TenantModel.setUserDefaultTenant(payload.userId, tenantId);
+
+  let enabledTabs: string[] = [];
+  try {
+    enabledTabs = TenantTabModel.getEnabledTabs(tenantId);
+  } catch {
+    // tenant_tabs table may not exist yet
+  }
+
+  res.json({
+    status: 'success',
+    message: `Switched to tenant: ${tenant.name}`,
+    data: { tenantId, tenantName: tenant.name, enabledTabs }
   });
 });

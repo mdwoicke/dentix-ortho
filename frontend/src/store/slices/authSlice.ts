@@ -9,8 +9,9 @@ import type { RootState } from '../store';
 import type { Environment } from '../../types';
 import type { User, TabKey } from '../../types/auth.types';
 import { API_CONFIG, STORAGE_KEYS } from '../../utils/constants';
-import { setCurrentEnvironment, setAuthToken, removeAuthToken, getAuthToken } from '../../services/api/client';
+import { setCurrentEnvironment, setAuthToken, removeAuthToken, getAuthToken, removeCurrentTenantId } from '../../services/api/client';
 import * as authApi from '../../services/api/authApi';
+import { setTenantsFromAuth, clearTenantState } from './tenantSlice';
 
 interface AuthState {
   environment: Environment;
@@ -50,11 +51,21 @@ const initialState: AuthState = {
  */
 export const login = createAsyncThunk(
   'auth/login',
-  async (credentials: { email: string; password: string }, { rejectWithValue }) => {
+  async (credentials: { email: string; password: string }, { dispatch, rejectWithValue }) => {
     try {
       const response = await authApi.login(credentials);
       // Store token
       setAuthToken(response.data.token);
+
+      // Set tenant state from login response
+      if (response.data.tenants) {
+        dispatch(setTenantsFromAuth({
+          tenants: response.data.tenants,
+          defaultTenantId: response.data.defaultTenantId ?? null,
+          enabledTabs: response.data.enabledTabs,
+        }));
+      }
+
       return response.data;
     } catch (error: any) {
       return rejectWithValue(error.message || 'Login failed');
@@ -82,7 +93,7 @@ export const changePassword = createAsyncThunk(
  */
 export const initializeAuth = createAsyncThunk(
   'auth/initialize',
-  async (_, { rejectWithValue }) => {
+  async (_, { dispatch, rejectWithValue }) => {
     try {
       const token = getAuthToken();
       if (!token) {
@@ -90,6 +101,16 @@ export const initializeAuth = createAsyncThunk(
       }
 
       const response = await authApi.getCurrentUser();
+
+      // Set tenant state from /me response
+      if (response.data.tenants) {
+        dispatch(setTenantsFromAuth({
+          tenants: response.data.tenants,
+          defaultTenantId: response.data.defaultTenantId ?? null,
+          enabledTabs: response.data.enabledTabs,
+        }));
+      }
+
       return { user: response.data.user, token };
     } catch (error: any) {
       // Token is invalid, remove it
@@ -143,6 +164,8 @@ export const authSlice = createSlice({
       state.mustChangePassword = false;
       state.error = null;
       removeAuthToken();
+      removeCurrentTenantId();
+      // Note: clearTenantState is dispatched via middleware or component
     },
 
     /**

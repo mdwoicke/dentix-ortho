@@ -1,6 +1,7 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { UserModel, UserWithPermissions } from '../models/User';
+import { TenantModel, TenantSummary } from '../models/Tenant';
 import logger from '../utils/logger';
 
 /**
@@ -26,11 +27,14 @@ export interface JwtPayload {
   userId: number;
   email: string;
   isAdmin: boolean;
+  defaultTenantId?: number;
 }
 
 export interface LoginResult {
   user: UserWithPermissions;
   token: string;
+  tenants: TenantSummary[];
+  defaultTenantId: number | null;
 }
 
 /**
@@ -62,11 +66,12 @@ export function generateTempPassword(): string {
 /**
  * Generate a JWT token for a user
  */
-export function generateToken(user: UserWithPermissions): string {
+export function generateToken(user: UserWithPermissions, defaultTenantId?: number): string {
   const payload: JwtPayload = {
     userId: user.id,
     email: user.email,
-    isAdmin: user.is_admin
+    isAdmin: user.is_admin,
+    defaultTenantId,
   };
 
   return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
@@ -116,14 +121,26 @@ export async function authenticate(email: string, password: string): Promise<Log
     return null;
   }
 
-  // Generate token
-  const token = generateToken(userWithPermissions);
+  // Get tenant info
+  let tenants: TenantSummary[] = [];
+  let defaultTenantId: number | null = null;
+  try {
+    tenants = TenantModel.getUserTenants(user.id);
+    defaultTenantId = TenantModel.getUserDefaultTenantId(user.id);
+  } catch {
+    // Tenants table may not exist yet (migration hasn't run)
+  }
+
+  // Generate token with tenant info
+  const token = generateToken(userWithPermissions, defaultTenantId || undefined);
 
   logger.info(`User authenticated: ${email}`);
 
   return {
     user: userWithPermissions,
-    token
+    token,
+    tenants,
+    defaultTenantId,
   };
 }
 

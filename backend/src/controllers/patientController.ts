@@ -1,8 +1,9 @@
 import { Request, Response } from 'express';
 import { createCloud9Client } from '../services/cloud9/client';
-import { Environment, isValidEnvironment } from '../config/cloud9';
+import { Cloud9Config, Environment, isValidEnvironment } from '../config/cloud9';
 import { AppError, asyncHandler } from '../middleware/errorHandler';
 import { extractPatientGuidFromResponse } from '../services/cloud9/xmlParser';
+import { getCloud9ConfigForTenant } from '../middleware/tenantContext';
 import logger from '../utils/logger';
 
 /**
@@ -26,6 +27,10 @@ function getEnvironment(req: Request): Environment {
   return env;
 }
 
+function getTenantCloud9Config(req: Request, env: Environment): Cloud9Config | undefined {
+  return req.tenantContext ? getCloud9ConfigForTenant(req.tenantContext, env) : undefined;
+}
+
 /**
  * GET /api/patients/search
  * Search for patients by name
@@ -40,7 +45,7 @@ export const searchPatients = asyncHandler(async (req: Request, res: Response) =
     throw new AppError('Search query is required', 400);
   }
 
-  const client = createCloud9Client(environment);
+  const client = createCloud9Client(environment, getTenantCloud9Config(req, environment));
 
   // Search via Cloud 9 API
   const response = await client.searchPatients(query, pageIndex, pageSize);
@@ -94,7 +99,7 @@ export const getPatient = asyncHandler(async (req: Request, res: Response) => {
     throw new AppError('Patient GUID is required', 400);
   }
 
-  const client = createCloud9Client(environment);
+  const client = createCloud9Client(environment, getTenantCloud9Config(req, environment));
 
   // Fetch from Cloud 9 API
   const response = await client.getPatientInformation(patientGuid);
@@ -186,7 +191,7 @@ export const createPatient = asyncHandler(async (req: Request, res: Response) =>
     );
   }
 
-  const client = createCloud9Client(environment);
+  const client = createCloud9Client(environment, getTenantCloud9Config(req, environment));
 
   // Format birthdate to Cloud 9's expected format: YYYY-MM-DDTHH:MM:SS
   const formattedBirthdate = birthdate?.includes('T')
@@ -267,7 +272,7 @@ export const updatePatient = asyncHandler(async (req: Request, res: Response) =>
     throw new AppError('Patient GUID is required', 400);
   }
 
-  const client = createCloud9Client(environment);
+  const client = createCloud9Client(environment, getTenantCloud9Config(req, environment));
 
   // Prepare update parameters (only include fields that are provided)
   const params: any = {

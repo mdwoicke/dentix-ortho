@@ -15,6 +15,7 @@ import {
   clearError
 } from '../../store/slices/authSlice';
 import { ROUTES } from '../../utils/constants';
+import logo from '@shared/logo.webp';
 
 export function LoginPage() {
   const dispatch = useAppDispatch();
@@ -56,28 +57,11 @@ export function LoginPage() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-slate-900 px-4 py-12 transition-colors">
       <div className="w-full max-w-md">
-        {/* Logo and Title */}
+        {/* Logo */}
         <div className="text-center mb-8">
           <div className="flex justify-center mb-4">
-            <div className="w-16 h-16 bg-blue-600 rounded-xl flex items-center justify-center">
-              <svg
-                className="w-10 h-10 text-white"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z"
-                />
-              </svg>
-            </div>
+            <img src={logo} alt="IntelePeer" className="h-52 w-auto" />
           </div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
-            Cloud9 Ortho
-          </h1>
           <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
             Sign in to your account
           </p>
@@ -155,7 +139,7 @@ export function LoginPage() {
 
         {/* Footer */}
         <p className="mt-6 text-center text-xs text-gray-500 dark:text-gray-400">
-          Cloud9 Ortho Practice Management System
+          IntelePeer Practice Management System
         </p>
       </div>
     </div>

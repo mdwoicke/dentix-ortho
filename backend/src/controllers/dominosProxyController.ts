@@ -25,7 +25,7 @@ function handleProxyError(error: unknown, res: Response): void {
     if (error.response) {
       const data = error.response.data;
       // If the upstream returned HTML (e.g. Express default 404 page), convert to JSON
-      if (typeof data === 'string' && data.includes('<!DOCTYPE') || data.includes('<html')) {
+      if (typeof data === 'string' && (data.includes('<!DOCTYPE') || data.includes('<html'))) {
         res.status(error.response.status).json({
           success: false,
           error: `Dominos service returned HTTP ${error.response.status}`,
@@ -50,7 +50,11 @@ async function proxyGet(req: Request, res: Response, targetPath: string): Promis
   }
   try {
     const url = buildTargetUrl(serviceUrl, targetPath, req.url.split('?')[1] || '');
+    const start = Date.now();
+    logger.info(`[DominosProxy] GET ${targetPath} starting...`);
     const response = await axios.get(url, { timeout: READ_TIMEOUT });
+    const elapsed = Date.now() - start;
+    logger.info(`[DominosProxy] GET ${targetPath} completed in ${elapsed}ms (status=${response.status}, size=${JSON.stringify(response.data).length})`);
     res.status(response.status).json(response.data);
   } catch (error) {
     handleProxyError(error, res);
@@ -278,6 +282,51 @@ export const getStoreMenu = (req: Request, res: Response) =>
 export const getStoreCoupons = (req: Request, res: Response) =>
   proxyGet(req, res, `/api/v1/direct-order/coupons/${req.params.storeId}`);
 
+// Store info - fetched directly from Dominos public API
+const storeInfoCache = new Map<string, { data: any; expires: number }>();
+export const getStoreInfo = async (req: Request, res: Response): Promise<void> => {
+  const { storeId } = req.params;
+  const cached = storeInfoCache.get(storeId);
+  if (cached && cached.expires > Date.now()) {
+    res.json(cached.data);
+    return;
+  }
+  try {
+    const { data } = await axios.get(
+      `https://order.dominos.com/power/store/${storeId}/profile`,
+      { timeout: READ_TIMEOUT, headers: { Accept: 'application/json' } }
+    );
+    const addrDesc = data.AddressDescription || '';
+    const streetName = data.StreetName || '';
+    const city = data.City || '';
+    const region = data.Region || '';
+    // AddressDescription often includes city/state already (e.g. "100 East Lake Dr Phenix City, AL")
+    // Build a clean "street, city, state" from discrete fields when possible
+    let address: string;
+    if (streetName && city) {
+      address = [streetName, city + (region ? `, ${region}` : '')].filter(Boolean).join(', ');
+    } else if (addrDesc) {
+      address = addrDesc;
+    } else {
+      address = [streetName, city, region].filter(Boolean).join(', ');
+    }
+    const result = {
+      storeId,
+      name: data.StoreName || '',
+      phone: data.Phone || '',
+      street: streetName,
+      city,
+      region,
+      address,
+    };
+    storeInfoCache.set(storeId, { data: result, expires: Date.now() + 3600000 });
+    res.json(result);
+  } catch (err: any) {
+    logger.warn(`Failed to fetch Dominos store info for ${storeId}: ${err.message}`);
+    res.status(502).json({ success: false, error: 'Failed to fetch store info' });
+  }
+};
+
 // Import order logs from external data source
 export const importOrderLogs = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -298,7 +347,8 @@ export const importOrderLogs = async (req: Request, res: Response): Promise<void
 
     if (latestTimestamp) {
       // Start from 1 second after the latest record to avoid re-fetching
-      const lastDate = new Date(latestTimestamp);
+      // DB stores UTC timestamps without Z suffix — force UTC parse
+      const lastDate = new Date(latestTimestamp.endsWith('Z') ? latestTimestamp : latestTimestamp + 'Z');
       lastDate.setSeconds(lastDate.getSeconds() + 1);
       startDate = lastDate.toISOString();
     } else {
@@ -308,9 +358,22 @@ export const importOrderLogs = async (req: Request, res: Response): Promise<void
       startDate = thirtyDaysAgo.toISOString();
     }
 
+    // External API requires US date format in CST: "MM/DD/YYYY HH:MM:SS AM" (no comma)
+    const startDateUtc = new Date(startDate);
+    const startDateForApi = startDateUtc.toLocaleString('en-US', {
+      timeZone: 'America/Chicago',
+      month: '2-digit',
+      day: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true,
+    }).replace(',', ''); // Remove comma — external API doesn't accept it
+
     // Fetch from external API
-    const fetchUrl = `${dataSourceUrl}/api/v1/dashboard/export/logs?startDate=${encodeURIComponent(startDate)}&format=json`;
-    logger.info('Importing order logs', { tenantId, fetchUrl, latestTimestamp });
+    const fetchUrl = `${dataSourceUrl}/api/v1/dashboard/export/logs?startDate=${encodeURIComponent(startDateForApi)}&format=json`;
+    logger.info('Importing order logs', { tenantId, fetchUrl, latestTimestamp, startDate, startDateForApi });
 
     const response = await axios.get(fetchUrl, { timeout: 60000 });
     const records = Array.isArray(response.data) ? response.data : (response.data?.data || []);

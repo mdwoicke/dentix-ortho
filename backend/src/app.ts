@@ -1,6 +1,7 @@
 import express, { Application, Request, Response } from 'express';
 import corsMiddleware from './middleware/cors';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
+import { tenantContextMiddleware } from './middleware/tenantContext';
 import { loggers } from './utils/logger';
 
 // Import routes
@@ -14,6 +15,7 @@ import adminRoutes from './routes/admin';
 import skillsRunnerRoutes from './routes/skillsRunner';
 import heartbeatRoutes from './routes/heartbeat';
 import traceAnalysisRoutes from './routes/traceAnalysis';
+import dominosRoutes from './routes/dominos';
 
 /**
  * Express Application Setup
@@ -31,6 +33,9 @@ app.use(corsMiddleware);
 // Body parsers
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Tenant context resolution (after body parsers, before routes)
+app.use(tenantContextMiddleware);
 
 // Request logging middleware
 app.use((req: Request, res: Response, next) => {
@@ -72,6 +77,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/skills-runner', skillsRunnerRoutes);
 app.use('/api/heartbeat', heartbeatRoutes);
 app.use('/api/trace-analysis', traceAnalysisRoutes);
+app.use('/api/dominos', dominosRoutes);
 
 // ===========================================
 // Error Handling

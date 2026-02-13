@@ -5,6 +5,12 @@ import { getDatabase } from './config/database';
 import { seedMasterAdmin } from './services/authService';
 import { initializeTestRunCleanup, stopPeriodicCleanup } from './services/testRunCleanupService';
 import { startCacheRefreshScheduler, stopCacheRefreshScheduler } from './services/cacheRefreshScheduler';
+import { run as runMultiTenancyMigration } from './database/migrations/001_add_multi_tenancy';
+import { run as runTenantUniqueConstraintsMigration } from './database/migrations/002_tenant_unique_constraints';
+import { run as runTenantTabsMigration } from './database/migrations/003_add_tenant_tabs';
+import { run as runDominosIntegrationMigration } from './database/migrations/004_add_dominos_integration';
+import { run as runDominosOrderTablesMigration } from './database/migrations/005_add_dominos_order_tables';
+import { run as runDominosDataSourceMigration } from './database/migrations/006_add_dominos_data_source';
 
 // Load environment variables
 dotenv.config();
@@ -21,6 +27,21 @@ try {
     error: error instanceof Error ? error.message : String(error),
   });
   process.exit(1);
+}
+
+// Run multi-tenancy migration (idempotent)
+try {
+  runMultiTenancyMigration(getDatabase());
+  runTenantUniqueConstraintsMigration(getDatabase());
+  runTenantTabsMigration(getDatabase());
+  runDominosIntegrationMigration(getDatabase());
+  runDominosOrderTablesMigration(getDatabase());
+  runDominosDataSourceMigration(getDatabase());
+  logger.info('Multi-tenancy migration check completed');
+} catch (error) {
+  logger.error('Failed to run multi-tenancy migration', {
+    error: error instanceof Error ? error.message : String(error),
+  });
 }
 
 // Seed master admin account

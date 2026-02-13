@@ -1133,6 +1133,7 @@ export interface ProductionSession {
   errorCount: number;
   hasSuccessfulBooking: boolean;
   hasTransfer?: boolean;
+  hasOrder?: boolean;
 }
 
 /**

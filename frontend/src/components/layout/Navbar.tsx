@@ -6,14 +6,17 @@
 import { useState } from 'react';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import { selectEnvironment, toggleEnvironment, selectUser, logout } from '../../store/slices/authSlice';
+import { clearTenantState, selectCurrentTenant } from '../../store/slices/tenantSlice';
 import { toggleSidebar } from '../../store/slices/uiSlice';
 import { useTheme } from '../../contexts/ThemeContext';
 import { ConfirmationModal } from '../ui/ConfirmationModal';
+import { TenantSelector } from './TenantSelector';
 
 export function Navbar() {
   const dispatch = useAppDispatch();
   const environment = useAppSelector(selectEnvironment);
   const user = useAppSelector(selectUser);
+  const currentTenant = useAppSelector(selectCurrentTenant);
   const { theme, toggleTheme } = useTheme();
   const [showProductionWarning, setShowProductionWarning] = useState(false);
 
@@ -36,6 +39,7 @@ export function Navbar() {
   };
 
   const handleLogout = () => {
+    dispatch(clearTenantState());
     dispatch(logout());
   };
 
@@ -65,17 +69,33 @@ export function Navbar() {
           </button>
 
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-blue-600 dark:bg-blue-500 rounded-md flex items-center justify-center transition-colors">
-              <span className="text-white font-bold text-lg">C9</span>
-            </div>
+            {currentTenant?.logo_url ? (
+              <img
+                src={currentTenant.logo_url}
+                alt={currentTenant.name}
+                className="w-8 h-8 rounded-md object-contain"
+              />
+            ) : (
+              <div
+                className="w-8 h-8 rounded-md flex items-center justify-center transition-colors"
+                style={{ backgroundColor: currentTenant?.color_primary || '#2563EB' }}
+              >
+                <span className="text-white font-bold text-sm">
+                  {currentTenant?.short_name || 'C9'}
+                </span>
+              </div>
+            )}
             <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100 hidden sm:block transition-colors">
-              Cloud9 Ortho
+              {currentTenant?.name || 'Cloud9 Ortho'}
             </h1>
           </div>
         </div>
 
-        {/* Right: Theme toggle, Environment toggle, User info & Logout */}
+        {/* Right: Tenant selector, Theme toggle, Environment toggle, User info & Logout */}
         <div className="flex items-center gap-3">
+          {/* Tenant Selector */}
+          <TenantSelector />
+
           {/* Theme Toggle */}
           <button
             onClick={toggleTheme}

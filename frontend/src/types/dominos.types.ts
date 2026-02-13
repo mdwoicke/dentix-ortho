@@ -75,6 +75,7 @@ export interface ParsedOrder {
   couponCode: string;
   couponDescription: string;
   sessionId: string;
+  serviceMethod: string;
   categories: { category: string; icon: string; items: ParsedOrderItem[] }[];
   totalItems: number;
 }

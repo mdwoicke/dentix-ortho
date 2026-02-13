@@ -178,6 +178,31 @@ export async function submitOrder(order: DominosOrderSubmission): Promise<Record
   return data;
 }
 
+// Store info
+export interface StoreInfo {
+  storeId: string;
+  name: string;
+  phone: string;
+  street: string;
+  address: string;
+  city: string;
+  region: string;
+}
+
+const storeInfoCache = new Map<string, StoreInfo>();
+
+export async function getStoreInfo(storeId: string): Promise<StoreInfo | null> {
+  const cached = storeInfoCache.get(storeId);
+  if (cached) return cached;
+  try {
+    const { data } = await dominosClient.get(`/store/${storeId}/info`);
+    storeInfoCache.set(storeId, data);
+    return data;
+  } catch {
+    return null;
+  }
+}
+
 // Menu
 export async function getStoreMenu(storeId: string): Promise<{
   storeId: string;
@@ -230,33 +255,44 @@ export async function getStoreMenu(storeId: string): Promise<{
 
 // Coupons
 export async function getStoreCoupons(storeId: string): Promise<DominosCoupon[]> {
+  const t0 = performance.now();
   try {
     // Try dedicated coupons endpoint first
+    console.log('[DominosApi] Fetching coupons via /coupons endpoint...');
     const { data } = await dominosClient.get(`/coupons/${storeId}`);
+    const t1 = performance.now();
+    console.log(`[DominosApi] /coupons response in ${Math.round(t1 - t0)}ms`);
     const raw = data.coupons || data.data || data;
     if (Array.isArray(raw) && raw.length > 0) {
-      console.log('[DominosApi] Coupons fetched via dedicated /coupons endpoint');
+      console.log(`[DominosApi] Coupons fetched via dedicated /coupons endpoint (${raw.length} items)`);
       return parseCouponsArray(raw);
     }
     // If the dedicated endpoint returns a keyed object (like the menu Coupons structure)
     if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
       const couponsObj = raw.Coupons || raw;
       if (Object.keys(couponsObj).length > 0 && typeof Object.values(couponsObj)[0] === 'object') {
-        console.log('[DominosApi] Coupons fetched via dedicated endpoint (object format)');
+        console.log(`[DominosApi] Coupons fetched via dedicated endpoint (object format, ${Object.keys(couponsObj).length} items)`);
         return parseCouponsFromMenuObject(couponsObj);
       }
     }
+    console.warn('[DominosApi] /coupons returned empty/unusable data, falling back to menu');
   } catch (err: any) {
-    console.warn('[DominosApi] Dedicated coupons endpoint failed, falling back to menu parse:', err.message);
+    const t1 = performance.now();
+    console.warn(`[DominosApi] /coupons failed after ${Math.round(t1 - t0)}ms: ${err.message}, falling back to menu`);
   }
 
   // Fallback: fetch menu and parse Coupons object from it
   try {
+    const t2 = performance.now();
+    console.log('[DominosApi] Fetching coupons via /menu fallback...');
     const { data } = await dominosClient.get(`/menu/${storeId}`);
+    const t3 = performance.now();
+    console.log(`[DominosApi] /menu response in ${Math.round(t3 - t2)}ms`);
     const raw = data.menu || data.data || data;
     const couponsObj = raw?.Coupons;
     if (couponsObj && typeof couponsObj === 'object') {
-      console.log('[DominosApi] Coupons parsed from menu response');
+      const count = Object.keys(couponsObj).length;
+      console.log(`[DominosApi] Coupons parsed from menu (${count} items, total ${Math.round(t3 - t0)}ms)`);
       return parseCouponsFromMenuObject(couponsObj);
     }
     return [];

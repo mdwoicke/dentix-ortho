@@ -17,4 +17,10 @@ router.post('/change-password', authController.changePasswordHandler);
 // GET /api/auth/me
 router.get('/me', authController.getCurrentUser);
 
+// GET /api/auth/tenants
+router.get('/tenants', authController.getUserTenants);
+
+// POST /api/auth/tenants/:id/switch
+router.post('/tenants/:id/switch', authController.switchTenant);
+
 export default router;

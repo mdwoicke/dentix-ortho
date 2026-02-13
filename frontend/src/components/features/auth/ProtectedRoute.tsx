@@ -12,6 +12,7 @@ import {
   selectIsInitialized,
   selectMustChangePassword
 } from '../../../store/slices/authSlice';
+import { selectEnabledTabs } from '../../../store/slices/tenantSlice';
 import type { TabKey } from '../../../types/auth.types';
 import { ROUTES } from '../../../utils/constants';
 import { ChangePasswordModal } from './ChangePasswordModal';
@@ -28,6 +29,7 @@ export function ProtectedRoute({ children, requireAdmin = false, tabKey }: Prote
   const isInitialized = useAppSelector(selectIsInitialized);
   const isAdmin = useAppSelector(selectIsAdmin);
   const mustChangePassword = useAppSelector(selectMustChangePassword);
+  const enabledTabs = useAppSelector(selectEnabledTabs);
   const canAccessTab = useAppSelector(tabKey ? selectCanAccessTab(tabKey) : () => true);
 
   // Show loading while checking auth
@@ -81,9 +83,13 @@ export function ProtectedRoute({ children, requireAdmin = false, tabKey }: Prote
     return <Navigate to={ROUTES.HOME} replace />;
   }
 
-  // Check tab permission
+  // Check tenant-level tab enablement
+  if (tabKey && !enabledTabs.includes(tabKey)) {
+    return <Navigate to={ROUTES.HOME} replace />;
+  }
+
+  // Check user-level tab permission
   if (tabKey && !canAccessTab) {
-    // Redirect to dashboard for users without permission
     return <Navigate to={ROUTES.HOME} replace />;
   }
 

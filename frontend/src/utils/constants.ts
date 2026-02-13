@@ -42,6 +42,14 @@ export const ROUTES = {
   TEST_MONITOR_QUEUE_ACTIVITY: '/test-monitor/queue-activity',
   TEST_MONITOR_CACHE_HEALTH: '/test-monitor/cache-health',
   TEST_MONITOR_TRACE_ANALYSIS: '/test-monitor/trace-analysis',
+  DOMINOS: '/dominos',
+  DOMINOS_DASHBOARD: '/dominos/dashboard',
+  DOMINOS_ORDERS: '/dominos/orders',
+  DOMINOS_HEALTH: '/dominos/health',
+  DOMINOS_MENU: '/dominos/menu',
+  DOMINOS_SESSIONS: '/dominos/sessions',
+  DOMINOS_ERRORS: '/dominos/errors',
+  DOMINOS_CALL_TRACING: '/dominos/call-tracing',
 } as const;
 
 /**
@@ -134,6 +142,7 @@ export const STORAGE_KEYS = {
   SIDEBAR_STATE: 'dentix_sidebar_open',
   SIDEBAR_COLLAPSED: 'dentix_sidebar_collapsed',
   AUTH_TOKEN: 'dentix_auth_token',
+  TENANT_ID: 'dentix_tenant_id',
 } as const;
 
 /**

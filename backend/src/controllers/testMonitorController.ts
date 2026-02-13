@@ -121,6 +121,13 @@ function clearConnectionTimeout(res: Response): void {
 }
 
 /**
+ * Extract tenant_id from request context, defaulting to 1 (Default tenant)
+ */
+function getTenantIdFromRequest(req: Request): number {
+  return req.tenantContext?.id ?? 1;
+}
+
+/**
  * Get database connection (read-only)
  */
 function getTestAgentDb(): BetterSqlite3.Database {
@@ -217,40 +224,46 @@ function getTestAgentDbWritable(): BetterSqlite3.Database {
     -- Flowise Configuration Profiles: Multiple Flowise endpoint configurations
     CREATE TABLE IF NOT EXISTS flowise_configs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT UNIQUE NOT NULL,
+      name TEXT NOT NULL,
       url TEXT NOT NULL,
       api_key TEXT,
       is_default INTEGER DEFAULT 0,
+      tenant_id INTEGER NOT NULL DEFAULT 1,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(name, tenant_id)
     );
 
     -- Langfuse Configuration Profiles: Multiple Langfuse instance configurations
     CREATE TABLE IF NOT EXISTS langfuse_configs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT UNIQUE NOT NULL,
+      name TEXT NOT NULL,
       host TEXT NOT NULL,
       public_key TEXT NOT NULL,
       secret_key TEXT,
       is_default INTEGER DEFAULT 0,
+      tenant_id INTEGER NOT NULL DEFAULT 1,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(name, tenant_id)
     );
 
-    -- Indexes for config tables
+    -- Indexes for config tables (tenant indexes created by migration)
     CREATE INDEX IF NOT EXISTS idx_flowise_configs_default ON flowise_configs(is_default);
     CREATE INDEX IF NOT EXISTS idx_langfuse_configs_default ON langfuse_configs(is_default);
 
     -- Test Environment Presets: Combine Flowise + Langfuse configs for easy switching in Test tab
     CREATE TABLE IF NOT EXISTS environment_presets (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT UNIQUE NOT NULL,
+      name TEXT NOT NULL,
       description TEXT,
       flowise_config_id INTEGER,
       langfuse_config_id INTEGER,
       is_default INTEGER DEFAULT 0,
+      tenant_id INTEGER NOT NULL DEFAULT 1,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(name, tenant_id),
       FOREIGN KEY (flowise_config_id) REFERENCES flowise_configs(id) ON DELETE SET NULL,
       FOREIGN KEY (langfuse_config_id) REFERENCES langfuse_configs(id) ON DELETE SET NULL
     );
@@ -268,7 +281,105 @@ function getTestAgentDbWritable(): BetterSqlite3.Database {
     }
   }
 
+  // Migrate config tables to add tenant_id (for existing databases)
+  ensureTenantIdColumnsExist(db);
+
   return db;
+}
+
+/**
+ * Migration: Add tenant_id to flowise_configs, langfuse_configs, environment_presets
+ * For existing databases that were created before multi-tenancy.
+ * Recreates tables with tenant_id column, preserving all data with tenant_id=1.
+ */
+function ensureTenantIdColumnsExist(db: BetterSqlite3.Database): void {
+  // Check if flowise_configs already has tenant_id
+  const columns = db.prepare(`PRAGMA table_info(flowise_configs)`).all() as any[];
+  const hasTenantId = columns.some((c: any) => c.name === 'tenant_id');
+  if (hasTenantId) return; // Already migrated
+
+  console.log('[Migration] Adding tenant_id to config tables...');
+
+  // Disable FK checks during table recreation (re-enabled after)
+  db.pragma('foreign_keys = OFF');
+  db.exec('BEGIN TRANSACTION');
+  try {
+    // --- flowise_configs ---
+    db.exec(`
+      ALTER TABLE flowise_configs RENAME TO flowise_configs_old;
+      CREATE TABLE flowise_configs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        url TEXT NOT NULL,
+        api_key TEXT,
+        is_default INTEGER DEFAULT 0,
+        tenant_id INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(name, tenant_id)
+      );
+      INSERT INTO flowise_configs (id, name, url, api_key, is_default, tenant_id, created_at, updated_at)
+        SELECT id, name, url, api_key, is_default, 1, created_at, updated_at FROM flowise_configs_old;
+      DROP TABLE flowise_configs_old;
+      CREATE INDEX IF NOT EXISTS idx_flowise_configs_default ON flowise_configs(is_default);
+      CREATE INDEX IF NOT EXISTS idx_flowise_configs_tenant ON flowise_configs(tenant_id);
+    `);
+
+    // --- langfuse_configs ---
+    db.exec(`
+      ALTER TABLE langfuse_configs RENAME TO langfuse_configs_old;
+      CREATE TABLE langfuse_configs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        host TEXT NOT NULL,
+        public_key TEXT NOT NULL,
+        secret_key TEXT,
+        is_default INTEGER DEFAULT 0,
+        tenant_id INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(name, tenant_id)
+      );
+      INSERT INTO langfuse_configs (id, name, host, public_key, secret_key, is_default, tenant_id, created_at, updated_at)
+        SELECT id, name, host, public_key, secret_key, is_default, 1, created_at, updated_at FROM langfuse_configs_old;
+      DROP TABLE langfuse_configs_old;
+      CREATE INDEX IF NOT EXISTS idx_langfuse_configs_default ON langfuse_configs(is_default);
+      CREATE INDEX IF NOT EXISTS idx_langfuse_configs_tenant ON langfuse_configs(tenant_id);
+    `);
+
+    // --- environment_presets ---
+    db.exec(`
+      ALTER TABLE environment_presets RENAME TO environment_presets_old;
+      CREATE TABLE environment_presets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        description TEXT,
+        flowise_config_id INTEGER,
+        langfuse_config_id INTEGER,
+        is_default INTEGER DEFAULT 0,
+        tenant_id INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(name, tenant_id),
+        FOREIGN KEY (flowise_config_id) REFERENCES flowise_configs(id) ON DELETE SET NULL,
+        FOREIGN KEY (langfuse_config_id) REFERENCES langfuse_configs(id) ON DELETE SET NULL
+      );
+      INSERT INTO environment_presets (id, name, description, flowise_config_id, langfuse_config_id, is_default, tenant_id, created_at, updated_at)
+        SELECT id, name, description, flowise_config_id, langfuse_config_id, is_default, 1, created_at, updated_at FROM environment_presets_old;
+      DROP TABLE environment_presets_old;
+      CREATE INDEX IF NOT EXISTS idx_environment_presets_default ON environment_presets(is_default);
+      CREATE INDEX IF NOT EXISTS idx_environment_presets_tenant ON environment_presets(tenant_id);
+    `);
+
+    db.exec('COMMIT');
+    db.pragma('foreign_keys = ON');
+    console.log('[Migration] tenant_id columns added successfully');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    db.pragma('foreign_keys = ON');
+    console.error('[Migration] Failed to add tenant_id columns:', error);
+    throw error;
+  }
 }
 
 /**
@@ -2647,12 +2758,13 @@ export async function startExecution(req: Request, res: Response, next: NextFunc
     let environmentPresetName: string | null = null;
 
     if (flowiseConfigId || langfuseConfigId || environmentPresetId) {
+      const tenantId = getTenantIdFromRequest(req);
       const db = getTestAgentDb();
 
       // First check if this is an A/B sandbox environment preset
       // If so, use the direct endpoint from ab_sandboxes table
       if (environmentPresetId) {
-        const preset = db.prepare('SELECT name FROM environment_presets WHERE id = ?').get(environmentPresetId) as { name: string } | undefined;
+        const preset = db.prepare('SELECT name FROM environment_presets WHERE id = ? AND tenant_id = ?').get(environmentPresetId, tenantId) as { name: string } | undefined;
         environmentPresetName = preset?.name || null;
 
         // Check if this preset maps to an A/B sandbox (Sandbox A or Sandbox B)
@@ -2715,7 +2827,7 @@ export async function startExecution(req: Request, res: Response, next: NextFunc
 
       // If not a sandbox or sandbox lookup failed, fall back to config IDs
       if (flowiseConfigId && !flowiseConfigName) {
-        const flowiseConfig = db.prepare('SELECT name FROM flowise_configs WHERE id = ?').get(flowiseConfigId) as { name: string } | undefined;
+        const flowiseConfig = db.prepare('SELECT name FROM flowise_configs WHERE id = ? AND tenant_id = ?').get(flowiseConfigId, tenantId) as { name: string } | undefined;
         flowiseConfigName = flowiseConfig?.name || null;
         args.push('--flowise-config-id', String(flowiseConfigId));
         if (flowiseConfigName) {
@@ -2725,9 +2837,9 @@ export async function startExecution(req: Request, res: Response, next: NextFunc
         console.log(`[Execution] Using Flowise config: ${flowiseConfigName || flowiseConfigId}`);
       }
 
-      // If no Flowise config resolved yet, use the default from flowise_configs
+      // If no Flowise config resolved yet, use the default from flowise_configs (tenant-scoped)
       if (!flowiseConfigName) {
-        const defaultConfig = db.prepare('SELECT id, name FROM flowise_configs WHERE is_default = 1').get() as { id: number; name: string } | undefined;
+        const defaultConfig = db.prepare('SELECT id, name FROM flowise_configs WHERE is_default = 1 AND tenant_id = ?').get(tenantId) as { id: number; name: string } | undefined;
         if (defaultConfig) {
           flowiseConfigName = defaultConfig.name;
           args.push('--flowise-config-id', String(defaultConfig.id));
@@ -2737,7 +2849,7 @@ export async function startExecution(req: Request, res: Response, next: NextFunc
       }
 
       if (langfuseConfigId && !langfuseConfigName) {
-        const langfuseConfig = db.prepare('SELECT name FROM langfuse_configs WHERE id = ?').get(langfuseConfigId) as { name: string } | undefined;
+        const langfuseConfig = db.prepare('SELECT name FROM langfuse_configs WHERE id = ? AND tenant_id = ?').get(langfuseConfigId, tenantId) as { name: string } | undefined;
         langfuseConfigName = langfuseConfig?.name || null;
         args.push('--langfuse-config-id', String(langfuseConfigId));
         if (langfuseConfigName) {
@@ -6807,11 +6919,11 @@ export async function getLangfuseConfig(
 /**
  * Helper to migrate existing app_settings to flowise_configs if needed
  */
-function ensureFlowiseConfigsMigrated(db: BetterSqlite3.Database): void {
-  const existingConfigs = db.prepare('SELECT COUNT(*) as count FROM flowise_configs').get() as any;
+function ensureFlowiseConfigsMigrated(db: BetterSqlite3.Database, tenantId: number = 1): void {
+  const existingConfigs = db.prepare('SELECT COUNT(*) as count FROM flowise_configs WHERE tenant_id = ?').get(tenantId) as any;
 
-  if (existingConfigs.count === 0) {
-    // Migrate from app_settings
+  if (existingConfigs.count === 0 && tenantId === 1) {
+    // Migrate from app_settings (only for default tenant)
     const urlSetting = db.prepare(`
       SELECT setting_value FROM app_settings WHERE setting_key = 'flowise_production_url'
     `).get() as any;
@@ -6825,9 +6937,9 @@ function ensureFlowiseConfigsMigrated(db: BetterSqlite3.Database): void {
     if (url) {
       const now = new Date().toISOString();
       db.prepare(`
-        INSERT INTO flowise_configs (name, url, api_key, is_default, created_at, updated_at)
-        VALUES (?, ?, ?, 1, ?, ?)
-      `).run('Production', url, apiKey, now, now);
+        INSERT INTO flowise_configs (name, url, api_key, is_default, tenant_id, created_at, updated_at)
+        VALUES (?, ?, ?, 1, ?, ?, ?)
+      `).run('Production', url, apiKey, tenantId, now, now);
     }
   }
 }
@@ -6835,11 +6947,11 @@ function ensureFlowiseConfigsMigrated(db: BetterSqlite3.Database): void {
 /**
  * Helper to migrate existing app_settings to langfuse_configs if needed
  */
-function ensureLangfuseConfigsMigrated(db: BetterSqlite3.Database): void {
-  const existingConfigs = db.prepare('SELECT COUNT(*) as count FROM langfuse_configs').get() as any;
+function ensureLangfuseConfigsMigrated(db: BetterSqlite3.Database, tenantId: number = 1): void {
+  const existingConfigs = db.prepare('SELECT COUNT(*) as count FROM langfuse_configs WHERE tenant_id = ?').get(tenantId) as any;
 
-  if (existingConfigs.count === 0) {
-    // Migrate from app_settings
+  if (existingConfigs.count === 0 && tenantId === 1) {
+    // Migrate from app_settings (only for default tenant)
     const hostSetting = db.prepare(`
       SELECT setting_value FROM app_settings WHERE setting_key = 'langfuse_host'
     `).get() as any;
@@ -6857,9 +6969,9 @@ function ensureLangfuseConfigsMigrated(db: BetterSqlite3.Database): void {
     if (host && publicKey) {
       const now = new Date().toISOString();
       db.prepare(`
-        INSERT INTO langfuse_configs (name, host, public_key, secret_key, is_default, created_at, updated_at)
-        VALUES (?, ?, ?, ?, 1, ?, ?)
-      `).run('Production', host, publicKey, secretKey, now, now);
+        INSERT INTO langfuse_configs (name, host, public_key, secret_key, is_default, tenant_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, 1, ?, ?, ?)
+      `).run('Production', host, publicKey, secretKey, tenantId, now, now);
     }
   }
 }
@@ -6869,21 +6981,23 @@ function ensureLangfuseConfigsMigrated(db: BetterSqlite3.Database): void {
  * Get all Flowise configuration profiles
  */
 export async function getFlowiseConfigs(
-  _req: Request,
+  req: Request,
   res: Response,
   next: NextFunction
 ): Promise<void> {
   let db: BetterSqlite3.Database | null = null;
 
   try {
+    const tenantId = getTenantIdFromRequest(req);
     db = getTestAgentDbWritable();
-    ensureFlowiseConfigsMigrated(db);
+    ensureFlowiseConfigsMigrated(db, tenantId);
 
     const configs = db.prepare(`
       SELECT id, name, url, api_key, is_default, created_at, updated_at
       FROM flowise_configs
+      WHERE tenant_id = ?
       ORDER BY is_default DESC, name ASC
-    `).all() as any[];
+    `).all(tenantId) as any[];
 
     res.json({
       success: true,
@@ -6917,6 +7031,7 @@ export async function getFlowiseConfigById(
   let db: BetterSqlite3.Database | null = null;
 
   try {
+    const tenantId = getTenantIdFromRequest(req);
     const { id } = req.params;
     const configId = parseInt(id, 10);
 
@@ -6926,13 +7041,13 @@ export async function getFlowiseConfigById(
     }
 
     db = getTestAgentDbWritable();
-    ensureFlowiseConfigsMigrated(db);
+    ensureFlowiseConfigsMigrated(db, tenantId);
 
     const config = db.prepare(`
       SELECT id, name, url, api_key, is_default, created_at, updated_at
       FROM flowise_configs
-      WHERE id = ?
-    `).get(configId) as any;
+      WHERE id = ? AND tenant_id = ?
+    `).get(configId, tenantId) as any;
 
     if (!config) {
       res.status(404).json({ success: false, error: 'Config not found' });
@@ -6971,6 +7086,7 @@ export async function createFlowiseConfig(
   let db: BetterSqlite3.Database | null = null;
 
   try {
+    const tenantId = getTenantIdFromRequest(req);
     const { name, url, apiKey, isDefault } = req.body;
 
     if (!name || !url) {
@@ -6982,18 +7098,18 @@ export async function createFlowiseConfig(
     }
 
     db = getTestAgentDbWritable();
-    ensureFlowiseConfigsMigrated(db);
+    ensureFlowiseConfigsMigrated(db, tenantId);
     const now = new Date().toISOString();
 
-    // If setting as default, unset other defaults first
+    // If setting as default, unset other defaults first (within this tenant)
     if (isDefault) {
-      db.prepare('UPDATE flowise_configs SET is_default = 0').run();
+      db.prepare('UPDATE flowise_configs SET is_default = 0 WHERE tenant_id = ?').run(tenantId);
     }
 
     const result = db.prepare(`
-      INSERT INTO flowise_configs (name, url, api_key, is_default, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(name, url, apiKey || '', isDefault ? 1 : 0, now, now);
+      INSERT INTO flowise_configs (name, url, api_key, is_default, tenant_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(name, url, apiKey || '', isDefault ? 1 : 0, tenantId, now, now);
 
     res.json({
       success: true,
@@ -7033,6 +7149,7 @@ export async function updateFlowiseConfig(
   let db: BetterSqlite3.Database | null = null;
 
   try {
+    const tenantId = getTenantIdFromRequest(req);
     const { id } = req.params;
     const { name, url, apiKey, isDefault } = req.body;
 
@@ -7047,8 +7164,8 @@ export async function updateFlowiseConfig(
     db = getTestAgentDbWritable();
     const now = new Date().toISOString();
 
-    // Check if config exists
-    const existing = db.prepare('SELECT id, api_key FROM flowise_configs WHERE id = ?').get(id) as any;
+    // Check if config exists and belongs to this tenant
+    const existing = db.prepare('SELECT id, api_key FROM flowise_configs WHERE id = ? AND tenant_id = ?').get(id, tenantId) as any;
     if (!existing) {
       res.status(404).json({
         success: false,
@@ -7057,9 +7174,9 @@ export async function updateFlowiseConfig(
       return;
     }
 
-    // If setting as default, unset other defaults first
+    // If setting as default, unset other defaults first (within this tenant)
     if (isDefault) {
-      db.prepare('UPDATE flowise_configs SET is_default = 0').run();
+      db.prepare('UPDATE flowise_configs SET is_default = 0 WHERE tenant_id = ?').run(tenantId);
     }
 
     // Only update api_key if it's not the masked placeholder
@@ -7068,8 +7185,8 @@ export async function updateFlowiseConfig(
     db.prepare(`
       UPDATE flowise_configs
       SET name = ?, url = ?, api_key = ?, is_default = ?, updated_at = ?
-      WHERE id = ?
-    `).run(name, url, newApiKey, isDefault ? 1 : 0, now, id);
+      WHERE id = ? AND tenant_id = ?
+    `).run(name, url, newApiKey, isDefault ? 1 : 0, now, id, tenantId);
 
     res.json({
       success: true,
@@ -7108,12 +7225,13 @@ export async function deleteFlowiseConfig(
   let db: BetterSqlite3.Database | null = null;
 
   try {
+    const tenantId = getTenantIdFromRequest(req);
     const { id } = req.params;
 
     db = getTestAgentDbWritable();
 
-    // Check if config exists and is not the last one
-    const config = db.prepare('SELECT id, is_default FROM flowise_configs WHERE id = ?').get(id) as any;
+    // Check if config exists and belongs to this tenant
+    const config = db.prepare('SELECT id, is_default FROM flowise_configs WHERE id = ? AND tenant_id = ?').get(id, tenantId) as any;
     if (!config) {
       res.status(404).json({
         success: false,
@@ -7122,7 +7240,7 @@ export async function deleteFlowiseConfig(
       return;
     }
 
-    const count = db.prepare('SELECT COUNT(*) as count FROM flowise_configs').get() as any;
+    const count = db.prepare('SELECT COUNT(*) as count FROM flowise_configs WHERE tenant_id = ?').get(tenantId) as any;
     if (count.count <= 1) {
       res.status(400).json({
         success: false,
@@ -7131,11 +7249,11 @@ export async function deleteFlowiseConfig(
       return;
     }
 
-    db.prepare('DELETE FROM flowise_configs WHERE id = ?').run(id);
+    db.prepare('DELETE FROM flowise_configs WHERE id = ? AND tenant_id = ?').run(id, tenantId);
 
-    // If we deleted the default, set another as default
+    // If we deleted the default, set another as default (within this tenant)
     if (config.is_default) {
-      db.prepare('UPDATE flowise_configs SET is_default = 1 WHERE id = (SELECT MIN(id) FROM flowise_configs)').run();
+      db.prepare('UPDATE flowise_configs SET is_default = 1 WHERE id = (SELECT MIN(id) FROM flowise_configs WHERE tenant_id = ?)').run(tenantId);
     }
 
     res.json({
@@ -7161,13 +7279,14 @@ export async function setFlowiseConfigDefault(
   let db: BetterSqlite3.Database | null = null;
 
   try {
+    const tenantId = getTenantIdFromRequest(req);
     const { id } = req.params;
 
     db = getTestAgentDbWritable();
     const now = new Date().toISOString();
 
-    // Check if config exists
-    const existing = db.prepare('SELECT id FROM flowise_configs WHERE id = ?').get(id) as any;
+    // Check if config exists and belongs to this tenant
+    const existing = db.prepare('SELECT id FROM flowise_configs WHERE id = ? AND tenant_id = ?').get(id, tenantId) as any;
     if (!existing) {
       res.status(404).json({
         success: false,
@@ -7176,9 +7295,9 @@ export async function setFlowiseConfigDefault(
       return;
     }
 
-    // Unset all defaults, then set this one
-    db.prepare('UPDATE flowise_configs SET is_default = 0').run();
-    db.prepare('UPDATE flowise_configs SET is_default = 1, updated_at = ? WHERE id = ?').run(now, id);
+    // Unset all defaults within this tenant, then set this one
+    db.prepare('UPDATE flowise_configs SET is_default = 0 WHERE tenant_id = ?').run(tenantId);
+    db.prepare('UPDATE flowise_configs SET is_default = 1, updated_at = ? WHERE id = ? AND tenant_id = ?').run(now, id, tenantId);
 
     res.json({
       success: true,
@@ -7203,12 +7322,13 @@ export async function testFlowiseConfig(
   let db: BetterSqlite3.Database | null = null;
 
   try {
+    const tenantId = getTenantIdFromRequest(req);
     const { id } = req.params;
 
     db = getTestAgentDbWritable();
 
-    // Get config
-    const config = db.prepare('SELECT url, api_key FROM flowise_configs WHERE id = ?').get(id) as any;
+    // Get config (scoped to tenant)
+    const config = db.prepare('SELECT url, api_key FROM flowise_configs WHERE id = ? AND tenant_id = ?').get(id, tenantId) as any;
     if (!config) {
       res.status(404).json({
         success: false,
@@ -7273,21 +7393,22 @@ export async function testFlowiseConfig(
  * Get the active (default) Flowise configuration
  */
 export async function getActiveFlowiseConfig(
-  _req: Request,
+  req: Request,
   res: Response,
   next: NextFunction
 ): Promise<void> {
   let db: BetterSqlite3.Database | null = null;
 
   try {
+    const tenantId = getTenantIdFromRequest(req);
     db = getTestAgentDbWritable();
-    ensureFlowiseConfigsMigrated(db);
+    ensureFlowiseConfigsMigrated(db, tenantId);
 
     const config = db.prepare(`
       SELECT id, name, url, api_key, is_default, created_at, updated_at
       FROM flowise_configs
-      WHERE is_default = 1
-    `).get() as any;
+      WHERE is_default = 1 AND tenant_id = ?
+    `).get(tenantId) as any;
 
     if (!config) {
       res.json({
@@ -7327,31 +7448,24 @@ export async function getActiveFlowiseConfig(
  * Includes Sandbox A/B Langfuse settings from ab_sandboxes table
  */
 export async function getLangfuseConfigs(
-  _req: Request,
+  req: Request,
   res: Response,
   next: NextFunction
 ): Promise<void> {
   let db: BetterSqlite3.Database | null = null;
 
   try {
+    const tenantId = getTenantIdFromRequest(req);
     db = getTestAgentDbWritable();
-    ensureLangfuseConfigsMigrated(db);
+    ensureLangfuseConfigsMigrated(db, tenantId);
 
     // Get regular langfuse configs (exclude negative IDs which are reserved for sandbox configs)
     const configs = db.prepare(`
       SELECT id, name, host, public_key, secret_key, is_default, created_at, updated_at
       FROM langfuse_configs
-      WHERE id > 0
+      WHERE id > 0 AND tenant_id = ?
       ORDER BY is_default DESC, name ASC
-    `).all() as any[];
-
-    // Get sandbox Langfuse settings from ab_sandboxes table
-    const sandboxes = db.prepare(`
-      SELECT sandbox_id, name, langfuse_host, langfuse_public_key, langfuse_secret_key, updated_at
-      FROM ab_sandboxes
-      WHERE langfuse_host IS NOT NULL AND langfuse_host != ''
-        AND langfuse_public_key IS NOT NULL AND langfuse_public_key != ''
-    `).all() as any[];
+    `).all(tenantId) as any[];
 
     // Map regular configs
     const regularConfigs = configs.map(c => ({
@@ -7368,21 +7482,32 @@ export async function getLangfuseConfigs(
       sandboxId: null as string | null,
     }));
 
-    // Map sandbox configs (use negative IDs to distinguish them)
-    // sandbox_a = -1, sandbox_b = -2
-    const sandboxConfigs = sandboxes.map((s: any) => ({
-      id: s.sandbox_id === 'sandbox_a' ? -1 : -2,
-      name: s.name, // "Sandbox A" or "Sandbox B"
-      host: s.langfuse_host,
-      publicKey: s.langfuse_public_key,
-      secretKey: s.langfuse_secret_key ? '********' : '',
-      hasSecretKey: !!s.langfuse_secret_key,
-      isDefault: false,
-      createdAt: s.updated_at,
-      updatedAt: s.updated_at,
-      isSandbox: true,
-      sandboxId: s.sandbox_id,
-    }));
+    // Only append sandbox-sourced Langfuse configs for the default tenant
+    let sandboxConfigs: typeof regularConfigs = [];
+    if (tenantId === 1) {
+      const sandboxes = db.prepare(`
+        SELECT sandbox_id, name, langfuse_host, langfuse_public_key, langfuse_secret_key, updated_at
+        FROM ab_sandboxes
+        WHERE langfuse_host IS NOT NULL AND langfuse_host != ''
+          AND langfuse_public_key IS NOT NULL AND langfuse_public_key != ''
+      `).all() as any[];
+
+      // Map sandbox configs (use negative IDs to distinguish them)
+      // sandbox_a = -1, sandbox_b = -2
+      sandboxConfigs = sandboxes.map((s: any) => ({
+        id: s.sandbox_id === 'sandbox_a' ? -1 : -2,
+        name: s.name, // "Sandbox A" or "Sandbox B"
+        host: s.langfuse_host,
+        publicKey: s.langfuse_public_key,
+        secretKey: s.langfuse_secret_key ? '********' : '',
+        hasSecretKey: !!s.langfuse_secret_key,
+        isDefault: false,
+        createdAt: s.updated_at,
+        updatedAt: s.updated_at,
+        isSandbox: true,
+        sandboxId: s.sandbox_id,
+      }));
+    }
 
     // Sort order: Production first (isDefault), then Sandbox A, Sandbox B, then rest alphabetically
     const allConfigs = [...regularConfigs, ...sandboxConfigs];
@@ -7423,6 +7548,7 @@ export async function createLangfuseConfig(
   let db: BetterSqlite3.Database | null = null;
 
   try {
+    const tenantId = getTenantIdFromRequest(req);
     const { name, host, publicKey, secretKey, isDefault } = req.body;
 
     if (!name || !host || !publicKey) {
@@ -7434,18 +7560,18 @@ export async function createLangfuseConfig(
     }
 
     db = getTestAgentDbWritable();
-    ensureLangfuseConfigsMigrated(db);
+    ensureLangfuseConfigsMigrated(db, tenantId);
     const now = new Date().toISOString();
 
-    // If setting as default, unset other defaults first
+    // If setting as default, unset other defaults first (within this tenant)
     if (isDefault) {
-      db.prepare('UPDATE langfuse_configs SET is_default = 0').run();
+      db.prepare('UPDATE langfuse_configs SET is_default = 0 WHERE tenant_id = ?').run(tenantId);
     }
 
     const result = db.prepare(`
-      INSERT INTO langfuse_configs (name, host, public_key, secret_key, is_default, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(name, host, publicKey, secretKey || '', isDefault ? 1 : 0, now, now);
+      INSERT INTO langfuse_configs (name, host, public_key, secret_key, is_default, tenant_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(name, host, publicKey, secretKey || '', isDefault ? 1 : 0, tenantId, now, now);
 
     res.json({
       success: true,
@@ -7486,6 +7612,7 @@ export async function updateLangfuseConfig(
   let db: BetterSqlite3.Database | null = null;
 
   try {
+    const tenantId = getTenantIdFromRequest(req);
     const { id } = req.params;
     const { name, host, publicKey, secretKey, isDefault } = req.body;
 
@@ -7500,8 +7627,8 @@ export async function updateLangfuseConfig(
     db = getTestAgentDbWritable();
     const now = new Date().toISOString();
 
-    // Check if config exists
-    const existing = db.prepare('SELECT id, secret_key FROM langfuse_configs WHERE id = ?').get(id) as any;
+    // Check if config exists and belongs to this tenant
+    const existing = db.prepare('SELECT id, secret_key FROM langfuse_configs WHERE id = ? AND tenant_id = ?').get(id, tenantId) as any;
     if (!existing) {
       res.status(404).json({
         success: false,
@@ -7510,9 +7637,9 @@ export async function updateLangfuseConfig(
       return;
     }
 
-    // If setting as default, unset other defaults first
+    // If setting as default, unset other defaults first (within this tenant)
     if (isDefault) {
-      db.prepare('UPDATE langfuse_configs SET is_default = 0').run();
+      db.prepare('UPDATE langfuse_configs SET is_default = 0 WHERE tenant_id = ?').run(tenantId);
     }
 
     // Only update secret_key if it's not the masked placeholder
@@ -7521,8 +7648,8 @@ export async function updateLangfuseConfig(
     db.prepare(`
       UPDATE langfuse_configs
       SET name = ?, host = ?, public_key = ?, secret_key = ?, is_default = ?, updated_at = ?
-      WHERE id = ?
-    `).run(name, host, publicKey, newSecretKey, isDefault ? 1 : 0, now, id);
+      WHERE id = ? AND tenant_id = ?
+    `).run(name, host, publicKey, newSecretKey, isDefault ? 1 : 0, now, id, tenantId);
 
     res.json({
       success: true,
@@ -7562,12 +7689,13 @@ export async function deleteLangfuseConfig(
   let db: BetterSqlite3.Database | null = null;
 
   try {
+    const tenantId = getTenantIdFromRequest(req);
     const { id } = req.params;
 
     db = getTestAgentDbWritable();
 
-    // Check if config exists and is not the last one
-    const config = db.prepare('SELECT id, is_default FROM langfuse_configs WHERE id = ?').get(id) as any;
+    // Check if config exists and belongs to this tenant
+    const config = db.prepare('SELECT id, is_default FROM langfuse_configs WHERE id = ? AND tenant_id = ?').get(id, tenantId) as any;
     if (!config) {
       res.status(404).json({
         success: false,
@@ -7576,7 +7704,7 @@ export async function deleteLangfuseConfig(
       return;
     }
 
-    const count = db.prepare('SELECT COUNT(*) as count FROM langfuse_configs').get() as any;
+    const count = db.prepare('SELECT COUNT(*) as count FROM langfuse_configs WHERE tenant_id = ?').get(tenantId) as any;
     if (count.count <= 1) {
       res.status(400).json({
         success: false,
@@ -7585,11 +7713,11 @@ export async function deleteLangfuseConfig(
       return;
     }
 
-    db.prepare('DELETE FROM langfuse_configs WHERE id = ?').run(id);
+    db.prepare('DELETE FROM langfuse_configs WHERE id = ? AND tenant_id = ?').run(id, tenantId);
 
-    // If we deleted the default, set another as default
+    // If we deleted the default, set another as default (within this tenant)
     if (config.is_default) {
-      db.prepare('UPDATE langfuse_configs SET is_default = 1 WHERE id = (SELECT MIN(id) FROM langfuse_configs)').run();
+      db.prepare('UPDATE langfuse_configs SET is_default = 1 WHERE id = (SELECT MIN(id) FROM langfuse_configs WHERE tenant_id = ?)').run(tenantId);
     }
 
     res.json({
@@ -7615,13 +7743,14 @@ export async function setLangfuseConfigDefault(
   let db: BetterSqlite3.Database | null = null;
 
   try {
+    const tenantId = getTenantIdFromRequest(req);
     const { id } = req.params;
 
     db = getTestAgentDbWritable();
     const now = new Date().toISOString();
 
-    // Check if config exists
-    const existing = db.prepare('SELECT id FROM langfuse_configs WHERE id = ?').get(id) as any;
+    // Check if config exists and belongs to this tenant
+    const existing = db.prepare('SELECT id FROM langfuse_configs WHERE id = ? AND tenant_id = ?').get(id, tenantId) as any;
     if (!existing) {
       res.status(404).json({
         success: false,
@@ -7630,9 +7759,9 @@ export async function setLangfuseConfigDefault(
       return;
     }
 
-    // Unset all defaults, then set this one
-    db.prepare('UPDATE langfuse_configs SET is_default = 0').run();
-    db.prepare('UPDATE langfuse_configs SET is_default = 1, updated_at = ? WHERE id = ?').run(now, id);
+    // Unset all defaults within this tenant, then set this one
+    db.prepare('UPDATE langfuse_configs SET is_default = 0 WHERE tenant_id = ?').run(tenantId);
+    db.prepare('UPDATE langfuse_configs SET is_default = 1, updated_at = ? WHERE id = ? AND tenant_id = ?').run(now, id, tenantId);
 
     res.json({
       success: true,
@@ -7657,12 +7786,13 @@ export async function testLangfuseConfig(
   let db: BetterSqlite3.Database | null = null;
 
   try {
+    const tenantId = getTenantIdFromRequest(req);
     const { id } = req.params;
 
     db = getTestAgentDbWritable();
 
-    // Get config
-    const config = db.prepare('SELECT host, public_key, secret_key FROM langfuse_configs WHERE id = ?').get(id) as any;
+    // Get config (scoped to tenant)
+    const config = db.prepare('SELECT host, public_key, secret_key FROM langfuse_configs WHERE id = ? AND tenant_id = ?').get(id, tenantId) as any;
     if (!config) {
       res.status(404).json({
         success: false,
@@ -7739,21 +7869,22 @@ export async function testLangfuseConfig(
  * Get the active (default) Langfuse configuration (unmasked for internal use)
  */
 export async function getActiveLangfuseConfig(
-  _req: Request,
+  req: Request,
   res: Response,
   next: NextFunction
 ): Promise<void> {
   let db: BetterSqlite3.Database | null = null;
 
   try {
+    const tenantId = getTenantIdFromRequest(req);
     db = getTestAgentDbWritable();
-    ensureLangfuseConfigsMigrated(db);
+    ensureLangfuseConfigsMigrated(db, tenantId);
 
     const config = db.prepare(`
       SELECT id, name, host, public_key, secret_key, is_default, created_at, updated_at
       FROM langfuse_configs
-      WHERE is_default = 1
-    `).get() as any;
+      WHERE is_default = 1 AND tenant_id = ?
+    `).get(tenantId) as any;
 
     if (!config) {
       res.json({
@@ -7797,6 +7928,7 @@ export async function getLangfuseAgentExecutorId(
   let db: BetterSqlite3.Database | null = null;
 
   try {
+    const tenantId = getTenantIdFromRequest(req);
     const { sessionId } = req.params;
 
     if (!sessionId) {
@@ -7805,14 +7937,14 @@ export async function getLangfuseAgentExecutorId(
     }
 
     db = getTestAgentDbWritable();
-    ensureLangfuseConfigsMigrated(db);
+    ensureLangfuseConfigsMigrated(db, tenantId);
 
-    // Get active Langfuse config
+    // Get active Langfuse config (scoped to tenant)
     const config = db.prepare(`
       SELECT host, public_key, secret_key
       FROM langfuse_configs
-      WHERE is_default = 1
-    `).get() as any;
+      WHERE is_default = 1 AND tenant_id = ?
+    `).get(tenantId) as any;
 
     if (!config || !config.host || !config.public_key || !config.secret_key) {
       res.status(400).json({
@@ -7968,15 +8100,15 @@ export async function getLangfuseAgentExecutorId(
 /**
  * Helper to ensure default environment presets exist
  */
-function ensureEnvironmentPresetsExist(db: BetterSqlite3.Database): void {
-  const existingPresets = db.prepare('SELECT COUNT(*) as count FROM environment_presets').get() as any;
+function ensureEnvironmentPresetsExist(db: BetterSqlite3.Database, tenantId: number = 1): void {
+  const existingPresets = db.prepare('SELECT COUNT(*) as count FROM environment_presets WHERE tenant_id = ?').get(tenantId) as any;
 
-  if (existingPresets.count === 0) {
+  if (existingPresets.count === 0 && tenantId === 1) {
     const now = new Date().toISOString();
 
-    // Get existing configs
-    const defaultFlowise = db.prepare('SELECT id FROM flowise_configs WHERE is_default = 1').get() as any;
-    const defaultLangfuse = db.prepare('SELECT id FROM langfuse_configs WHERE is_default = 1').get() as any;
+    // Get existing configs for this tenant
+    const defaultFlowise = db.prepare('SELECT id FROM flowise_configs WHERE is_default = 1 AND tenant_id = ?').get(tenantId) as any;
+    const defaultLangfuse = db.prepare('SELECT id FROM langfuse_configs WHERE is_default = 1 AND tenant_id = ?').get(tenantId) as any;
 
     // Create default presets: Prod (default), Sandbox A, Sandbox B
     const presets = [
@@ -7986,12 +8118,12 @@ function ensureEnvironmentPresetsExist(db: BetterSqlite3.Database): void {
     ];
 
     const insertStmt = db.prepare(`
-      INSERT INTO environment_presets (name, description, flowise_config_id, langfuse_config_id, is_default, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO environment_presets (name, description, flowise_config_id, langfuse_config_id, is_default, tenant_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     for (const preset of presets) {
-      insertStmt.run(preset.name, preset.description, preset.flowiseId, preset.langfuseId, preset.isDefault, now, now);
+      insertStmt.run(preset.name, preset.description, preset.flowiseId, preset.langfuseId, preset.isDefault, tenantId, now, now);
     }
   }
 }
@@ -8001,15 +8133,16 @@ function ensureEnvironmentPresetsExist(db: BetterSqlite3.Database): void {
  * Get all environment presets with resolved config names
  */
 export async function getEnvironmentPresets(
-  _req: Request,
+  req: Request,
   res: Response,
   next: NextFunction
 ): Promise<void> {
   let db: BetterSqlite3.Database | null = null;
 
   try {
+    const tenantId = getTenantIdFromRequest(req);
     db = getTestAgentDbWritable();
-    ensureEnvironmentPresetsExist(db);
+    ensureEnvironmentPresetsExist(db, tenantId);
 
     const presets = db.prepare(`
       SELECT
@@ -8019,11 +8152,12 @@ export async function getEnvironmentPresets(
         COALESCE(ep.flowise_config_id, dfc.id) as resolved_flowise_config_id,
         lc.name as langfuse_config_name
       FROM environment_presets ep
-      LEFT JOIN flowise_configs fc ON ep.flowise_config_id = fc.id
-      LEFT JOIN flowise_configs dfc ON dfc.is_default = 1 AND ep.flowise_config_id IS NULL
-      LEFT JOIN langfuse_configs lc ON ep.langfuse_config_id = lc.id
+      LEFT JOIN flowise_configs fc ON ep.flowise_config_id = fc.id AND fc.tenant_id = ?
+      LEFT JOIN flowise_configs dfc ON dfc.is_default = 1 AND dfc.tenant_id = ? AND ep.flowise_config_id IS NULL
+      LEFT JOIN langfuse_configs lc ON ep.langfuse_config_id = lc.id AND lc.tenant_id = ?
+      WHERE ep.tenant_id = ?
       ORDER BY ep.is_default DESC, ep.name ASC
-    `).all() as any[];
+    `).all(tenantId, tenantId, tenantId, tenantId) as any[];
 
     res.json({
       success: true,
@@ -8052,15 +8186,16 @@ export async function getEnvironmentPresets(
  * Get the active (default) environment preset
  */
 export async function getActiveEnvironmentPreset(
-  _req: Request,
+  req: Request,
   res: Response,
   next: NextFunction
 ): Promise<void> {
   let db: BetterSqlite3.Database | null = null;
 
   try {
+    const tenantId = getTenantIdFromRequest(req);
     db = getTestAgentDbWritable();
-    ensureEnvironmentPresetsExist(db);
+    ensureEnvironmentPresetsExist(db, tenantId);
 
     const preset = db.prepare(`
       SELECT
@@ -8070,11 +8205,11 @@ export async function getActiveEnvironmentPreset(
         COALESCE(ep.flowise_config_id, dfc.id) as resolved_flowise_config_id,
         lc.name as langfuse_config_name
       FROM environment_presets ep
-      LEFT JOIN flowise_configs fc ON ep.flowise_config_id = fc.id
-      LEFT JOIN flowise_configs dfc ON dfc.is_default = 1 AND ep.flowise_config_id IS NULL
-      LEFT JOIN langfuse_configs lc ON ep.langfuse_config_id = lc.id
-      WHERE ep.is_default = 1
-    `).get() as any;
+      LEFT JOIN flowise_configs fc ON ep.flowise_config_id = fc.id AND fc.tenant_id = ?
+      LEFT JOIN flowise_configs dfc ON dfc.is_default = 1 AND dfc.tenant_id = ? AND ep.flowise_config_id IS NULL
+      LEFT JOIN langfuse_configs lc ON ep.langfuse_config_id = lc.id AND lc.tenant_id = ?
+      WHERE ep.is_default = 1 AND ep.tenant_id = ?
+    `).get(tenantId, tenantId, tenantId, tenantId) as any;
 
     if (!preset) {
       res.json({ success: true, data: null });
@@ -8115,6 +8250,7 @@ export async function createEnvironmentPreset(
   let db: BetterSqlite3.Database | null = null;
 
   try {
+    const tenantId = getTenantIdFromRequest(req);
     const { name, description, flowiseConfigId, langfuseConfigId, isDefault } = req.body;
 
     if (!name) {
@@ -8125,15 +8261,31 @@ export async function createEnvironmentPreset(
     db = getTestAgentDbWritable();
     const now = new Date().toISOString();
 
-    // If setting as default, unset other defaults first
+    // Verify referenced configs belong to this tenant
+    if (flowiseConfigId) {
+      const fc = db.prepare('SELECT id FROM flowise_configs WHERE id = ? AND tenant_id = ?').get(flowiseConfigId, tenantId);
+      if (!fc) {
+        res.status(400).json({ success: false, error: 'Referenced Flowise config not found for this tenant' });
+        return;
+      }
+    }
+    if (langfuseConfigId) {
+      const lc = db.prepare('SELECT id FROM langfuse_configs WHERE id = ? AND tenant_id = ?').get(langfuseConfigId, tenantId);
+      if (!lc) {
+        res.status(400).json({ success: false, error: 'Referenced Langfuse config not found for this tenant' });
+        return;
+      }
+    }
+
+    // If setting as default, unset other defaults first (within this tenant)
     if (isDefault) {
-      db.prepare('UPDATE environment_presets SET is_default = 0').run();
+      db.prepare('UPDATE environment_presets SET is_default = 0 WHERE tenant_id = ?').run(tenantId);
     }
 
     const result = db.prepare(`
-      INSERT INTO environment_presets (name, description, flowise_config_id, langfuse_config_id, is_default, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(name, description || '', flowiseConfigId || null, langfuseConfigId || null, isDefault ? 1 : 0, now, now);
+      INSERT INTO environment_presets (name, description, flowise_config_id, langfuse_config_id, is_default, tenant_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(name, description || '', flowiseConfigId || null, langfuseConfigId || null, isDefault ? 1 : 0, tenantId, now, now);
 
     res.json({
       success: true,
@@ -8171,6 +8323,7 @@ export async function updateEnvironmentPreset(
   let db: BetterSqlite3.Database | null = null;
 
   try {
+    const tenantId = getTenantIdFromRequest(req);
     const { id } = req.params;
     const { name, description, flowiseConfigId, langfuseConfigId, isDefault } = req.body;
 
@@ -8182,23 +8335,39 @@ export async function updateEnvironmentPreset(
     db = getTestAgentDbWritable();
     const now = new Date().toISOString();
 
-    // Check if preset exists
-    const existing = db.prepare('SELECT id FROM environment_presets WHERE id = ?').get(id) as any;
+    // Check if preset exists and belongs to this tenant
+    const existing = db.prepare('SELECT id FROM environment_presets WHERE id = ? AND tenant_id = ?').get(id, tenantId) as any;
     if (!existing) {
       res.status(404).json({ success: false, error: 'Preset not found' });
       return;
     }
 
-    // If setting as default, unset other defaults first
+    // Verify referenced configs belong to this tenant
+    if (flowiseConfigId) {
+      const fc = db.prepare('SELECT id FROM flowise_configs WHERE id = ? AND tenant_id = ?').get(flowiseConfigId, tenantId);
+      if (!fc) {
+        res.status(400).json({ success: false, error: 'Referenced Flowise config not found for this tenant' });
+        return;
+      }
+    }
+    if (langfuseConfigId) {
+      const lc = db.prepare('SELECT id FROM langfuse_configs WHERE id = ? AND tenant_id = ?').get(langfuseConfigId, tenantId);
+      if (!lc) {
+        res.status(400).json({ success: false, error: 'Referenced Langfuse config not found for this tenant' });
+        return;
+      }
+    }
+
+    // If setting as default, unset other defaults first (within this tenant)
     if (isDefault) {
-      db.prepare('UPDATE environment_presets SET is_default = 0').run();
+      db.prepare('UPDATE environment_presets SET is_default = 0 WHERE tenant_id = ?').run(tenantId);
     }
 
     db.prepare(`
       UPDATE environment_presets
       SET name = ?, description = ?, flowise_config_id = ?, langfuse_config_id = ?, is_default = ?, updated_at = ?
-      WHERE id = ?
-    `).run(name, description || '', flowiseConfigId || null, langfuseConfigId || null, isDefault ? 1 : 0, now, id);
+      WHERE id = ? AND tenant_id = ?
+    `).run(name, description || '', flowiseConfigId || null, langfuseConfigId || null, isDefault ? 1 : 0, now, id, tenantId);
 
     res.json({
       success: true,
@@ -8235,29 +8404,30 @@ export async function deleteEnvironmentPreset(
   let db: BetterSqlite3.Database | null = null;
 
   try {
+    const tenantId = getTenantIdFromRequest(req);
     const { id } = req.params;
 
     db = getTestAgentDbWritable();
 
-    // Check if preset exists
-    const preset = db.prepare('SELECT id, is_default FROM environment_presets WHERE id = ?').get(id) as any;
+    // Check if preset exists and belongs to this tenant
+    const preset = db.prepare('SELECT id, is_default FROM environment_presets WHERE id = ? AND tenant_id = ?').get(id, tenantId) as any;
     if (!preset) {
       res.status(404).json({ success: false, error: 'Preset not found' });
       return;
     }
 
-    // Check if this is the last preset
-    const count = db.prepare('SELECT COUNT(*) as count FROM environment_presets').get() as any;
+    // Check if this is the last preset for this tenant
+    const count = db.prepare('SELECT COUNT(*) as count FROM environment_presets WHERE tenant_id = ?').get(tenantId) as any;
     if (count.count <= 1) {
       res.status(400).json({ success: false, error: 'Cannot delete the last preset. At least one must exist.' });
       return;
     }
 
-    db.prepare('DELETE FROM environment_presets WHERE id = ?').run(id);
+    db.prepare('DELETE FROM environment_presets WHERE id = ? AND tenant_id = ?').run(id, tenantId);
 
-    // If we deleted the default, set another as default
+    // If we deleted the default, set another as default (within this tenant)
     if (preset.is_default) {
-      db.prepare('UPDATE environment_presets SET is_default = 1 WHERE id = (SELECT MIN(id) FROM environment_presets)').run();
+      db.prepare('UPDATE environment_presets SET is_default = 1 WHERE id = (SELECT MIN(id) FROM environment_presets WHERE tenant_id = ?)').run(tenantId);
     }
 
     res.json({
@@ -8283,21 +8453,22 @@ export async function setEnvironmentPresetDefault(
   let db: BetterSqlite3.Database | null = null;
 
   try {
+    const tenantId = getTenantIdFromRequest(req);
     const { id } = req.params;
 
     db = getTestAgentDbWritable();
     const now = new Date().toISOString();
 
-    // Check if preset exists
-    const existing = db.prepare('SELECT id FROM environment_presets WHERE id = ?').get(id) as any;
+    // Check if preset exists and belongs to this tenant
+    const existing = db.prepare('SELECT id FROM environment_presets WHERE id = ? AND tenant_id = ?').get(id, tenantId) as any;
     if (!existing) {
       res.status(404).json({ success: false, error: 'Preset not found' });
       return;
     }
 
-    // Unset all defaults, then set this one
-    db.prepare('UPDATE environment_presets SET is_default = 0').run();
-    db.prepare('UPDATE environment_presets SET is_default = 1, updated_at = ? WHERE id = ?').run(now, id);
+    // Unset all defaults within this tenant, then set this one
+    db.prepare('UPDATE environment_presets SET is_default = 0 WHERE tenant_id = ?').run(tenantId);
+    db.prepare('UPDATE environment_presets SET is_default = 1, updated_at = ? WHERE id = ? AND tenant_id = ?').run(now, id, tenantId);
 
     res.json({
       success: true,
@@ -8683,9 +8854,10 @@ export async function getProductionTrace(
       }
     }
 
-    // If still not found and no configId, try all configs
+    // If still not found and no configId, try all configs for this tenant
     if (!result && configId === null) {
-      const configs = db!.prepare(`SELECT id FROM langfuse_configs ORDER BY id`).all() as any[];
+      const trTenantId = getTenantIdFromRequest(req);
+      const configs = db!.prepare(`SELECT id FROM langfuse_configs WHERE tenant_id = ? ORDER BY id`).all(trTenantId) as any[];
       for (const cfg of configs) {
         try {
           result = await service.importSingleTrace(traceId, (cfg as any).id);
@@ -9734,6 +9906,7 @@ function transformSessionRow(row: any): any {
     errorCount: row.error_count || 0,
     hasSuccessfulBooking: Boolean(row.has_successful_booking),
     hasTransfer: Boolean(row.has_transfer),
+    hasOrder: Boolean(row.has_order),
   };
 }
 
@@ -9821,9 +9994,10 @@ export async function getProductionSession(
       }
     }
 
-    // If still not found and no configId, try all configs
+    // If still not found and no configId, try all configs for this tenant
     if (!result && parsedConfigId === null) {
-      const configs = db!.prepare(`SELECT id FROM langfuse_configs ORDER BY id`).all() as any[];
+      const ssTenantId = getTenantIdFromRequest(req);
+      const configs = db!.prepare(`SELECT id FROM langfuse_configs WHERE tenant_id = ? ORDER BY id`).all(ssTenantId) as any[];
       for (const cfg of configs) {
         try {
           result = await service.importSessionTraces(sessionId, cfg.id);

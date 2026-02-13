@@ -1,10 +1,11 @@
 import { Request, Response } from 'express';
 import { createCloud9Client } from '../services/cloud9/client';
-import { Environment, isValidEnvironment } from '../config/cloud9';
+import { Cloud9Config, Environment, isValidEnvironment } from '../config/cloud9';
 import { AppError, asyncHandler } from '../middleware/errorHandler';
 import { Cloud9Appointment, Cloud9AvailableSlot, Cloud9Location, Cloud9AppointmentType, Cloud9Provider } from '../types/cloud9';
 import { AppointmentModel } from '../models/Appointment';
 import { PatientModel } from '../models/Patient';
+import { getCloud9ConfigForTenant } from '../middleware/tenantContext';
 import logger from '../utils/logger';
 import BetterSqlite3 from 'better-sqlite3';
 import path from 'path';
@@ -70,6 +71,14 @@ function getEnvironment(req: Request): Environment {
   return env;
 }
 
+function getTenantId(req: Request): number {
+  return req.tenantContext?.id ?? 1;
+}
+
+function getTenantCloud9Config(req: Request, env: Environment): Cloud9Config | undefined {
+  return req.tenantContext ? getCloud9ConfigForTenant(req.tenantContext, env) : undefined;
+}
+
 /**
  * GET /api/appointments/patient/:patientGuid
  * Get all appointments for a patient and their family members (same phone number)
@@ -84,7 +93,7 @@ export const getPatientAppointments = asyncHandler(
       throw new AppError('Patient GUID is required', 400);
     }
 
-    const client = createCloud9Client(environment);
+    const client = createCloud9Client(environment, getTenantCloud9Config(req, environment));
 
     // Fetch reference data in parallel (including chair schedules for chair info)
     const [locationsResponse, appointmentTypesResponse, chairSchedulesResponse] = await Promise.all([
@@ -151,7 +160,7 @@ export const getPatientAppointments = asyncHandler(
 
       // Save primary patient to local database for future family lookups
       try {
-        PatientModel.upsert({
+        PatientModel.upsert(getTenantId(req), {
           patient_guid: patientGuid,
           first_name: primaryRecord.PatientFirstName || primaryRecord.persFirstName || '',
           last_name: primaryRecord.PatientLastName || primaryRecord.persLastName || '',
@@ -170,7 +179,7 @@ export const getPatientAppointments = asyncHandler(
       if (phoneNumber) {
         // Look up family members from local database by phone number
         try {
-          const localFamilyMembers = PatientModel.getByPhone(phoneNumber, environment);
+          const localFamilyMembers = PatientModel.getByPhone(getTenantId(req), phoneNumber, environment);
 
           if (localFamilyMembers.length > 0) {
             // Get GUIDs from local family members (excluding current patient)
@@ -223,7 +232,7 @@ export const getPatientAppointments = asyncHandler(
     );
 
     // Get local appointment data for scheduled_at timestamps
-    const localAppointments = AppointmentModel.getByPatientGuid(patientGuid);
+    const localAppointments = AppointmentModel.getByPatientGuid(getTenantId(req), patientGuid);
     const localAppointmentMap = new Map(
       localAppointments.map((a) => [a.appointment_guid, a])
     );
@@ -460,7 +469,7 @@ export const createAppointment = asyncHandler(async (req: Request, res: Response
     );
   }
 
-  const client = createCloud9Client(environment);
+  const client = createCloud9Client(environment, getTenantCloud9Config(req, environment));
 
   // Prepare appointment creation parameters
   const params = {
@@ -556,7 +565,7 @@ export const createAppointment = asyncHandler(async (req: Request, res: Response
 
     // Save to local database to track scheduled_at timestamp and chair info
     try {
-      AppointmentModel.upsert({
+      AppointmentModel.upsert(getTenantId(req), {
         appointment_guid: newAppointment.appointment_guid,
         patient_guid: newAppointment.patient_guid,
         appointment_date_time: newAppointment.appointment_date_time,
@@ -612,7 +621,7 @@ export const confirmAppointment = asyncHandler(async (req: Request, res: Respons
     throw new AppError('Appointment GUID is required', 400);
   }
 
-  const client = createCloud9Client(environment);
+  const client = createCloud9Client(environment, getTenantCloud9Config(req, environment));
 
   // Confirm appointment via Cloud 9 API
   const response = await client.confirmAppointment(appointmentGuid);
@@ -655,7 +664,7 @@ export const cancelAppointment = asyncHandler(async (req: Request, res: Response
     throw new AppError('Appointment GUID is required', 400);
   }
 
-  const client = createCloud9Client(environment);
+  const client = createCloud9Client(environment, getTenantCloud9Config(req, environment));
 
   // Cancel appointment via Cloud 9 API
   const response = await client.cancelAppointment(appointmentGuid);
@@ -667,7 +676,7 @@ export const cancelAppointment = asyncHandler(async (req: Request, res: Response
         response.errorMessage?.toLowerCase().includes('already cancel')) {
       // Update local database to reflect cancelled status
       try {
-        AppointmentModel.updateStatus(appointmentGuid, 'Cancelled');
+        AppointmentModel.updateStatus(getTenantId(req), appointmentGuid, 'Cancelled');
         logger.info('Updated local appointment status to Cancelled', { appointmentGuid });
       } catch (dbError) {
         logger.warn('Failed to update local appointment status', {
@@ -708,7 +717,7 @@ export const cancelAppointment = asyncHandler(async (req: Request, res: Response
 
   // Update local database to reflect cancelled status
   try {
-    AppointmentModel.updateStatus(appointmentGuid, 'Cancelled');
+    AppointmentModel.updateStatus(getTenantId(req), appointmentGuid, 'Cancelled');
     logger.info('Updated local appointment status to Cancelled', { appointmentGuid });
   } catch (dbError) {
     logger.warn('Failed to update local appointment status', {
@@ -756,7 +765,7 @@ export const getAvailableAppointments = asyncHandler(
       );
     }
 
-    const client = createCloud9Client(environment);
+    const client = createCloud9Client(environment, getTenantCloud9Config(req, environment));
 
     // If no provider is specified, get all providers for this location
     let scheduleViewGuid = providerGuid as string | undefined;

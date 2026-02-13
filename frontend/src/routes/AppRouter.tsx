@@ -9,12 +9,24 @@ import { MainLayout } from '../components/layout';
 import { ProtectedRoute } from '../components/features/auth';
 import { LoginPage } from '../pages/Auth/LoginPage';
 import { AdminPage } from '../pages/Admin/AdminPage';
+import { TenantManagement } from '../pages/Admin/TenantManagement';
+import { NewTenantWizard } from '../pages/Admin/NewTenantWizard';
 import { Dashboard } from '../pages/Dashboard';
 import { PatientList } from '../pages/Patients/PatientList';
 import { PatientDetail } from '../pages/Patients/PatientDetail';
 import { AppointmentList } from '../pages/Appointments/AppointmentList';
 import { AppointmentCalendar } from '../pages/Appointments/AppointmentCalendar';
 import { Settings } from '../pages/Settings/Settings';
+import {
+  DominosLayout,
+  DominosDashboard,
+  DominosOrders,
+  DominosHealth,
+  DominosMenu,
+  DominosSessions,
+  DominosErrors,
+  DominosCallTracing,
+} from '../pages/Dominos';
 import {
   TestMonitorLayout,
   TestMonitorDashboard,
@@ -41,8 +53,38 @@ import {
 } from '../pages/TestMonitor';
 import { NotFound } from '../pages/NotFound';
 import { ROUTES } from '../utils/constants';
-import { useAppDispatch } from '../store/hooks';
+import { useAppDispatch, useAppSelector } from '../store/hooks';
 import { initializeAuth } from '../store/slices/authSlice';
+import { selectEnabledTabs } from '../store/slices/tenantSlice';
+
+/** Smart home route: shows Dashboard if enabled, otherwise redirects to first available tab */
+function SmartHome() {
+  const enabledTabs = useAppSelector(selectEnabledTabs);
+
+  // If dashboard is enabled (or no tabs configured yet), show Dashboard
+  if (enabledTabs.length === 0 || enabledTabs.includes('dashboard')) {
+    return <Dashboard />;
+  }
+
+  // Redirect to the first enabled tab's route
+  const tabRouteMap: Record<string, string> = {
+    dominos_dashboard: ROUTES.DOMINOS_DASHBOARD,
+    test_monitor: ROUTES.TEST_MONITOR,
+    patients: ROUTES.PATIENTS,
+    appointments: ROUTES.APPOINTMENTS,
+    calendar: ROUTES.CALENDAR,
+    settings: ROUTES.SETTINGS,
+  };
+
+  for (const tab of enabledTabs) {
+    if (tabRouteMap[tab]) {
+      return <Navigate to={tabRouteMap[tab]} replace />;
+    }
+  }
+
+  // Fallback: show Dashboard anyway
+  return <Dashboard />;
+}
 
 export function AppRouter() {
   const dispatch = useAppDispatch();
@@ -67,12 +109,12 @@ export function AppRouter() {
             </ProtectedRoute>
           }
         >
-          {/* Dashboard */}
+          {/* Smart Home - shows Dashboard or redirects to tenant's default tab */}
           <Route
             index
             element={
-              <ProtectedRoute tabKey="dashboard">
-                <Dashboard />
+              <ProtectedRoute>
+                <SmartHome />
               </ProtectedRoute>
             }
           />
@@ -83,6 +125,22 @@ export function AppRouter() {
             element={
               <ProtectedRoute requireAdmin>
                 <AdminPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="admin/tenants/new"
+            element={
+              <ProtectedRoute requireAdmin>
+                <NewTenantWizard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="admin/tenants/:id"
+            element={
+              <ProtectedRoute requireAdmin>
+                <TenantManagement />
               </ProtectedRoute>
             }
           />
@@ -166,6 +224,25 @@ export function AppRouter() {
             <Route path="ai-prompting" element={<AIPromptingPage />} />
             <Route path="api-testing" element={<APITestingPage />} />
             <Route path="run/:runId" element={<TestRunDetail />} />
+          </Route>
+
+          {/* Dominos - Nested Routes */}
+          <Route
+            path="dominos"
+            element={
+              <ProtectedRoute tabKey="dominos_dashboard">
+                <DominosLayout />
+              </ProtectedRoute>
+            }
+          >
+            <Route index element={<Navigate to="dashboard" replace />} />
+            <Route path="dashboard" element={<DominosDashboard />} />
+            <Route path="orders" element={<DominosOrders />} />
+            <Route path="health" element={<DominosHealth />} />
+            <Route path="menu" element={<DominosMenu />} />
+            <Route path="sessions" element={<DominosSessions />} />
+            <Route path="errors" element={<DominosErrors />} />
+            <Route path="call-tracing" element={<DominosCallTracing />} />
           </Route>
 
           {/* Catch-all redirect to home for unknown routes within layout */}

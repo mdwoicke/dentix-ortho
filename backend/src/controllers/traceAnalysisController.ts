@@ -17,6 +17,7 @@ import {
 } from './testMonitorController';
 import { verifyFulfillment, FulfillmentVerdict } from '../services/fulfillmentVerifier';
 import { createCloud9Client } from '../services/cloud9/client';
+import { getCloud9ConfigForTenant } from '../middleware/tenantContext';
 import { ProdTestRecordService } from '../services/prodTestRecordService';
 
 // Path to test-agent database
@@ -678,7 +679,7 @@ function buildCallReport(_traces: any[], observations: any[], transcript: any[],
 /**
  * Fetch current booking data from Cloud9 for patient GUIDs found in the call report.
  */
-async function fetchCurrentBookingData(callReport: CallReport): Promise<CurrentBookingData> {
+async function fetchCurrentBookingData(callReport: CallReport, cloud9ConfigOverride?: import('../config/cloud9').Cloud9Config): Promise<CurrentBookingData> {
   const result: CurrentBookingData = {
     parent: null,
     children: [],
@@ -687,7 +688,7 @@ async function fetchCurrentBookingData(callReport: CallReport): Promise<CurrentB
   };
 
   try {
-    const client = createCloud9Client('production');
+    const client = createCloud9Client('production', cloud9ConfigOverride);
 
     const childGuids = new Set<string>();
     for (const br of callReport.bookingResults) {
@@ -845,7 +846,7 @@ export async function analyzeSession(req: Request, res: Response): Promise<void>
           let currentBookingData: CurrentBookingData | null = null;
           if (callReport.bookingResults.length > 0 || callReport.parentPatientGUID) {
             try {
-              currentBookingData = await fetchCurrentBookingData(callReport);
+              currentBookingData = await fetchCurrentBookingData(callReport, req.tenantContext ? getCloud9ConfigForTenant(req.tenantContext, 'production') : undefined);
             } catch (err: any) {
               console.error(`CurrentBookingData fetch failed for cached session ${sessionId}:`, err.message);
             }
@@ -987,7 +988,7 @@ export async function analyzeSession(req: Request, res: Response): Promise<void>
     let currentBookingData: CurrentBookingData | null = null;
     if (callReport.bookingResults.length > 0 || callReport.parentPatientGUID) {
       try {
-        currentBookingData = await fetchCurrentBookingData(callReport);
+        currentBookingData = await fetchCurrentBookingData(callReport, req.tenantContext ? getCloud9ConfigForTenant(req.tenantContext, 'production') : undefined);
       } catch (err: any) {
         console.error(`CurrentBookingData fetch failed for session ${sessionId}:`, err.message);
       }
@@ -1354,7 +1355,8 @@ export async function checkSlotAvailability(req: Request, res: Response): Promis
   }
 
   try {
-    const client = createCloud9Client('production');
+    const tenantCloud9 = req.tenantContext ? getCloud9ConfigForTenant(req.tenantContext, 'production') : undefined;
+    const client = createCloud9Client('production', tenantCloud9);
     // Use same parameters as Node-RED slot lookup:
     // - appointmentTypeGuid: required for consultation slots
     // - No providerGuid filter (we filter to Chair 8 after)
@@ -1438,7 +1440,8 @@ export async function bookCorrection(req: Request, res: Response): Promise<void>
 
   let db: BetterSqlite3.Database | null = null;
   try {
-    const client = createCloud9Client('production');
+    const tenantCloud9 = req.tenantContext ? getCloud9ConfigForTenant(req.tenantContext, 'production') : undefined;
+    const client = createCloud9Client('production', tenantCloud9);
     const createResp = await client.createAppointment({
       PatientGUID: patientGUID,
       StartTime: startTime,
@@ -1504,7 +1507,8 @@ export async function cancelCorrection(req: Request, res: Response): Promise<voi
 
   let db: BetterSqlite3.Database | null = null;
   try {
-    const client = createCloud9Client('production');
+    const tenantCloud9 = req.tenantContext ? getCloud9ConfigForTenant(req.tenantContext, 'production') : undefined;
+    const client = createCloud9Client('production', tenantCloud9);
     const resp = await client.cancelAppointment(appointmentGUID);
 
     const success = resp.status === 'Success';
@@ -1544,7 +1548,8 @@ export async function rescheduleCorrection(req: Request, res: Response): Promise
 
   let db: BetterSqlite3.Database | null = null;
   try {
-    const client = createCloud9Client('production');
+    const tenantCloud9 = req.tenantContext ? getCloud9ConfigForTenant(req.tenantContext, 'production') : undefined;
+    const client = createCloud9Client('production', tenantCloud9);
 
     // Cancel existing
     await client.cancelAppointment(appointmentGUID);

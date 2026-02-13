@@ -6,7 +6,8 @@
 import { NavLink } from 'react-router-dom';
 import { useAppSelector, useAppDispatch } from '../../store/hooks';
 import { selectSidebarOpen, setSidebarOpen, selectSidebarCollapsed, toggleSidebarCollapsed } from '../../store/slices/uiSlice';
-import { selectUser, selectIsAdmin, selectCanAccessTab } from '../../store/slices/authSlice';
+import { selectUser, selectIsAdmin } from '../../store/slices/authSlice';
+import { selectEnabledTabs } from '../../store/slices/tenantSlice';
 import { ROUTES } from '../../utils/constants';
 import { cn } from '../../utils/cn';
 import type { TabKey } from '../../types/auth.types';
@@ -96,6 +97,21 @@ const navItems: NavItem[] = [
     ),
   },
   {
+    label: 'Dominos',
+    path: ROUTES.DOMINOS_DASHBOARD,
+    tabKey: 'dominos_dashboard',
+    icon: (
+      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={2}
+          d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 100 4 2 2 0 000-4z"
+        />
+      </svg>
+    ),
+  },
+  {
     label: 'Settings',
     path: ROUTES.SETTINGS,
     tabKey: 'settings',
@@ -139,6 +155,7 @@ export function Sidebar() {
   const isCollapsed = useAppSelector(selectSidebarCollapsed);
   const user = useAppSelector(selectUser);
   const isAdmin = useAppSelector(selectIsAdmin);
+  const enabledTabs = useAppSelector(selectEnabledTabs);
 
   const handleClose = () => {
     // Only close on mobile
@@ -151,19 +168,18 @@ export function Sidebar() {
     dispatch(toggleSidebarCollapsed());
   };
 
-  // Filter nav items based on permissions
+  // Filter nav items based on tenant-enabled tabs + user permissions
   const filteredNavItems = navItems.filter((item) => {
     // Admin-only items: only show to admin users
     if (item.adminOnly) {
       return isAdmin;
     }
 
-    // Tab-based items: check permissions
+    // Tab-based items: must be enabled for the tenant first
     if (item.tabKey) {
-      // Admin users can see all tabs
-      if (isAdmin) {
-        return true;
-      }
+      if (!enabledTabs.includes(item.tabKey)) return false;
+      // Admin users bypass per-user permission checks
+      if (isAdmin) return true;
       // Check user permissions
       const permission = user?.permissions.find(p => p.tab_key === item.tabKey);
       return permission?.can_access ?? false;

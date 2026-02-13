@@ -12,6 +12,14 @@
         "LANGFUSE_PUBLIC_KEY": "pk-lf-d8ac7be3-a04b-4720-b95f-b96fa98874ed",
         "LANGFUSE_SECRET_KEY": "sk-lf-04345fa3-887d-4fc5-a386-3d12142202c7"
       }
+    },
+    "supermemory-mcp": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "https://mcp.supermemory.ai/mcp?apiKey=sm_ivpfDR8iRvKVRmNEKHwsNr_BpwFapJxsFJWkhLfITSwQHuZmXzsaYwCawuysLzLtragOKPpCzaPiJFBSEFyWDoR"
+      ]
     }
   }
 }

@@ -28,27 +28,29 @@ export interface Appointment {
   minutes?: number;
   status?: string;
   environment?: string;
+  tenant_id?: number;
   cached_at?: string;
   updated_at?: string;
 }
 
 export class AppointmentModel {
   /**
-   * Get all appointments
+   * Get all appointments for a tenant
    */
-  static getAll(limit: number = 100, offset: number = 0): Appointment[] {
+  static getAll(tenantId: number, limit: number = 100, offset: number = 0): Appointment[] {
     const db = getDatabase();
 
     try {
       const stmt = db.prepare(`
         SELECT * FROM appointments
+        WHERE tenant_id = ?
         ORDER BY appointment_date_time DESC
         LIMIT ? OFFSET ?
       `);
 
-      const appointments = stmt.all(limit, offset) as Appointment[];
+      const appointments = stmt.all(tenantId, limit, offset) as Appointment[];
 
-      loggers.dbOperation('SELECT', 'appointments', { count: appointments.length });
+      loggers.dbOperation('SELECT', 'appointments', { tenantId, count: appointments.length });
 
       return appointments;
     } catch (error) {
@@ -61,20 +63,20 @@ export class AppointmentModel {
   }
 
   /**
-   * Get appointment by GUID
+   * Get appointment by GUID for a tenant
    */
-  static getByGuid(appointmentGuid: string): Appointment | null {
+  static getByGuid(tenantId: number, appointmentGuid: string): Appointment | null {
     const db = getDatabase();
 
     try {
       const stmt = db.prepare(`
         SELECT * FROM appointments
-        WHERE appointment_guid = ?
+        WHERE tenant_id = ? AND appointment_guid = ?
       `);
 
-      const appointment = stmt.get(appointmentGuid) as Appointment | undefined;
+      const appointment = stmt.get(tenantId, appointmentGuid) as Appointment | undefined;
 
-      loggers.dbOperation('SELECT', 'appointments', { appointmentGuid });
+      loggers.dbOperation('SELECT', 'appointments', { tenantId, appointmentGuid });
 
       return appointment || null;
     } catch (error) {
@@ -87,21 +89,21 @@ export class AppointmentModel {
   }
 
   /**
-   * Get appointments by patient GUID
+   * Get appointments by patient GUID for a tenant
    */
-  static getByPatientGuid(patientGuid: string): Appointment[] {
+  static getByPatientGuid(tenantId: number, patientGuid: string): Appointment[] {
     const db = getDatabase();
 
     try {
       const stmt = db.prepare(`
         SELECT * FROM appointments
-        WHERE patient_guid = ?
+        WHERE tenant_id = ? AND patient_guid = ?
         ORDER BY appointment_date_time DESC
       `);
 
-      const appointments = stmt.all(patientGuid) as Appointment[];
+      const appointments = stmt.all(tenantId, patientGuid) as Appointment[];
 
-      loggers.dbOperation('SELECT', 'appointments', { patientGuid, count: appointments.length });
+      loggers.dbOperation('SELECT', 'appointments', { tenantId, patientGuid, count: appointments.length });
 
       return appointments;
     } catch (error) {
@@ -114,21 +116,22 @@ export class AppointmentModel {
   }
 
   /**
-   * Get appointments by date range
+   * Get appointments by date range for a tenant
    */
-  static getByDateRange(startDate: string, endDate: string): Appointment[] {
+  static getByDateRange(tenantId: number, startDate: string, endDate: string): Appointment[] {
     const db = getDatabase();
 
     try {
       const stmt = db.prepare(`
         SELECT * FROM appointments
-        WHERE appointment_date_time BETWEEN ? AND ?
+        WHERE tenant_id = ? AND appointment_date_time BETWEEN ? AND ?
         ORDER BY appointment_date_time ASC
       `);
 
-      const appointments = stmt.all(startDate, endDate) as Appointment[];
+      const appointments = stmt.all(tenantId, startDate, endDate) as Appointment[];
 
       loggers.dbOperation('SELECT', 'appointments', {
+        tenantId,
         startDate,
         endDate,
         count: appointments.length,
@@ -145,21 +148,21 @@ export class AppointmentModel {
   }
 
   /**
-   * Create or update appointment
+   * Create or update appointment for a tenant
    */
-  static upsert(appointment: Omit<Appointment, 'cached_at' | 'updated_at'>): void {
+  static upsert(tenantId: number, appointment: Omit<Appointment, 'cached_at' | 'updated_at' | 'tenant_id'>): void {
     const db = getDatabase();
 
     try {
       const stmt = db.prepare(`
         INSERT INTO appointments (
-          appointment_guid, patient_guid, appointment_date_time,
+          tenant_id, appointment_guid, patient_guid, appointment_date_time,
           appointment_type_guid, appointment_type_description, location_guid, location_name,
           provider_guid, orthodontist_name, schedule_view_guid, schedule_view_description,
           schedule_column_guid, schedule_column_description, minutes, status, environment
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(appointment_guid) DO UPDATE SET
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(tenant_id, appointment_guid) DO UPDATE SET
           patient_guid = excluded.patient_guid,
           appointment_date_time = excluded.appointment_date_time,
           appointment_type_guid = excluded.appointment_type_guid,
@@ -178,6 +181,7 @@ export class AppointmentModel {
       `);
 
       stmt.run(
+        tenantId,
         appointment.appointment_guid,
         appointment.patient_guid,
         appointment.appointment_date_time,
@@ -197,6 +201,7 @@ export class AppointmentModel {
       );
 
       loggers.dbOperation('UPSERT', 'appointments', {
+        tenantId,
         appointmentGuid: appointment.appointment_guid,
       });
     } catch (error) {
@@ -209,21 +214,21 @@ export class AppointmentModel {
   }
 
   /**
-   * Update appointment status
+   * Update appointment status for a tenant
    */
-  static updateStatus(appointmentGuid: string, status: string): void {
+  static updateStatus(tenantId: number, appointmentGuid: string, status: string): void {
     const db = getDatabase();
 
     try {
       const stmt = db.prepare(`
         UPDATE appointments
         SET status = ?, updated_at = datetime('now')
-        WHERE appointment_guid = ?
+        WHERE tenant_id = ? AND appointment_guid = ?
       `);
 
-      stmt.run(status, appointmentGuid);
+      stmt.run(status, tenantId, appointmentGuid);
 
-      loggers.dbOperation('UPDATE', 'appointments', { appointmentGuid, status });
+      loggers.dbOperation('UPDATE', 'appointments', { tenantId, appointmentGuid, status });
     } catch (error) {
       throw new Error(
         `Error updating appointment status: ${
@@ -234,20 +239,20 @@ export class AppointmentModel {
   }
 
   /**
-   * Delete appointment by GUID
+   * Delete appointment by GUID for a tenant
    */
-  static deleteByGuid(appointmentGuid: string): void {
+  static deleteByGuid(tenantId: number, appointmentGuid: string): void {
     const db = getDatabase();
 
     try {
       const stmt = db.prepare(`
         DELETE FROM appointments
-        WHERE appointment_guid = ?
+        WHERE tenant_id = ? AND appointment_guid = ?
       `);
 
-      stmt.run(appointmentGuid);
+      stmt.run(tenantId, appointmentGuid);
 
-      loggers.dbOperation('DELETE', 'appointments', { appointmentGuid });
+      loggers.dbOperation('DELETE', 'appointments', { tenantId, appointmentGuid });
     } catch (error) {
       throw new Error(
         `Error deleting appointment: ${

@@ -30,6 +30,9 @@ export interface LoginResponse {
   data: {
     user: User;
     token: string;
+    tenants?: Tenant[];
+    defaultTenantId?: number | null;
+    enabledTabs?: string[];
   };
 }
 
@@ -50,6 +53,9 @@ export interface GetCurrentUserResponse {
   status: string;
   data: {
     user: User;
+    tenants?: Tenant[];
+    defaultTenantId?: number | null;
+    enabledTabs?: string[];
   };
 }
 
@@ -104,14 +110,29 @@ export interface UserResponse {
   };
 }
 
-// Tab keys constant
-export const TAB_KEYS = [
-  'dashboard',
-  'patients',
-  'appointments',
-  'calendar',
-  'test_monitor',
-  'settings'
+// Tenant types
+export interface Tenant {
+  id: number;
+  slug: string;
+  name: string;
+  short_name: string | null;
+  logo_url: string | null;
+  color_primary: string;
+  color_secondary: string;
+  is_active: boolean;
+  is_default: boolean;
+}
+
+// All available tab keys (shared source of truth)
+export const ALL_TABS = [
+  'dashboard', 'patients', 'appointments', 'calendar', 'test_monitor', 'settings',
+  'goal_tests', 'goal_test_generator', 'history', 'tuning',
+  'ab_testing_sandbox', 'ai_prompting', 'api_testing', 'advanced',
+  'dominos_dashboard', 'dominos_orders', 'dominos_health',
+  'dominos_menu', 'dominos_sessions', 'dominos_errors',
 ] as const;
 
-export type TabKey = typeof TAB_KEYS[number];
+/** @deprecated Use ALL_TABS instead */
+export const TAB_KEYS = ALL_TABS;
+
+export type TabKey = typeof ALL_TABS[number];

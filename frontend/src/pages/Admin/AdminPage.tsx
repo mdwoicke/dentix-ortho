@@ -1,22 +1,26 @@
 /**
  * Admin Page
- * User management for administrators
+ * Tabbed layout with User Management and Tenant Management
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { PageHeader } from '../../components/layout';
 import { Card, Button, Modal } from '../../components/ui';
 import { UserFormModal } from '../../components/features/admin/UserFormModal';
+import { TenantManagement } from './TenantManagement';
 import * as adminApi from '../../services/api/adminApi';
-import type { User, TabPermission, TAB_KEYS } from '../../types/auth.types';
+import { ALL_TABS } from '../../types/auth.types';
+import type { User, TabPermission } from '../../types/auth.types';
 
-const ALL_TABS = [
-  'dashboard', 'patients', 'appointments', 'calendar', 'test_monitor', 'settings',
-  'goal_tests', 'goal_test_generator', 'history', 'tuning',
-  'ab_testing_sandbox', 'ai_prompting', 'api_testing', 'advanced'
+const ADMIN_TABS = [
+  { key: 'users', label: 'Users' },
+  { key: 'tenants', label: 'Tenants' },
 ] as const;
 
-export function AdminPage() {
+type AdminTab = typeof ADMIN_TABS[number]['key'];
+
+function UserManagement() {
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -88,17 +92,14 @@ export function AdminPage() {
   }) => {
     try {
       if (editingUser) {
-        // Update existing user
         await adminApi.updateUser(editingUser.id, {
           email: data.email,
           display_name: data.display_name,
           is_admin: data.is_admin,
           is_active: data.is_active,
         });
-        // Update permissions
         await adminApi.setUserPermissions(editingUser.id, { permissions: data.permissions });
       } else {
-        // Create new user
         const response = await adminApi.createUser({
           email: data.email,
           display_name: data.display_name,
@@ -106,7 +107,6 @@ export function AdminPage() {
           is_active: data.is_active,
           permissions: data.permissions,
         });
-        // Show temp password
         setTempPassword(response.data.tempPassword);
         setShowTempPasswordModal(true);
       }
@@ -130,16 +130,11 @@ export function AdminPage() {
   };
 
   return (
-    <div>
-      <PageHeader
-        title="User Management"
-        subtitle="Manage user accounts and permissions"
-        actions={
-          <Button onClick={handleAddUser}>
-            Add User
-          </Button>
-        }
-      />
+    <>
+      <div className="flex items-center justify-between mb-4">
+        <div />
+        <Button onClick={handleAddUser}>Add User</Button>
+      </div>
 
       {error && (
         <div className="mb-4 p-4 rounded-md bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800">
@@ -290,6 +285,46 @@ export function AdminPage() {
           </Modal.Footer>
         </div>
       </Modal>
+    </>
+  );
+}
+
+export function AdminPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeTab = (searchParams.get('tab') || 'users') as AdminTab;
+
+  const setTab = (tab: AdminTab) => {
+    setSearchParams({ tab });
+  };
+
+  return (
+    <div>
+      <PageHeader
+        title="Administration"
+        subtitle="Manage users and practice tenants"
+      />
+
+      {/* Tab bar */}
+      <div className="border-b border-gray-200 dark:border-gray-700 mb-6">
+        <nav className="flex gap-4 -mb-px">
+          {ADMIN_TABS.map(({ key, label }) => (
+            <button
+              key={key}
+              onClick={() => setTab(key)}
+              className={`py-2 px-1 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === key
+                  ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                  : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </nav>
+      </div>
+
+      {activeTab === 'users' && <UserManagement />}
+      {activeTab === 'tenants' && <TenantManagement />}
     </div>
   );
 }

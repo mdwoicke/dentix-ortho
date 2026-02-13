@@ -16,7 +16,7 @@ const tabs = [
   { name: 'Call Tracing', path: ROUTES.TEST_MONITOR_CALL_TRACE },
   { name: 'Skills Runner', path: ROUTES.TEST_MONITOR_SKILLS_RUNNER },
   { name: 'Prod Tracker', path: ROUTES.TEST_MONITOR_PROD_TRACKER },
-  { name: 'Queue Activity', path: ROUTES.TEST_MONITOR_QUEUE_ACTIVITY },
+  // { name: 'Queue Activity', path: ROUTES.TEST_MONITOR_QUEUE_ACTIVITY },
   { name: 'Alerts', path: ROUTES.TEST_MONITOR_ALERTS },
   { name: 'Cache Health', path: ROUTES.TEST_MONITOR_CACHE_HEALTH },
   { name: 'Trace Analysis', path: ROUTES.TEST_MONITOR_TRACE_ANALYSIS },

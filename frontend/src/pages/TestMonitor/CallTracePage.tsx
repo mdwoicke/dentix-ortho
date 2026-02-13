@@ -1902,7 +1902,7 @@ export default function CallTracePage() {
                     Tool Errors
                   </th>
                   <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                    Booked
+                    Order
                   </th>
                   <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                     Transfer
@@ -1973,10 +1973,10 @@ export default function CallTracePage() {
                         ) : null}
                       </td>
                       <td className="px-4 py-3 text-center">
-                        {session.hasSuccessfulBooking && (
+                        {(session.hasSuccessfulBooking || session.hasOrder) && (
                           <span
                             className="inline-flex items-center justify-center text-green-600 dark:text-green-400"
-                            title="Appointment successfully booked"
+                            title={session.hasOrder ? "Order confirmed" : "Appointment successfully booked"}
                           >
                             <Icons.CalendarCheck />
                           </span>

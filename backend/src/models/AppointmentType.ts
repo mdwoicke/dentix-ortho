@@ -14,26 +14,28 @@ export interface AppointmentType {
   allow_online_scheduling: boolean;
   is_deleted?: boolean;
   environment?: string;
+  tenant_id?: number;
   cached_at?: string;
   updated_at?: string;
 }
 
 export class AppointmentTypeModel {
   /**
-   * Get all appointment types
+   * Get all appointment types for a tenant
    */
-  static getAll(): AppointmentType[] {
+  static getAll(tenantId: number): AppointmentType[] {
     const db = getDatabase();
 
     try {
       const stmt = db.prepare(`
         SELECT * FROM appointment_types
+        WHERE tenant_id = ?
         ORDER BY appointment_type_description ASC
       `);
 
-      const appointmentTypes = stmt.all() as AppointmentType[];
+      const appointmentTypes = stmt.all(tenantId) as AppointmentType[];
 
-      loggers.dbOperation('SELECT', 'appointment_types', { count: appointmentTypes.length });
+      loggers.dbOperation('SELECT', 'appointment_types', { tenantId, count: appointmentTypes.length });
 
       return appointmentTypes;
     } catch (error) {
@@ -46,20 +48,20 @@ export class AppointmentTypeModel {
   }
 
   /**
-   * Get appointment type by GUID
+   * Get appointment type by GUID for a tenant
    */
-  static getByGuid(appointmentTypeGuid: string): AppointmentType | null {
+  static getByGuid(tenantId: number, appointmentTypeGuid: string): AppointmentType | null {
     const db = getDatabase();
 
     try {
       const stmt = db.prepare(`
         SELECT * FROM appointment_types
-        WHERE appointment_type_guid = ?
+        WHERE tenant_id = ? AND appointment_type_guid = ?
       `);
 
-      const appointmentType = stmt.get(appointmentTypeGuid) as AppointmentType | undefined;
+      const appointmentType = stmt.get(tenantId, appointmentTypeGuid) as AppointmentType | undefined;
 
-      loggers.dbOperation('SELECT', 'appointment_types', { appointmentTypeGuid });
+      loggers.dbOperation('SELECT', 'appointment_types', { tenantId, appointmentTypeGuid });
 
       return appointmentType || null;
     } catch (error) {
@@ -72,21 +74,22 @@ export class AppointmentTypeModel {
   }
 
   /**
-   * Create or update appointment type
+   * Create or update appointment type for a tenant
    */
   static upsert(
-    appointmentType: Omit<AppointmentType, 'cached_at' | 'updated_at'>
+    tenantId: number,
+    appointmentType: Omit<AppointmentType, 'cached_at' | 'updated_at' | 'tenant_id'>
   ): void {
     const db = getDatabase();
 
     try {
       const stmt = db.prepare(`
         INSERT INTO appointment_types (
-          appointment_type_guid, appointment_type_code, description,
+          tenant_id, appointment_type_guid, appointment_type_code, description,
           minutes, allow_online_scheduling, is_deleted, environment
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(appointment_type_guid) DO UPDATE SET
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(tenant_id, appointment_type_guid) DO UPDATE SET
           appointment_type_code = excluded.appointment_type_code,
           description = excluded.description,
           minutes = excluded.minutes,
@@ -96,6 +99,7 @@ export class AppointmentTypeModel {
       `);
 
       stmt.run(
+        tenantId,
         appointmentType.appointment_type_guid,
         appointmentType.appointment_type_code || null,
         appointmentType.description,
@@ -106,6 +110,7 @@ export class AppointmentTypeModel {
       );
 
       loggers.dbOperation('UPSERT', 'appointment_types', {
+        tenantId,
         appointmentTypeGuid: appointmentType.appointment_type_guid,
       });
     } catch (error) {
@@ -118,23 +123,25 @@ export class AppointmentTypeModel {
   }
 
   /**
-   * Bulk upsert appointment types
+   * Bulk upsert appointment types for a tenant
    */
   static bulkUpsert(
-    appointmentTypes: Omit<AppointmentType, 'cached_at' | 'updated_at'>[]
+    tenantId: number,
+    appointmentTypes: Omit<AppointmentType, 'cached_at' | 'updated_at' | 'tenant_id'>[]
   ): void {
     const db = getDatabase();
 
     try {
       const insertMany = db.transaction((types: typeof appointmentTypes) => {
         for (const appointmentType of types) {
-          AppointmentTypeModel.upsert(appointmentType);
+          AppointmentTypeModel.upsert(tenantId, appointmentType);
         }
       });
 
       insertMany(appointmentTypes);
 
       loggers.dbOperation('BULK_UPSERT', 'appointment_types', {
+        tenantId,
         count: appointmentTypes.length,
       });
     } catch (error) {
@@ -147,20 +154,20 @@ export class AppointmentTypeModel {
   }
 
   /**
-   * Delete appointment type by GUID
+   * Delete appointment type by GUID for a tenant
    */
-  static deleteByGuid(appointmentTypeGuid: string): void {
+  static deleteByGuid(tenantId: number, appointmentTypeGuid: string): void {
     const db = getDatabase();
 
     try {
       const stmt = db.prepare(`
         DELETE FROM appointment_types
-        WHERE appointment_type_guid = ?
+        WHERE tenant_id = ? AND appointment_type_guid = ?
       `);
 
-      stmt.run(appointmentTypeGuid);
+      stmt.run(tenantId, appointmentTypeGuid);
 
-      loggers.dbOperation('DELETE', 'appointment_types', { appointmentTypeGuid });
+      loggers.dbOperation('DELETE', 'appointment_types', { tenantId, appointmentTypeGuid });
     } catch (error) {
       throw new Error(
         `Error deleting appointment type: ${
@@ -171,16 +178,16 @@ export class AppointmentTypeModel {
   }
 
   /**
-   * Clear all appointment types
+   * Clear all appointment types for a tenant
    */
-  static deleteAll(): void {
+  static deleteAll(tenantId: number): void {
     const db = getDatabase();
 
     try {
-      const stmt = db.prepare(`DELETE FROM appointment_types`);
-      stmt.run();
+      const stmt = db.prepare(`DELETE FROM appointment_types WHERE tenant_id = ?`);
+      stmt.run(tenantId);
 
-      loggers.dbOperation('DELETE_ALL', 'appointment_types');
+      loggers.dbOperation('DELETE_ALL', 'appointment_types', { tenantId });
     } catch (error) {
       throw new Error(
         `Error deleting all appointment types: ${

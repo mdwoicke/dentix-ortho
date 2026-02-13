@@ -1,5 +1,7 @@
 import axios, { AxiosError } from 'axios';
-import { Environment, getCredentials, getEndpoint } from '../../config/cloud9';
+import fs from 'fs';
+import path from 'path';
+import { Cloud9Config, Environment, getCredentials, getEndpoint } from '../../config/cloud9';
 import {
   buildXmlRequest,
   buildGetLocationsRequest,
@@ -16,6 +18,7 @@ import {
   buildSetAppointmentStatusConfirmedRequest,
   buildSetAppointmentStatusCanceledRequest,
   buildGetAvailableApptsRequest,
+  Cloud9Credentials,
   CreatePatientParams,
   UpdatePatientParams,
   CreateAppointmentParams,
@@ -39,9 +42,50 @@ const PATIENT_INFO_CACHE_TTL_MS = 60000; // 60 seconds
 
 export class Cloud9Client {
   private environment: Environment;
+  private configOverride?: Cloud9Config;
 
-  constructor(environment: Environment = 'sandbox') {
+  constructor(environment: Environment = 'sandbox', configOverride?: Cloud9Config) {
     this.environment = environment;
+    this.configOverride = configOverride;
+  }
+
+  /**
+   * Log rate limit errors (error code 8) to a markdown file for analysis
+   */
+  private logRateLimitError(procedure: string, requestXml: string, response: Cloud9Response, rawXml?: string): void {
+    const logsDir = path.join(__dirname, '../../../logs');
+    const logPath = path.join(logsDir, 'rate-limit-errors.md');
+    const timestamp = new Date().toISOString();
+
+    // Ensure logs directory exists
+    if (!fs.existsSync(logsDir)) {
+      fs.mkdirSync(logsDir, { recursive: true });
+    }
+
+    const entry = `
+## Rate Limit Error - ${timestamp}
+
+**Procedure:** ${procedure}
+**Environment:** ${this.environment}
+**Error Code:** ${response.errorCode}
+**Error Message:** ${response.errorMessage}
+
+### Request XML
+\`\`\`xml
+${requestXml}
+\`\`\`
+
+### Response
+\`\`\`xml
+${rawXml || JSON.stringify(response, null, 2)}
+\`\`\`
+
+---
+
+`;
+
+    fs.appendFileSync(logPath, entry);
+    console.log(`[RATE LIMIT] Logged rate limit error for ${procedure} to rate-limit-errors.md`);
   }
 
   /**
@@ -51,7 +95,7 @@ export class Cloud9Client {
    * @param timeoutMs - Optional custom timeout in milliseconds (default: 30000)
    */
   private async makeRequest(xmlBody: string, procedure: string, timeoutMs: number = 30000): Promise<Cloud9Response> {
-    const endpoint = getEndpoint(this.environment);
+    const endpoint = this.configOverride?.endpoint || getEndpoint(this.environment);
 
     try {
       loggers.cloud9Request(procedure, this.environment);
@@ -72,6 +116,11 @@ export class Cloud9Client {
           procedure,
           xmlResponse: response.data.substring(0, 1000), // First 1000 chars
         });
+
+        // Log rate limit errors (error code 8) to markdown file for analysis
+        if (parsedResponse.errorCode === 8) {
+          this.logRateLimitError(procedure, xmlBody, parsedResponse, response.data);
+        }
       }
 
       loggers.cloud9Response(
@@ -108,6 +157,13 @@ export class Cloud9Client {
   }
 
   /**
+   * Get credentials, using config override if provided
+   */
+  private getCredentials(): Cloud9Credentials {
+    return this.configOverride?.credentials || getCredentials(this.environment);
+  }
+
+  /**
    * Set environment for this client instance
    */
   setEnvironment(environment: Environment): void {
@@ -129,7 +185,7 @@ export class Cloud9Client {
    * Get all practice locations
    */
   async getLocations(showDeleted: boolean = false): Promise<Cloud9Response> {
-    const credentials = getCredentials(this.environment);
+    const credentials = this.getCredentials();
     const xmlBody = buildGetLocationsRequest(credentials, showDeleted);
     return this.makeRequest(xmlBody, Cloud9Procedure.GET_LOCATIONS);
   }
@@ -138,7 +194,7 @@ export class Cloud9Client {
    * Get chair schedules (providers/doctors)
    */
   async getChairSchedules(): Promise<Cloud9Response> {
-    const credentials = getCredentials(this.environment);
+    const credentials = this.getCredentials();
     const xmlBody = buildGetChairSchedulesRequest(credentials);
     return this.makeRequest(xmlBody, Cloud9Procedure.GET_CHAIR_SCHEDULES);
   }
@@ -147,7 +203,7 @@ export class Cloud9Client {
    * Get appointment types
    */
   async getAppointmentTypes(showDeleted: boolean = false): Promise<Cloud9Response> {
-    const credentials = getCredentials(this.environment);
+    const credentials = this.getCredentials();
     const xmlBody = buildGetAppointmentTypesRequest(credentials, showDeleted);
     return this.makeRequest(xmlBody, Cloud9Procedure.GET_APPOINTMENT_TYPES);
   }
@@ -164,7 +220,7 @@ export class Cloud9Client {
     pageIndex: number = 1,
     pageSize: number = 25
   ): Promise<Cloud9Response> {
-    const credentials = getCredentials(this.environment);
+    const credentials = this.getCredentials();
     const xmlBody = buildGetPortalPatientLookupRequest(
       credentials,
       searchTerm,
@@ -181,7 +237,7 @@ export class Cloud9Client {
    * @param timeoutMs - Optional timeout in ms (default: 120000 for full sync, which can be slow)
    */
   async getPatientList(locationGuids?: string[], modifiedSince?: string, timeoutMs: number = 120000): Promise<Cloud9Response> {
-    const credentials = getCredentials(this.environment);
+    const credentials = this.getCredentials();
     const xmlBody = buildGetPatientListRequest(credentials, locationGuids, modifiedSince);
     return this.makeRequest(xmlBody, Cloud9Procedure.GET_PATIENT_LIST, timeoutMs);
   }
@@ -210,7 +266,7 @@ export class Cloud9Client {
       }
     }
 
-    const credentials = getCredentials(this.environment);
+    const credentials = this.getCredentials();
     const xmlBody = buildGetPatientInformationRequest(credentials, patientGuid);
     const response = await this.makeRequest(xmlBody, Cloud9Procedure.GET_PATIENT_INFORMATION);
 
@@ -226,7 +282,7 @@ export class Cloud9Client {
    * Create a new patient
    */
   async createPatient(params: CreatePatientParams): Promise<Cloud9Response> {
-    const credentials = getCredentials(this.environment);
+    const credentials = this.getCredentials();
     const xmlBody = buildSetPatientRequest(credentials, params);
     return this.makeRequest(xmlBody, Cloud9Procedure.SET_PATIENT);
   }
@@ -235,7 +291,7 @@ export class Cloud9Client {
    * Update patient demographic information
    */
   async updatePatient(params: UpdatePatientParams): Promise<Cloud9Response> {
-    const credentials = getCredentials(this.environment);
+    const credentials = this.getCredentials();
     const xmlBody = buildSetPatientDemographicInfoRequest(credentials, params);
     return this.makeRequest(xmlBody, Cloud9Procedure.SET_PATIENT_DEMOGRAPHIC_INFO);
   }
@@ -248,7 +304,7 @@ export class Cloud9Client {
    * Get all appointments for a patient
    */
   async getPatientAppointments(patientGuid: string): Promise<Cloud9Response> {
-    const credentials = getCredentials(this.environment);
+    const credentials = this.getCredentials();
     const xmlBody = buildGetAppointmentListByPatientRequest(credentials, patientGuid);
     return this.makeRequest(xmlBody, Cloud9Procedure.GET_APPOINTMENT_LIST_BY_PATIENT);
   }
@@ -257,7 +313,7 @@ export class Cloud9Client {
    * Get appointments by date and schedule view (includes Chair field)
    */
   async getAppointmentsByDate(appointmentDate: string, scheduleViewGuid: string): Promise<Cloud9Response> {
-    const credentials = getCredentials(this.environment);
+    const credentials = this.getCredentials();
     const xmlBody = buildGetAppointmentsByDateRequest(credentials, appointmentDate, scheduleViewGuid);
     return this.makeRequest(xmlBody, Cloud9Procedure.GET_APPOINTMENTS_BY_DATE);
   }
@@ -266,7 +322,7 @@ export class Cloud9Client {
    * Create a new appointment
    */
   async createAppointment(params: CreateAppointmentParams): Promise<Cloud9Response> {
-    const credentials = getCredentials(this.environment);
+    const credentials = this.getCredentials();
     const xmlBody = buildSetAppointmentRequest(credentials, params);
     return this.makeRequest(xmlBody, Cloud9Procedure.SET_APPOINTMENT);
   }
@@ -275,7 +331,7 @@ export class Cloud9Client {
    * Confirm an existing appointment
    */
   async confirmAppointment(appointmentGuid: string): Promise<Cloud9Response> {
-    const credentials = getCredentials(this.environment);
+    const credentials = this.getCredentials();
     const xmlBody = buildSetAppointmentStatusConfirmedRequest(credentials, appointmentGuid);
     return this.makeRequest(xmlBody, Cloud9Procedure.SET_APPOINTMENT_STATUS_CONFIRMED);
   }
@@ -284,7 +340,7 @@ export class Cloud9Client {
    * Cancel an existing appointment
    */
   async cancelAppointment(appointmentGuid: string): Promise<Cloud9Response> {
-    const credentials = getCredentials(this.environment);
+    const credentials = this.getCredentials();
     const xmlBody = buildSetAppointmentStatusCanceledRequest(credentials, appointmentGuid);
     return this.makeRequest(xmlBody, Cloud9Procedure.SET_APPOINTMENT_STATUS_CANCELED);
   }
@@ -293,7 +349,7 @@ export class Cloud9Client {
    * Get available appointment slots
    */
   async getAvailableAppts(params: GetAvailableApptsParams): Promise<Cloud9Response> {
-    const credentials = getCredentials(this.environment);
+    const credentials = this.getCredentials();
     const xmlBody = buildGetAvailableApptsRequest(credentials, params);
     return this.makeRequest(xmlBody, Cloud9Procedure.GET_AVAILABLE_APPTS);
   }
@@ -305,7 +361,7 @@ export class Cloud9Client {
     procedure: Cloud9Procedure,
     parameters?: Record<string, any>
   ): Promise<Cloud9Response> {
-    const credentials = getCredentials(this.environment);
+    const credentials = this.getCredentials();
     const xmlBody = buildXmlRequest({ procedure, parameters, credentials });
     return this.makeRequest(xmlBody, procedure);
   }
@@ -314,8 +370,8 @@ export class Cloud9Client {
 /**
  * Factory function to create a Cloud 9 client instance
  */
-export function createCloud9Client(environment: Environment = 'sandbox'): Cloud9Client {
-  return new Cloud9Client(environment);
+export function createCloud9Client(environment: Environment = 'sandbox', configOverride?: Cloud9Config): Cloud9Client {
+  return new Cloud9Client(environment, configOverride);
 }
 
 /**

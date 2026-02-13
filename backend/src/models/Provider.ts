@@ -17,26 +17,28 @@ export interface Provider {
   start_time?: string;
   end_time?: string;
   environment?: string;
+  tenant_id?: number;
   cached_at?: string;
   updated_at?: string;
 }
 
 export class ProviderModel {
   /**
-   * Get all providers
+   * Get all providers for a tenant
    */
-  static getAll(): Provider[] {
+  static getAll(tenantId: number): Provider[] {
     const db = getDatabase();
 
     try {
       const stmt = db.prepare(`
         SELECT * FROM providers
+        WHERE tenant_id = ?
         ORDER BY schedule_view_description ASC
       `);
 
-      const providers = stmt.all() as Provider[];
+      const providers = stmt.all(tenantId) as Provider[];
 
-      loggers.dbOperation('SELECT', 'providers', { count: providers.length });
+      loggers.dbOperation('SELECT', 'providers', { tenantId, count: providers.length });
 
       return providers;
     } catch (error) {
@@ -49,20 +51,20 @@ export class ProviderModel {
   }
 
   /**
-   * Get provider by GUID
+   * Get provider by GUID for a tenant
    */
-  static getByGuid(providerGuid: string): Provider | null {
+  static getByGuid(tenantId: number, providerGuid: string): Provider | null {
     const db = getDatabase();
 
     try {
       const stmt = db.prepare(`
         SELECT * FROM providers
-        WHERE provider_guid = ?
+        WHERE tenant_id = ? AND provider_guid = ?
       `);
 
-      const provider = stmt.get(providerGuid) as Provider | undefined;
+      const provider = stmt.get(tenantId, providerGuid) as Provider | undefined;
 
-      loggers.dbOperation('SELECT', 'providers', { providerGuid });
+      loggers.dbOperation('SELECT', 'providers', { tenantId, providerGuid });
 
       return provider || null;
     } catch (error) {
@@ -75,21 +77,21 @@ export class ProviderModel {
   }
 
   /**
-   * Get providers by location GUID
+   * Get providers by location GUID for a tenant
    */
-  static getByLocationGuid(locationGuid: string): Provider[] {
+  static getByLocationGuid(tenantId: number, locationGuid: string): Provider[] {
     const db = getDatabase();
 
     try {
       const stmt = db.prepare(`
         SELECT * FROM providers
-        WHERE location_guid = ?
+        WHERE tenant_id = ? AND location_guid = ?
         ORDER BY schedule_view_description ASC
       `);
 
-      const providers = stmt.all(locationGuid) as Provider[];
+      const providers = stmt.all(tenantId, locationGuid) as Provider[];
 
-      loggers.dbOperation('SELECT', 'providers', { locationGuid, count: providers.length });
+      loggers.dbOperation('SELECT', 'providers', { tenantId, locationGuid, count: providers.length });
 
       return providers;
     } catch (error) {
@@ -102,20 +104,20 @@ export class ProviderModel {
   }
 
   /**
-   * Create or update provider
+   * Create or update provider for a tenant
    */
-  static upsert(provider: Omit<Provider, 'cached_at' | 'updated_at'>): void {
+  static upsert(tenantId: number, provider: Omit<Provider, 'cached_at' | 'updated_at' | 'tenant_id'>): void {
     const db = getDatabase();
 
     try {
       const stmt = db.prepare(`
         INSERT INTO providers (
-          provider_guid, location_guid, schedule_view_guid, schedule_column_guid,
+          tenant_id, provider_guid, location_guid, schedule_view_guid, schedule_column_guid,
           schedule_view_description, schedule_column_description, provider_name,
           start_time, end_time, environment
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(provider_guid) DO UPDATE SET
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(tenant_id, provider_guid) DO UPDATE SET
           location_guid = excluded.location_guid,
           schedule_view_guid = excluded.schedule_view_guid,
           schedule_column_guid = excluded.schedule_column_guid,
@@ -128,6 +130,7 @@ export class ProviderModel {
       `);
 
       stmt.run(
+        tenantId,
         provider.provider_guid,
         provider.location_guid,
         provider.schedule_view_guid,
@@ -141,6 +144,7 @@ export class ProviderModel {
       );
 
       loggers.dbOperation('UPSERT', 'providers', {
+        tenantId,
         providerGuid: provider.provider_guid,
       });
     } catch (error) {
@@ -153,15 +157,15 @@ export class ProviderModel {
   }
 
   /**
-   * Bulk upsert providers
+   * Bulk upsert providers for a tenant
    */
-  static bulkUpsert(providers: Omit<Provider, 'cached_at' | 'updated_at'>[]): void {
+  static bulkUpsert(tenantId: number, providers: Omit<Provider, 'cached_at' | 'updated_at' | 'tenant_id'>[]): void {
     let successCount = 0;
     let skippedCount = 0;
 
     for (const provider of providers) {
       try {
-        ProviderModel.upsert(provider);
+        ProviderModel.upsert(tenantId, provider);
         successCount++;
       } catch (error) {
         // Skip providers with foreign key constraint failures (invalid location_guid)
@@ -178,6 +182,7 @@ export class ProviderModel {
     }
 
     loggers.dbOperation('BULK_UPSERT', 'providers', {
+      tenantId,
       total: providers.length,
       success: successCount,
       skipped: skippedCount,
@@ -185,20 +190,20 @@ export class ProviderModel {
   }
 
   /**
-   * Delete provider by GUID
+   * Delete provider by GUID for a tenant
    */
-  static deleteByGuid(providerGuid: string): void {
+  static deleteByGuid(tenantId: number, providerGuid: string): void {
     const db = getDatabase();
 
     try {
       const stmt = db.prepare(`
         DELETE FROM providers
-        WHERE provider_guid = ?
+        WHERE tenant_id = ? AND provider_guid = ?
       `);
 
-      stmt.run(providerGuid);
+      stmt.run(tenantId, providerGuid);
 
-      loggers.dbOperation('DELETE', 'providers', { providerGuid });
+      loggers.dbOperation('DELETE', 'providers', { tenantId, providerGuid });
     } catch (error) {
       throw new Error(
         `Error deleting provider: ${
@@ -209,16 +214,16 @@ export class ProviderModel {
   }
 
   /**
-   * Clear all providers
+   * Clear all providers for a tenant
    */
-  static deleteAll(): void {
+  static deleteAll(tenantId: number): void {
     const db = getDatabase();
 
     try {
-      const stmt = db.prepare(`DELETE FROM providers`);
-      stmt.run();
+      const stmt = db.prepare(`DELETE FROM providers WHERE tenant_id = ?`);
+      stmt.run(tenantId);
 
-      loggers.dbOperation('DELETE_ALL', 'providers');
+      loggers.dbOperation('DELETE_ALL', 'providers', { tenantId });
     } catch (error) {
       throw new Error(
         `Error deleting all providers: ${

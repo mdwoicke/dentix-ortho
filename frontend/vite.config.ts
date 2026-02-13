@@ -1,9 +1,15 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import path from 'path'
 
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    alias: {
+      '@shared': path.resolve(__dirname, '../shared'),
+    },
+  },
   server: {
     host: '0.0.0.0',
     port: 5174,
@@ -11,7 +17,7 @@ export default defineConfig({
     proxy: {
       // Proxy backend API calls - enables network access via any IP
       '/api': {
-        target: 'http://localhost:3003',
+        target: 'http://localhost:3002',
         changeOrigin: true,
       },
       // Proxy Node Red API calls to the production server

@@ -13,6 +13,7 @@ import type { ApiError, ApiResponse, Environment } from '../../types';
  */
 const ENVIRONMENT_KEY = 'dentix_environment';
 const AUTH_TOKEN_KEY = 'dentix_auth_token';
+const TENANT_ID_KEY = 'dentix_tenant_id';
 
 /**
  * Get auth token from localStorage
@@ -51,6 +52,32 @@ export function setCurrentEnvironment(environment: Environment): void {
 }
 
 /**
+ * Get current tenant ID from localStorage
+ */
+export function getCurrentTenantId(): number | null {
+  const stored = localStorage.getItem(TENANT_ID_KEY);
+  if (stored) {
+    const id = parseInt(stored, 10);
+    return isNaN(id) ? null : id;
+  }
+  return null;
+}
+
+/**
+ * Set current tenant ID in localStorage
+ */
+export function setCurrentTenantId(tenantId: number): void {
+  localStorage.setItem(TENANT_ID_KEY, String(tenantId));
+}
+
+/**
+ * Remove tenant ID from localStorage
+ */
+export function removeCurrentTenantId(): void {
+  localStorage.removeItem(TENANT_ID_KEY);
+}
+
+/**
  * Create configured Axios instance
  */
 function createApiClient(): AxiosInstance {
@@ -62,11 +89,17 @@ function createApiClient(): AxiosInstance {
     },
   });
 
-  // Request interceptor: Add environment header and auth token
+  // Request interceptor: Add environment header, tenant header, and auth token
   client.interceptors.request.use(
     (config) => {
       const environment = getCurrentEnvironment();
       config.headers['X-Environment'] = environment;
+
+      // Add tenant ID if present
+      const tenantId = getCurrentTenantId();
+      if (tenantId) {
+        config.headers['X-Tenant-Id'] = String(tenantId);
+      }
 
       // Add auth token if present
       const token = getAuthToken();

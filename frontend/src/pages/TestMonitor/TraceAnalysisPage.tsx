@@ -27,6 +27,8 @@ import {
   type CallReportBookingResult,
   type BookingCorrectionRecord,
   type CurrentBookingChild,
+  type IntentDeliveryComparison,
+  type ChildComparison,
 } from '../../services/api/testMonitorApi';
 import { GuidCopyButton } from '../../components/ui/GuidCopyButton';
 import { getLangfuseConfigs } from '../../services/api/appSettingsApi';
@@ -70,6 +72,11 @@ const Icons = {
   Shield: () => (
     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+    </svg>
+  ),
+  Calendar: () => (
+    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
     </svg>
   ),
 };
@@ -209,14 +216,180 @@ function IntentCard({ intent }: { intent: TraceAnalysisResponse['intent'] }) {
             )}
             {intent.bookingDetails.requestedDates.length > 0 && (
               <div className="col-span-2">
-                <span className="text-gray-500 dark:text-gray-400">Requested Dates:</span>{' '}
-                <span className="text-gray-900 dark:text-white">{intent.bookingDetails.requestedDates.join(', ')}</span>
+                <span className="text-gray-500 dark:text-gray-400">
+                  <span className="text-blue-500 mr-1">{'\u{1F4C5}'}</span>
+                  Intended Booking Date{intent.bookingDetails.requestedDates.length > 1 ? 's' : ''}:
+                </span>{' '}
+                <span className="text-gray-900 dark:text-white font-medium">{intent.bookingDetails.requestedDates.join(', ')}</span>
               </div>
             )}
           </div>
         </div>
       )}
     </div>
+  );
+}
+
+// ============================================================================
+// INTENT VS DELIVERY COMPARISON CARD
+// ============================================================================
+
+function getComparisonStatusBadge(status: IntentDeliveryComparison['overallStatus']): { color: string; label: string; icon: string } {
+  switch (status) {
+    case 'match':
+      return { color: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300', label: 'All Fulfilled', icon: '\u2713' };
+    case 'partial':
+      return { color: 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300', label: 'Partial Match', icon: '\u26A0' };
+    case 'mismatch':
+      return { color: 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300', label: 'Mismatch', icon: '\u2717' };
+    case 'pending':
+      return { color: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300', label: 'Pending', icon: '\u23F3' };
+    default:
+      return { color: 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400', label: 'Unknown', icon: '?' };
+  }
+}
+
+function getChildStatusBadge(status: ChildComparison['status']): { color: string; label: string; icon: string } {
+  switch (status) {
+    case 'match':
+      return { color: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300', label: 'Match', icon: '\u2713' };
+    case 'date_mismatch':
+      return { color: 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300', label: 'Date Mismatch', icon: '\u26A0' };
+    case 'failed':
+      return { color: 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300', label: 'Failed', icon: '\u2717' };
+    case 'queued':
+      return { color: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300', label: 'Queued', icon: '\u23F3' };
+    case 'not_attempted':
+      return { color: 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400', label: 'Not Attempted', icon: '\u2014' };
+    default:
+      return { color: 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400', label: 'Unknown', icon: '?' };
+  }
+}
+
+function IntentDeliveryComparisonCard({ comparison }: { comparison: IntentDeliveryComparison }) {
+  const overallBadge = getComparisonStatusBadge(comparison.overallStatus);
+
+  return (
+    <Card>
+      <div className="p-4">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <Icons.Calendar />
+            <h3 className="text-base font-semibold text-gray-900 dark:text-white">Intent vs Delivery</h3>
+          </div>
+          <span className={`px-2.5 py-1 text-xs font-medium rounded-full ${overallBadge.color}`}>
+            {overallBadge.icon} {overallBadge.label}
+          </span>
+        </div>
+
+        {/* Children Comparison Table */}
+        {comparison.children.length > 0 && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-200 dark:border-gray-700">
+                  <th className="text-left py-2 pr-4 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Child</th>
+                  <th className="text-left py-2 pr-4 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Caller Requested</th>
+                  <th className="text-left py-2 pr-4 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">System Delivered</th>
+                  <th className="text-left py-2 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {comparison.children.map((child, idx) => {
+                  const statusBadge = getChildStatusBadge(child.status);
+                  return (
+                    <tr key={idx} className="border-b border-gray-100 dark:border-gray-700/50 last:border-b-0">
+                      {/* Child Name */}
+                      <td className="py-3 pr-4">
+                        <span className="font-medium text-gray-900 dark:text-white">{child.childName}</span>
+                      </td>
+
+                      {/* Requested */}
+                      <td className="py-3 pr-4">
+                        <div className="text-gray-900 dark:text-white">{child.requested.name}</div>
+                        {child.requested.date && (
+                          <div className="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-1 mt-0.5">
+                            <span className="text-blue-500">{'\u{1F4C5}'}</span> {child.requested.date}
+                          </div>
+                        )}
+                      </td>
+
+                      {/* Delivered */}
+                      <td className="py-3 pr-4">
+                        {child.delivered.appointmentBooked ? (
+                          <div>
+                            <div className="text-green-600 dark:text-green-400 font-medium">{'\u2713'} Booked</div>
+                            {child.delivered.actualSlot && (
+                              <div className="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-1 mt-0.5">
+                                <span className="text-blue-500">{'\u{1F4C5}'}</span> {child.delivered.actualSlot}
+                              </div>
+                            )}
+                          </div>
+                        ) : child.status === 'queued' ? (
+                          <div className="text-blue-600 dark:text-blue-400 font-medium">{'\u23F3'} Queued</div>
+                        ) : (
+                          <div>
+                            <div className="text-red-600 dark:text-red-400 font-medium">{'\u2717'} Not Booked</div>
+                            {child.delivered.error && (
+                              <div className="text-xs text-red-500 dark:text-red-400 mt-0.5">{child.delivered.error}</div>
+                            )}
+                          </div>
+                        )}
+                      </td>
+
+                      {/* Status */}
+                      <td className="py-3">
+                        <div>
+                          <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${statusBadge.color}`}>
+                            {statusBadge.icon} {statusBadge.label}
+                          </span>
+                          {child.discrepancy && child.status !== 'match' && (
+                            <div className="text-xs text-gray-500 dark:text-gray-400 mt-1 max-w-[200px]">
+                              {child.discrepancy}
+                            </div>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Transfer Comparison */}
+        {comparison.transfer && (
+          <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+            <div className="flex items-center gap-3 text-sm">
+              <span className="text-gray-500 dark:text-gray-400">Transfer:</span>
+              <span className="text-gray-900 dark:text-white">
+                {comparison.transfer.requested ? 'Requested' : 'Not Requested'}
+              </span>
+              <span className="text-gray-400">{'\u2192'}</span>
+              <span className="text-gray-900 dark:text-white">
+                {comparison.transfer.delivered ? 'Transferred' : 'Not Transferred'}
+              </span>
+              <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${
+                comparison.transfer.status === 'match'
+                  ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300'
+                  : 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300'
+              }`}>
+                {comparison.transfer.status === 'match' ? '\u2713 Match' : '\u2717 Mismatch'}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Empty state */}
+        {comparison.children.length === 0 && !comparison.transfer && (
+          <div className="text-sm text-gray-500 dark:text-gray-400 text-center py-4">
+            No booking intent or transfer data to compare.
+          </div>
+        )}
+      </div>
+    </Card>
   );
 }
 
@@ -816,6 +989,11 @@ function determineCorrectionStatus(
 ): { status: CorrectionStatus; currentChild: CurrentBookingChild | null; currentAppt: any | null } {
   const currentChild = currentChildren.find(c => c.patientGUID === br.patientGUID) || null;
   if (!currentChild) {
+    // If we have a patientGUID, the record exists even if no booking was attempted
+    // This allows booking for children found via lookup but never booked
+    if (br.patientGUID) {
+      return { status: 'needs_booking', currentChild: null, currentAppt: null };
+    }
     return { status: br.queued || br.booked ? 'needs_booking' : 'no_record', currentChild: null, currentAppt: null };
   }
 
@@ -836,6 +1014,11 @@ function determineCorrectionStatus(
     return { status: 'was_cancelled', currentChild, currentAppt: cancelledAppts[0] };
   }
   if ((br.queued && !br.booked) || (br.booked && scheduledAppts.length === 0)) {
+    return { status: 'needs_booking', currentChild, currentAppt: null };
+  }
+  // If we have a currentChild (patient exists) but no bookings and no booking was attempted,
+  // the patient needs booking - this handles children found via lookup
+  if (currentChild && scheduledAppts.length === 0) {
     return { status: 'needs_booking', currentChild, currentAppt: null };
   }
   return { status: 'no_record', currentChild, currentAppt: null };
@@ -1407,9 +1590,9 @@ function BookingCorrectionCard({
                   <button
                     onClick={() => openSlotPicker(br, 'book')}
                     disabled={state.checking}
-                    className="px-3 py-1 text-xs font-medium rounded bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-800/40 disabled:opacity-50"
+                    className="px-3 py-1 text-xs font-medium rounded bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-800/40 disabled:opacity-50 inline-flex items-center gap-1"
                   >
-                    {state.checking ? 'Loading...' : br.slot ? 'Book...' : 'Schedule...'}
+                    {state.checking ? 'Loading...' : <><Icons.Calendar /> Book</>}
                   </button>
                 )}
 
@@ -1477,6 +1660,216 @@ function BookingCorrectionCard({
             </div>
           </div>
         )}
+      </div>
+    </Card>
+  );
+}
+
+/**
+ * ManualBookingCard - Allows booking when no patient GUIDs were found in the trace
+ * This is shown when the call never got to the point of patient lookup/booking
+ */
+function ManualBookingCard({ sessionId, onRefresh }: { sessionId: string; onRefresh: () => void }) {
+  const [patientGUID, setPatientGUID] = useState('');
+  const [childName, setChildName] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [checkResult, setCheckResult] = useState<any>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [bookingInProgress, setBookingInProgress] = useState(false);
+  const [selectedSlot, setSelectedSlot] = useState<any>(null);
+  const [bookingResult, setBookingResult] = useState<any>(null);
+
+  const handleCheckSlots = async () => {
+    if (!patientGUID.trim()) {
+      setError('Please enter a patient GUID');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setCheckResult(null);
+    setSelectedSlot(null);
+    setBookingResult(null);
+
+    try {
+      // Get today's date in MM/DD/YYYY format
+      const today = new Date();
+      const dateStr = `${(today.getMonth() + 1).toString().padStart(2, '0')}/${today.getDate().toString().padStart(2, '0')}/${today.getFullYear()}`;
+
+      const result = await checkSlotAvailability(sessionId, {
+        patientGUID: patientGUID.trim(),
+        date: dateStr,
+        intendedStartTime: `${dateStr} 9:00 AM`,
+      });
+      setCheckResult(result);
+    } catch (err: any) {
+      setError(err.message || 'Failed to check slots');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleBook = async () => {
+    if (!selectedSlot || !patientGUID.trim()) return;
+
+    setBookingInProgress(true);
+    setError(null);
+
+    try {
+      const result = await bookCorrection(sessionId, {
+        patientGUID: patientGUID.trim(),
+        childName: childName.trim() || 'Unknown',
+        slotStartTime: selectedSlot.startTime,
+        scheduleViewGUID: selectedSlot.scheduleViewGUID,
+        scheduleColumnGUID: selectedSlot.scheduleColumnGUID,
+        appointmentTypeGUID: selectedSlot.appointmentTypeGUID,
+        action: 'book',
+      });
+      setBookingResult(result);
+      if (result.success) {
+        onRefresh();
+      }
+    } catch (err: any) {
+      setError(err.message || 'Booking failed');
+    } finally {
+      setBookingInProgress(false);
+    }
+  };
+
+  return (
+    <Card>
+      <div className="p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <Icons.AlertCircle />
+          <h3 className="text-base font-semibold text-gray-900 dark:text-white">Manual Booking</h3>
+          <span className="text-xs text-gray-500 dark:text-gray-400 ml-2">
+            No patient GUIDs found in trace - enter manually to book
+          </span>
+        </div>
+
+        <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-700 rounded-lg p-3 mb-4">
+          <p className="text-sm text-yellow-700 dark:text-yellow-300">
+            This call had tool errors before patient lookup could complete. If you know the patient's GUID, you can manually book an appointment.
+          </p>
+        </div>
+
+        <div className="space-y-4">
+          {/* Input fields */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Patient GUID <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                value={patientGUID}
+                onChange={(e) => setPatientGUID(e.target.value)}
+                placeholder="Enter patient GUID..."
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Child Name (optional)
+              </label>
+              <input
+                type="text"
+                value={childName}
+                onChange={(e) => setChildName(e.target.value)}
+                placeholder="For audit trail..."
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+              />
+            </div>
+          </div>
+
+          {/* Check slots button */}
+          <div>
+            <Button
+              onClick={handleCheckSlots}
+              disabled={loading || !patientGUID.trim()}
+              variant="primary"
+              size="sm"
+            >
+              {loading ? <Spinner size="sm" /> : 'Check Available Slots'}
+            </Button>
+          </div>
+
+          {/* Error message */}
+          {error && (
+            <div className="text-red-600 dark:text-red-400 text-sm bg-red-50 dark:bg-red-900/20 p-2 rounded">
+              {error}
+            </div>
+          )}
+
+          {/* Slot results */}
+          {checkResult?.alternatives && checkResult.alternatives.length > 0 && (
+            <div>
+              <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Available Slots ({checkResult.alternatives.length} found)
+              </p>
+              <div className="max-h-48 overflow-y-auto border border-gray-200 dark:border-gray-600 rounded-lg">
+                {checkResult.alternatives.map((slot: any, idx: number) => (
+                  <div
+                    key={idx}
+                    onClick={() => setSelectedSlot(slot)}
+                    className={`p-2 border-b border-gray-100 dark:border-gray-700 last:border-b-0 cursor-pointer hover:bg-blue-50 dark:hover:bg-blue-900/20 ${
+                      selectedSlot === slot ? 'bg-blue-100 dark:bg-blue-900/30' : ''
+                    }`}
+                  >
+                    <span className="text-sm font-medium text-gray-900 dark:text-white">
+                      {slot.startTime}
+                    </span>
+                    {slot.chairName && (
+                      <span className="text-xs text-gray-500 dark:text-gray-400 ml-2">
+                        ({slot.chairName})
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {checkResult?.alternatives?.length === 0 && (
+            <div className="text-gray-500 dark:text-gray-400 text-sm">
+              No available slots found for today. Try again later.
+            </div>
+          )}
+
+          {/* Book button */}
+          {selectedSlot && (
+            <div className="flex items-center gap-3 pt-2 border-t border-gray-200 dark:border-gray-600">
+              <span className="text-sm text-gray-600 dark:text-gray-400">
+                Selected: <strong>{selectedSlot.startTime}</strong>
+              </span>
+              <Button
+                onClick={handleBook}
+                disabled={bookingInProgress}
+                variant="success"
+                size="sm"
+              >
+                {bookingInProgress ? <Spinner size="sm" /> : 'Book Appointment'}
+              </Button>
+            </div>
+          )}
+
+          {/* Booking result */}
+          {bookingResult && (
+            <div className={`p-3 rounded-lg ${
+              bookingResult.success
+                ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300'
+                : 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300'
+            }`}>
+              <p className="text-sm font-medium">
+                {bookingResult.success ? '\u2713 Booking Successful' : '\u2717 Booking Failed'}
+              </p>
+              <p className="text-xs mt-1">{bookingResult.message}</p>
+              {bookingResult.appointmentGUID && (
+                <p className="text-xs mt-1">Appointment GUID: {bookingResult.appointmentGUID}</p>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </Card>
   );
@@ -1688,8 +2081,34 @@ export default function TraceAnalysisPage() {
             <div className="p-4">
               <h3 className="text-base font-semibold text-gray-900 dark:text-white mb-3">Intent Classification</h3>
               <IntentCard intent={result.intent} />
+
+              {/* Show intended booking slots from call report (what was actually agreed upon during the call) */}
+              {result.callReport?.bookingResults && result.callReport.bookingResults.length > 0 && (
+                <div className="mt-4 p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700">
+                  <div className="text-xs font-medium text-blue-600 dark:text-blue-400 uppercase tracking-wider mb-2">
+                    {'\u{1F4C5}'} Intended Booking{result.callReport.bookingResults.length > 1 ? 's' : ''} (Confirmed During Call)
+                  </div>
+                  <div className="space-y-1.5">
+                    {result.callReport.bookingResults.map((br, idx) => (
+                      <div key={idx} className="flex items-center gap-3 text-sm">
+                        <span className="font-medium text-gray-900 dark:text-white">{br.childName || 'Unknown'}</span>
+                        {br.slot ? (
+                          <span className="text-blue-700 dark:text-blue-300 font-medium">{br.slot}</span>
+                        ) : (
+                          <span className="text-gray-400 dark:text-gray-500 italic">No slot selected</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </Card>
+
+          {/* Intent vs Delivery Comparison (if we have comparison data with children or transfer) */}
+          {result.intentDeliveryComparison && (result.intentDeliveryComparison.children.length > 0 || result.intentDeliveryComparison.transfer) && (
+            <IntentDeliveryComparisonCard comparison={result.intentDeliveryComparison} />
+          )}
 
           {/* Verification (if present) */}
           {result.verification && <VerificationCard verification={result.verification} />}
@@ -1711,6 +2130,11 @@ export default function TraceAnalysisPage() {
               currentBookingData={result.currentBookingData}
               onRefresh={handleRefresh}
             />
+          )}
+
+          {/* Manual Booking (if no booking results - allows manual GUID entry) */}
+          {result.callReport && (!result.callReport.bookingResults || result.callReport.bookingResults.length === 0) && (
+            <ManualBookingCard sessionId={result.sessionId} onRefresh={handleRefresh} />
           )}
 
           {/* Tool Sequence */}

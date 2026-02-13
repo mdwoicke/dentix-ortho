@@ -96,6 +96,13 @@ export class LangfuseTraceService {
     } catch {
       // Column already exists, ignore
     }
+
+    // Ensure has_order column exists on production_sessions (for Dominos order tracking)
+    try {
+      this.db.exec(`ALTER TABLE production_sessions ADD COLUMN has_order INTEGER DEFAULT 0`);
+    } catch {
+      // Column already exists, ignore
+    }
   }
 
   /**
@@ -297,6 +304,9 @@ export class LangfuseTraceService {
 
         console.log(`[LangfuseTraceService] Received ${traces.length} traces on page ${page}`);
 
+        // Track affected users for incremental session rebuild
+        const affectedUserIds = new Set<string>();
+
         for (const trace of traces) {
           // Check if already imported
           const existing = this.db.prepare(`
@@ -310,6 +320,10 @@ export class LangfuseTraceService {
 
           // Use session_id if available, otherwise use trace_id as synthetic session
           const effectiveSessionId = trace.sessionId || trace.id;
+          const userId = trace.userId || 'unknown';
+
+          // Track this user for incremental rebuild
+          affectedUserIds.add(userId);
 
           // Insert trace
           this.db.prepare(`
@@ -361,6 +375,11 @@ export class LangfuseTraceService {
           tracesImported++;
         }
 
+        // Incremental session rebuild for affected users only (within this page)
+        if (affectedUserIds.size > 0) {
+          this.rebuildSessionsForUsers(configId, Array.from(affectedUserIds));
+        }
+
         // Check pagination - stop if we got less than limit or no meta info
         const totalPages = data.meta?.totalPages || 1;
         hasMore = traces.length === limit && page < totalPages;
@@ -381,6 +400,9 @@ export class LangfuseTraceService {
       `).run(tracesImported, tracesSkipped, importId);
 
       console.log(`[LangfuseTraceService] Import complete: ${tracesImported} imported, ${tracesSkipped} skipped`);
+
+      // Note: Sessions are now rebuilt incrementally per-page for affected users only
+      // This is much faster than rebuilding ALL sessions after each import
 
       return { importId, tracesImported, tracesSkipped, status: 'completed', effectiveFromDate };
     } catch (error: any) {
@@ -465,6 +487,10 @@ export class LangfuseTraceService {
 
   /**
    * Update cached error_count and has_successful_booking on a session row
+   *
+   * IMPORTANT: These patterns must be precise to avoid false positives:
+   * - Only check tool observations (not ChatPromptTemplate, RunnableAgent, etc.)
+   * - For transfers/bookings in LLM output, only check GENERATION type
    */
   private updateSessionCachedStats(sessionId: string, configId: number): void {
     this.db.prepare(`
@@ -481,26 +507,57 @@ export class LangfuseTraceService {
           JOIN production_traces pt ON pto.trace_id = pt.trace_id
           WHERE pt.session_id = ? AND pt.langfuse_config_id = ?
             AND (
-              pto.output LIKE '%Appointment GUID Added%'
+              -- Tool response: Cloud9 API confirmed booking
+              (pto.name = 'schedule_appointment_ortho' AND pto.output LIKE '%Appointment GUID Added%')
               OR (pto.name = 'schedule_appointment_ortho' AND (pto.output LIKE '%"booked":true%' OR pto.output LIKE '%"booked": true%'))
+              -- LLM output: Sibling booking confirmation in PAYLOAD (only check GENERATION, not prompts)
+              -- Must check for actual GUID value (quoted string), not null
+              -- Pattern: "Child1_appointmentGUID": "xxx" vs "Child1_appointmentGUID": null
+              OR (pto.type = 'GENERATION' AND pto.output LIKE '%"Child1_appointmentGUID": "%-%-%-%-%" %')
+              OR (pto.type = 'GENERATION' AND pto.output LIKE '%"Child2_appointmentGUID": "%-%-%-%-%" %')
             )
         ),
         has_transfer = (
           SELECT COUNT(*) > 0 FROM production_trace_observations pto
           JOIN production_traces pt ON pto.trace_id = pt.trace_id
           WHERE pt.session_id = ? AND pt.langfuse_config_id = ?
+            -- Only check LLM GENERATION outputs for actual disposition, not system prompt templates
+            AND pto.type = 'GENERATION'
             AND (
-              -- Check Call_Final_Disposition in the payload (most reliable)
+              -- Ortho: Check Call_Final_Disposition in the payload (most reliable)
               -- Note: Output contains escaped JSON so we match \"Transfer\" pattern
               pto.output LIKE '%\\"Call_Final_Disposition\\": \\"Transfer\\"%'
               OR pto.output LIKE '%\\"Call_Final_Disposition\\":\\"Transfer\\"%'
-              -- Also check caller_intent for backward compatibility
+              -- Ortho: Also check caller_intent for backward compatibility
               OR pto.output LIKE '%\\"caller_intent\\": \\"transfer\\"%'
               OR pto.output LIKE '%\\"caller_intent\\":\\"transfer\\"%'
+              -- Dominos: "ET": true in PAYLOAD means escalation transfer
+              -- BUT only if telephonyTransferCall is present (not telephonyDisconnectCall which is just a hangup)
+              OR (pto.output LIKE '%\\"ET\\": true%' AND pto.output LIKE '%telephonyTransferCall%')
+              OR (pto.output LIKE '%\\"ET\\":true%' AND pto.output LIKE '%telephonyTransferCall%')
+            )
+        ),
+        has_order = (
+          SELECT COUNT(*) > 0 FROM production_trace_observations pto
+          JOIN production_traces pt ON pto.trace_id = pt.trace_id
+          WHERE pt.session_id = ? AND pt.langfuse_config_id = ?
+            AND pto.type = 'GENERATION'
+            AND (
+              -- Dominos: \"orderConfirmed\": \"true\" in PAYLOAD (stored with literal backslash-quotes)
+              pto.output LIKE '%\\"orderConfirmed\\": \\"true\\"%'
+              OR pto.output LIKE '%\\"orderConfirmed\\":\\"true\\"%'
+              -- Dominos: Agent transcript phrases indicating order processing
+              OR LOWER(pto.output) LIKE '%while i process your order%'
+              OR LOWER(pto.output) LIKE '%while i place your order%'
+              OR LOWER(pto.output) LIKE '%placing your order%'
+              OR LOWER(pto.output) LIKE '%processing your order%'
+              OR LOWER(pto.output) LIKE '%order has been placed%'
+              OR LOWER(pto.output) LIKE '%order is confirmed%'
+              OR LOWER(pto.output) LIKE '%finalize your order%'
             )
         )
       WHERE session_id = ? AND langfuse_config_id = ?
-    `).run(sessionId, configId, sessionId, configId, sessionId, configId, sessionId, configId);
+    `).run(sessionId, configId, sessionId, configId, sessionId, configId, sessionId, configId, sessionId, configId);
   }
 
   /**
@@ -1129,13 +1186,20 @@ export class LangfuseTraceService {
          WHERE pt.session_id = ps.session_id
            AND pt.langfuse_config_id = ps.langfuse_config_id
            AND (
-             pto.output LIKE '%Appointment GUID Added%'
+             -- Tool response: Cloud9 API confirmed booking
+             (pto.name = 'schedule_appointment_ortho' AND pto.output LIKE '%Appointment GUID Added%')
              OR (pto.name = 'schedule_appointment_ortho' AND (pto.output LIKE '%"booked":true%' OR pto.output LIKE '%"booked": true%'))
+             -- LLM output: Sibling booking confirmation in PAYLOAD (only check GENERATION, not prompts)
+             -- Must check for actual GUID value (quoted string), not null
+             OR (pto.type = 'GENERATION' AND pto.output LIKE '%"Child1_appointmentGUID": "%-%-%-%-%" %')
+             OR (pto.type = 'GENERATION' AND pto.output LIKE '%"Child2_appointmentGUID": "%-%-%-%-%" %')
            )) as has_successful_booking,
         (SELECT COUNT(*) > 0 FROM production_trace_observations pto
          JOIN production_traces pt ON pto.trace_id = pt.trace_id
          WHERE pt.session_id = ps.session_id
            AND pt.langfuse_config_id = ps.langfuse_config_id
+           -- Only check LLM GENERATION outputs for actual disposition, not system prompt templates
+           AND pto.type = 'GENERATION'
            AND (
              -- Check Call_Final_Disposition in the payload (most reliable)
              -- Note: Output contains escaped JSON so we match \"Transfer\" pattern
@@ -1144,7 +1208,31 @@ export class LangfuseTraceService {
              -- Also check caller_intent for backward compatibility
              OR pto.output LIKE '%\\"caller_intent\\": \\"transfer\\"%'
              OR pto.output LIKE '%\\"caller_intent\\":\\"transfer\\"%'
-           )) as has_transfer
+             -- Dominos: "ET": true in PAYLOAD means escalation transfer
+             -- BUT only if telephonyTransferCall is present (not telephonyDisconnectCall which is just a hangup)
+             OR (pto.output LIKE '%\\"ET\\": true%' AND pto.output LIKE '%telephonyTransferCall%')
+             OR (pto.output LIKE '%\\"ET\\":true%' AND pto.output LIKE '%telephonyTransferCall%')
+           )) as has_transfer,
+        (SELECT COUNT(*) > 0 FROM production_trace_observations pto
+         JOIN production_traces pt ON pto.trace_id = pt.trace_id
+         WHERE pt.session_id = ps.session_id
+           AND pt.langfuse_config_id = ps.langfuse_config_id
+           AND pto.type = 'GENERATION'
+           AND (
+             -- Dominos: "orderConfirmed": "true" in PAYLOAD
+             pto.output LIKE '%\\"orderConfirmed\\": \\"true\\"%'
+             OR pto.output LIKE '%\\"orderConfirmed\\":\\"true\\"%'
+             OR pto.output LIKE '%"orderConfirmed": "true"%'
+             OR pto.output LIKE '%"orderConfirmed":"true"%'
+             -- Dominos: Agent transcript phrases indicating order processing
+             OR LOWER(pto.output) LIKE '%while i process your order%'
+             OR LOWER(pto.output) LIKE '%while i place your order%'
+             OR LOWER(pto.output) LIKE '%placing your order%'
+             OR LOWER(pto.output) LIKE '%processing your order%'
+             OR LOWER(pto.output) LIKE '%order has been placed%'
+             OR LOWER(pto.output) LIKE '%order is confirmed%'
+             OR LOWER(pto.output) LIKE '%finalize your order%'
+           )) as has_order
       FROM production_sessions ps
       JOIN langfuse_configs lc ON ps.langfuse_config_id = lc.id
       WHERE ps.session_id = ?
@@ -1284,9 +1372,18 @@ export class LangfuseTraceService {
       // Calculate aggregated values
       const totalCost = traces.reduce((sum, t) => sum + (t.total_cost || 0), 0);
       const totalLatency = traces.reduce((sum, t) => sum + (t.latency_ms || 0), 0);
-      const inputPreview = firstTrace.input
-        ? this.extractInputPreview(JSON.parse(firstTrace.input))
-        : null;
+
+      // Safely parse input for preview (handle malformed JSON gracefully)
+      let inputPreview: string | null = null;
+      if (firstTrace.input) {
+        try {
+          const parsed = JSON.parse(firstTrace.input);
+          inputPreview = this.extractInputPreview(parsed);
+        } catch (parseErr) {
+          // If JSON parsing fails, use raw input as preview (truncated)
+          inputPreview = firstTrace.input.slice(0, 200);
+        }
+      }
 
       // Create session record
       this.db.prepare(`
@@ -1325,6 +1422,124 @@ export class LangfuseTraceService {
     }
 
     console.log(`[LangfuseTraceService] Rebuilt sessions: ${sessionsCreated} conversations from ${tracesUpdated} traces`);
+
+    return { sessionsCreated, tracesUpdated };
+  }
+
+  /**
+   * Incrementally rebuild sessions for specific users only
+   * Much faster than full rebuild - only touches affected users' data
+   */
+  rebuildSessionsForUsers(configId: number, userIds: string[]): { sessionsCreated: number; tracesUpdated: number } {
+    if (userIds.length === 0) return { sessionsCreated: 0, tracesUpdated: 0 };
+
+    let sessionsCreated = 0;
+    let tracesUpdated = 0;
+
+    const SESSION_GAP_MS = 60 * 1000; // 60 seconds gap = new conversation
+    const MAX_CONVERSATION_MS = 5 * 60 * 1000; // 5 minutes max for anonymous
+
+    console.log(`[LangfuseTraceService] Incremental rebuild for ${userIds.length} users in config ${configId}`);
+
+    // Process each affected user
+    for (const userId of userIds) {
+      // Delete existing sessions for this user only
+      this.db.prepare(`
+        DELETE FROM production_sessions
+        WHERE langfuse_config_id = ? AND (user_id = ? OR (user_id IS NULL AND ? = 'unknown'))
+      `).run(configId, userId, userId);
+
+      // Get all traces for this user ordered by time
+      const userTraces = this.db.prepare(`
+        SELECT trace_id, session_id, langfuse_config_id, user_id, environment,
+               started_at, total_cost, latency_ms, input
+        FROM production_traces
+        WHERE langfuse_config_id = ? AND (user_id = ? OR (user_id IS NULL AND ? = 'unknown'))
+        ORDER BY started_at ASC
+      `).all(configId, userId, userId) as any[];
+
+      if (userTraces.length === 0) continue;
+
+      // Group into conversations
+      let currentConversationId: string | null = null;
+      let lastTraceTime: Date | null = null;
+      let conversationStartTime: Date | null = null;
+      const conversationGroups: Map<string, any[]> = new Map();
+
+      for (const trace of userTraces) {
+        const traceTime = new Date(trace.started_at);
+
+        const shouldStartNew =
+          !lastTraceTime ||
+          (traceTime.getTime() - lastTraceTime.getTime() > SESSION_GAP_MS) ||
+          (userId === 'unknown' && conversationStartTime &&
+           (traceTime.getTime() - conversationStartTime.getTime() > MAX_CONVERSATION_MS));
+
+        if (shouldStartNew) {
+          currentConversationId = `conv_${configId}_${userId}_${traceTime.getTime()}`;
+          conversationGroups.set(currentConversationId, []);
+          conversationStartTime = traceTime;
+        }
+
+        conversationGroups.get(currentConversationId!)!.push(trace);
+        lastTraceTime = traceTime;
+      }
+
+      // Create sessions and update traces
+      for (const [conversationId, traces] of conversationGroups) {
+        if (traces.length === 0) continue;
+
+        const firstTrace = traces[0];
+        const lastTrace = traces[traces.length - 1];
+        const totalCost = traces.reduce((sum, t) => sum + (t.total_cost || 0), 0);
+        const totalLatency = traces.reduce((sum, t) => sum + (t.latency_ms || 0), 0);
+
+        let inputPreview: string | null = null;
+        if (firstTrace.input) {
+          try {
+            const parsed = JSON.parse(firstTrace.input);
+            inputPreview = this.extractInputPreview(parsed);
+          } catch {
+            inputPreview = firstTrace.input.slice(0, 200);
+          }
+        }
+
+        // Create session
+        this.db.prepare(`
+          INSERT OR REPLACE INTO production_sessions (
+            session_id, langfuse_config_id, user_id, environment,
+            first_trace_at, last_trace_at, trace_count,
+            total_cost, total_latency_ms, input_preview
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          conversationId,
+          firstTrace.langfuse_config_id,
+          firstTrace.user_id,
+          firstTrace.environment,
+          firstTrace.started_at,
+          lastTrace.started_at,
+          traces.length,
+          totalCost,
+          totalLatency,
+          inputPreview
+        );
+
+        sessionsCreated++;
+
+        // Update traces to use new session_id
+        for (const trace of traces) {
+          this.db.prepare(`
+            UPDATE production_traces SET session_id = ? WHERE trace_id = ?
+          `).run(conversationId, trace.trace_id);
+          tracesUpdated++;
+        }
+
+        // Update cached stats for this session
+        this.updateSessionCachedStats(conversationId, configId);
+      }
+    }
+
+    console.log(`[LangfuseTraceService] Incremental rebuild: ${sessionsCreated} sessions, ${tracesUpdated} traces for ${userIds.length} users`);
 
     return { sessionsCreated, tracesUpdated };
   }

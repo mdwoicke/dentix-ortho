@@ -32,27 +32,29 @@ export interface Patient {
   estimated_completion_date?: string;
   months_in_status?: number;
   environment?: string;
+  tenant_id?: number;
   cached_at?: string;
   updated_at?: string;
 }
 
 export class PatientModel {
   /**
-   * Get all patients
+   * Get all patients for a tenant
    */
-  static getAll(limit: number = 100, offset: number = 0): Patient[] {
+  static getAll(tenantId: number, limit: number = 100, offset: number = 0): Patient[] {
     const db = getDatabase();
 
     try {
       const stmt = db.prepare(`
         SELECT * FROM patients
+        WHERE tenant_id = ?
         ORDER BY last_name ASC, first_name ASC
         LIMIT ? OFFSET ?
       `);
 
-      const patients = stmt.all(limit, offset) as Patient[];
+      const patients = stmt.all(tenantId, limit, offset) as Patient[];
 
-      loggers.dbOperation('SELECT', 'patients', { count: patients.length });
+      loggers.dbOperation('SELECT', 'patients', { tenantId, count: patients.length });
 
       return patients;
     } catch (error) {
@@ -65,20 +67,20 @@ export class PatientModel {
   }
 
   /**
-   * Get patient by GUID
+   * Get patient by GUID for a tenant
    */
-  static getByGuid(patientGuid: string): Patient | null {
+  static getByGuid(tenantId: number, patientGuid: string): Patient | null {
     const db = getDatabase();
 
     try {
       const stmt = db.prepare(`
         SELECT * FROM patients
-        WHERE patient_guid = ?
+        WHERE tenant_id = ? AND patient_guid = ?
       `);
 
-      const patient = stmt.get(patientGuid) as Patient | undefined;
+      const patient = stmt.get(tenantId, patientGuid) as Patient | undefined;
 
-      loggers.dbOperation('SELECT', 'patients', { patientGuid });
+      loggers.dbOperation('SELECT', 'patients', { tenantId, patientGuid });
 
       return patient || null;
     } catch (error) {
@@ -91,25 +93,27 @@ export class PatientModel {
   }
 
   /**
-   * Search patients by name
+   * Search patients by name for a tenant
    */
-  static searchByName(searchTerm: string, limit: number = 25): Patient[] {
+  static searchByName(tenantId: number, searchTerm: string, limit: number = 25): Patient[] {
     const db = getDatabase();
 
     try {
       const stmt = db.prepare(`
         SELECT * FROM patients
-        WHERE
+        WHERE tenant_id = ? AND (
           first_name LIKE ? OR
           last_name LIKE ? OR
           (first_name || ' ' || last_name) LIKE ? OR
           (last_name || ', ' || first_name) LIKE ?
+        )
         ORDER BY last_name ASC, first_name ASC
         LIMIT ?
       `);
 
       const searchPattern = `%${searchTerm}%`;
       const patients = stmt.all(
+        tenantId,
         searchPattern,
         searchPattern,
         searchPattern,
@@ -117,7 +121,7 @@ export class PatientModel {
         limit
       ) as Patient[];
 
-      loggers.dbOperation('SEARCH', 'patients', { searchTerm, count: patients.length });
+      loggers.dbOperation('SEARCH', 'patients', { tenantId, searchTerm, count: patients.length });
 
       return patients;
     } catch (error) {
@@ -130,22 +134,22 @@ export class PatientModel {
   }
 
   /**
-   * Create or update patient
+   * Create or update patient for a tenant
    */
-  static upsert(patient: Omit<Patient, 'cached_at' | 'updated_at'>): void {
+  static upsert(tenantId: number, patient: Omit<Patient, 'cached_at' | 'updated_at' | 'tenant_id'>): void {
     const db = getDatabase();
 
     try {
       const stmt = db.prepare(`
         INSERT INTO patients (
-          patient_guid, patient_id, first_name, middle_name, last_name, suffix,
+          tenant_id, patient_guid, patient_id, first_name, middle_name, last_name, suffix,
           birthdate, gender, email, phone, use_email, use_phone, use_text,
           address_street, address_city, address_state, address_postal_code,
           location_guid, provider_guid, orthodontist_name, patient_status_description,
           last_appointment_date, estimated_completion_date, months_in_status, environment
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(patient_guid) DO UPDATE SET
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(tenant_id, patient_guid) DO UPDATE SET
           patient_id = excluded.patient_id,
           first_name = excluded.first_name,
           middle_name = excluded.middle_name,
@@ -173,6 +177,7 @@ export class PatientModel {
       `);
 
       stmt.run(
+        tenantId,
         patient.patient_guid,
         patient.patient_id || null,
         patient.first_name,
@@ -200,7 +205,7 @@ export class PatientModel {
         patient.environment || 'sandbox'
       );
 
-      loggers.dbOperation('UPSERT', 'patients', { patientGuid: patient.patient_guid });
+      loggers.dbOperation('UPSERT', 'patients', { tenantId, patientGuid: patient.patient_guid });
     } catch (error) {
       throw new Error(
         `Error upserting patient: ${
@@ -211,9 +216,9 @@ export class PatientModel {
   }
 
   /**
-   * Get patients by phone number (for family member lookup)
+   * Get patients by phone number for family member lookup (tenant-scoped)
    */
-  static getByPhone(phone: string, environment: string = 'sandbox'): Patient[] {
+  static getByPhone(tenantId: number, phone: string, environment: string = 'sandbox'): Patient[] {
     const db = getDatabase();
 
     try {
@@ -227,7 +232,7 @@ export class PatientModel {
       // Search for patients with matching phone (also match partial phone endings)
       const stmt = db.prepare(`
         SELECT * FROM patients
-        WHERE environment = ?
+        WHERE tenant_id = ? AND environment = ?
         AND phone IS NOT NULL
         AND phone != ''
         AND (
@@ -237,9 +242,9 @@ export class PatientModel {
         ORDER BY last_name ASC, first_name ASC
       `);
 
-      const patients = stmt.all(environment, cleanPhone, cleanPhone) as Patient[];
+      const patients = stmt.all(tenantId, environment, cleanPhone, cleanPhone) as Patient[];
 
-      loggers.dbOperation('SELECT BY PHONE', 'patients', { phone: cleanPhone, count: patients.length });
+      loggers.dbOperation('SELECT BY PHONE', 'patients', { tenantId, phone: cleanPhone, count: patients.length });
 
       return patients;
     } catch (error) {
@@ -252,20 +257,20 @@ export class PatientModel {
   }
 
   /**
-   * Delete patient by GUID
+   * Delete patient by GUID for a tenant
    */
-  static deleteByGuid(patientGuid: string): void {
+  static deleteByGuid(tenantId: number, patientGuid: string): void {
     const db = getDatabase();
 
     try {
       const stmt = db.prepare(`
         DELETE FROM patients
-        WHERE patient_guid = ?
+        WHERE tenant_id = ? AND patient_guid = ?
       `);
 
-      stmt.run(patientGuid);
+      stmt.run(tenantId, patientGuid);
 
-      loggers.dbOperation('DELETE', 'patients', { patientGuid });
+      loggers.dbOperation('DELETE', 'patients', { tenantId, patientGuid });
     } catch (error) {
       throw new Error(
         `Error deleting patient: ${

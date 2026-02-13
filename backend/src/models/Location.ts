@@ -19,26 +19,28 @@ export interface Location {
   time_zone?: string;
   is_deleted?: boolean;
   environment?: string;
+  tenant_id?: number;
   cached_at?: string;
   updated_at?: string;
 }
 
 export class LocationModel {
   /**
-   * Get all locations
+   * Get all locations for a tenant
    */
-  static getAll(): Location[] {
+  static getAll(tenantId: number): Location[] {
     const db = getDatabase();
 
     try {
       const stmt = db.prepare(`
         SELECT * FROM locations
+        WHERE tenant_id = ?
         ORDER BY location_name ASC
       `);
 
-      const locations = stmt.all() as Location[];
+      const locations = stmt.all(tenantId) as Location[];
 
-      loggers.dbOperation('SELECT', 'locations', { count: locations.length });
+      loggers.dbOperation('SELECT', 'locations', { tenantId, count: locations.length });
 
       return locations;
     } catch (error) {
@@ -51,20 +53,20 @@ export class LocationModel {
   }
 
   /**
-   * Get location by GUID
+   * Get location by GUID for a tenant
    */
-  static getByGuid(locationGuid: string): Location | null {
+  static getByGuid(tenantId: number, locationGuid: string): Location | null {
     const db = getDatabase();
 
     try {
       const stmt = db.prepare(`
         SELECT * FROM locations
-        WHERE location_guid = ?
+        WHERE tenant_id = ? AND location_guid = ?
       `);
 
-      const location = stmt.get(locationGuid) as Location | undefined;
+      const location = stmt.get(tenantId, locationGuid) as Location | undefined;
 
-      loggers.dbOperation('SELECT', 'locations', { locationGuid });
+      loggers.dbOperation('SELECT', 'locations', { tenantId, locationGuid });
 
       return location || null;
     } catch (error) {
@@ -77,20 +79,20 @@ export class LocationModel {
   }
 
   /**
-   * Create or update location
+   * Create or update location for a tenant
    */
-  static upsert(location: Omit<Location, 'cached_at' | 'updated_at'>): void {
+  static upsert(tenantId: number, location: Omit<Location, 'cached_at' | 'updated_at' | 'tenant_id'>): void {
     const db = getDatabase();
 
     try {
       const stmt = db.prepare(`
         INSERT INTO locations (
-          location_guid, location_name, location_code, location_printed_name,
+          tenant_id, location_guid, location_name, location_code, location_printed_name,
           address_street, address_city, address_state, address_postal_code,
           phone, time_zone, is_deleted, environment
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(location_guid) DO UPDATE SET
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(tenant_id, location_guid) DO UPDATE SET
           location_name = excluded.location_name,
           location_code = excluded.location_code,
           location_printed_name = excluded.location_printed_name,
@@ -105,6 +107,7 @@ export class LocationModel {
       `);
 
       stmt.run(
+        tenantId,
         location.location_guid,
         location.location_name,
         location.location_code || null,
@@ -119,7 +122,7 @@ export class LocationModel {
         location.environment || 'sandbox'
       );
 
-      loggers.dbOperation('UPSERT', 'locations', { locationGuid: location.location_guid });
+      loggers.dbOperation('UPSERT', 'locations', { tenantId, locationGuid: location.location_guid });
     } catch (error) {
       throw new Error(
         `Error upserting location: ${
@@ -130,21 +133,21 @@ export class LocationModel {
   }
 
   /**
-   * Bulk upsert locations
+   * Bulk upsert locations for a tenant
    */
-  static bulkUpsert(locations: Omit<Location, 'cached_at' | 'updated_at'>[]): void {
+  static bulkUpsert(tenantId: number, locations: Omit<Location, 'cached_at' | 'updated_at' | 'tenant_id'>[]): void {
     const db = getDatabase();
 
     try {
       const insertMany = db.transaction((locs: typeof locations) => {
         for (const location of locs) {
-          LocationModel.upsert(location);
+          LocationModel.upsert(tenantId, location);
         }
       });
 
       insertMany(locations);
 
-      loggers.dbOperation('BULK_UPSERT', 'locations', { count: locations.length });
+      loggers.dbOperation('BULK_UPSERT', 'locations', { tenantId, count: locations.length });
     } catch (error) {
       throw new Error(
         `Error bulk upserting locations: ${
@@ -155,20 +158,20 @@ export class LocationModel {
   }
 
   /**
-   * Delete location by GUID
+   * Delete location by GUID for a tenant
    */
-  static deleteByGuid(locationGuid: string): void {
+  static deleteByGuid(tenantId: number, locationGuid: string): void {
     const db = getDatabase();
 
     try {
       const stmt = db.prepare(`
         DELETE FROM locations
-        WHERE location_guid = ?
+        WHERE tenant_id = ? AND location_guid = ?
       `);
 
-      stmt.run(locationGuid);
+      stmt.run(tenantId, locationGuid);
 
-      loggers.dbOperation('DELETE', 'locations', { locationGuid });
+      loggers.dbOperation('DELETE', 'locations', { tenantId, locationGuid });
     } catch (error) {
       throw new Error(
         `Error deleting location: ${
@@ -179,16 +182,16 @@ export class LocationModel {
   }
 
   /**
-   * Clear all locations
+   * Clear all locations for a tenant
    */
-  static deleteAll(): void {
+  static deleteAll(tenantId: number): void {
     const db = getDatabase();
 
     try {
-      const stmt = db.prepare(`DELETE FROM locations`);
-      stmt.run();
+      const stmt = db.prepare(`DELETE FROM locations WHERE tenant_id = ?`);
+      stmt.run(tenantId);
 
-      loggers.dbOperation('DELETE_ALL', 'locations');
+      loggers.dbOperation('DELETE_ALL', 'locations', { tenantId });
     } catch (error) {
       throw new Error(
         `Error deleting all locations: ${

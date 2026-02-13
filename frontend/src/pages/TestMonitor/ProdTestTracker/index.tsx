@@ -18,7 +18,7 @@ import {
   type StreamingCancellationSummary,
 } from '../../../services/api/testMonitorApi';
 import { CancellationProgressModal } from '../../../components/features/testMonitor';
-import { getLangfuseConfigs, type LangfuseConfigProfile as LangfuseConfigResponse } from '../../../services/api/appSettingsApi';
+import { getLangfuseConfigs, getAppSettings, type LangfuseConfigProfile as LangfuseConfigResponse } from '../../../services/api/appSettingsApi';
 import { Card, Button, Input, Select, Badge, Spinner, Modal } from '../../../components/ui';
 import { useToast } from '../../../hooks/useToast';
 import { ROUTES } from '../../../utils/constants';
@@ -29,6 +29,7 @@ export function ProdTestTrackerPage() {
   const [total, setTotal] = useState(0);
   const [stats, setStats] = useState<ProdTestRecordStats | null>(null);
   const [langfuseConfigs, setLangfuseConfigs] = useState<LangfuseConfigResponse[]>([]);
+  const [langfuseProjectId, setLangfuseProjectId] = useState<string | undefined>(undefined);
 
   // UI state
   const [loading, setLoading] = useState(true);
@@ -140,6 +141,31 @@ export function ProdTestTrackerPage() {
     loadData();
     loadConfigs();
   }, [loadData, loadConfigs]);
+
+  // Fetch Langfuse project ID from app settings (for URL linking)
+  useEffect(() => {
+    getAppSettings()
+      .then(settings => {
+        if (settings.langfuseProjectId?.value) {
+          setLangfuseProjectId(settings.langfuseProjectId.value);
+        }
+      })
+      .catch(err => console.warn('Failed to fetch app settings:', err));
+  }, []);
+
+  // Helper to get Langfuse session URL
+  const getLangfuseSessionUrl = useCallback((sessionId: string, configId: number | null | undefined): string | null => {
+    if (!sessionId || !langfuseProjectId) return null;
+    // Find the matching config to get the host
+    const config = langfuseConfigs.find(c => c.id === configId);
+    if (!config?.host) {
+      // Try to find default config
+      const defaultConfig = langfuseConfigs.find(c => c.isDefault);
+      if (!defaultConfig?.host) return null;
+      return `${defaultConfig.host}/project/${langfuseProjectId}/sessions/${sessionId}`;
+    }
+    return `${config.host}/project/${langfuseProjectId}/sessions/${sessionId}`;
+  }, [langfuseConfigs, langfuseProjectId]);
 
   // Handle import (from modal)
   const handleImport = async () => {
@@ -345,6 +371,14 @@ export function ProdTestTrackerPage() {
 
     const families = new Map<string, FamilyGroup>();
 
+    // Helper to parse date string to timestamp (handles mixed formats)
+    const parseTimestamp = (dateStr: string | null | undefined): number => {
+      if (!dateStr) return 0;
+      const normalized = dateStr.includes('Z') || dateStr.includes('+') ? dateStr : dateStr + 'Z';
+      const ts = new Date(normalized).getTime();
+      return isNaN(ts) ? 0 : ts;
+    };
+
     // Helper to get family key
     // v72: Prefer family_id when available for accurate grouping
     // Fallback to last name, then patient_guid for ungroupable records
@@ -401,7 +435,9 @@ export function ProdTestTrackerPage() {
         family.parent = record;
         family.totalPatients++;
         const patientDate = record.cloud9_created_at || record.created_at;
-        if (!family.parentCreatedAt || patientDate < family.parentCreatedAt) {
+        const patientTs = parseTimestamp(patientDate);
+        const parentTs = parseTimestamp(family.parentCreatedAt);
+        if (!family.parentCreatedAt || patientTs < parentTs) {
           family.parentCreatedAt = patientDate;
         }
         // Track parent's GUID
@@ -493,7 +529,9 @@ export function ProdTestTrackerPage() {
             child.patientRecord = record;
             family.totalPatients++;
             const patientDate = record.cloud9_created_at || record.created_at;
-            if (!family.parentCreatedAt || patientDate < family.parentCreatedAt) {
+            const patientTs = parseTimestamp(patientDate);
+            const parentTs = parseTimestamp(family.parentCreatedAt);
+            if (!family.parentCreatedAt || patientTs < parentTs) {
               family.parentCreatedAt = patientDate;
             }
           }
@@ -503,30 +541,21 @@ export function ProdTestTrackerPage() {
         }
       }
 
-      // Track latest cloud9_created_at for sorting
+      // Track latest cloud9_created_at for sorting (using numeric comparison for mixed date formats)
       const recordDate = record.cloud9_created_at || record.created_at;
-      if (recordDate > family.latestCreatedAt) {
+      const recordTs = parseTimestamp(recordDate);
+      const latestTs = parseTimestamp(family.latestCreatedAt);
+      if (recordTs > latestTs) {
         family.latestCreatedAt = recordDate;
       }
     }
 
-    // Convert to array and sort families
+    // Convert to array and sort families by latestCreatedAt (most recent Langfuse trace time)
     const sortedFamilies = Array.from(families.values()).sort((a, b) => {
-      let dateA: string;
-      let dateB: string;
-
-      if (sortBy === 'cloud9_created_at') {
-        // Use parent record's created date (earliest patient), fall back to latestCreatedAt
-        dateA = a.parentCreatedAt || a.latestCreatedAt;
-        dateB = b.parentCreatedAt || b.latestCreatedAt;
-      } else {
-        // For other sort fields, use latestCreatedAt as default
-        dateA = a.latestCreatedAt;
-        dateB = b.latestCreatedAt;
-      }
-
-      const comparison = dateB.localeCompare(dateA);
-      return sortOrder === 'desc' ? comparison : -comparison;
+      const timeA = parseTimestamp(a.latestCreatedAt);
+      const timeB = parseTimestamp(b.latestCreatedAt);
+      // desc = newest first (higher timestamp first)
+      return sortOrder === 'desc' ? timeB - timeA : timeA - timeB;
     });
 
     // Sort children and appointments within each family
@@ -536,10 +565,10 @@ export function ProdTestTrackerPage() {
       // Sort appointments within each child (newest first by cloud9_created_at)
       for (const child of family.children) {
         child.appointments.sort((a, b) => {
-          const dateA = a.cloud9_created_at || a.created_at;
-          const dateB = b.cloud9_created_at || b.created_at;
-          const comparison = dateB.localeCompare(dateA);
-          return sortOrder === 'desc' ? comparison : -comparison;
+          const timeA = parseTimestamp(a.cloud9_created_at || a.created_at);
+          const timeB = parseTimestamp(b.cloud9_created_at || b.created_at);
+          // desc = newest first (higher timestamp first)
+          return sortOrder === 'desc' ? timeB - timeA : timeA - timeB;
         });
       }
     }
@@ -908,11 +937,14 @@ export function ProdTestTrackerPage() {
                     const childCount = family.children.filter(c => c.isChild).length;
                     const hasParent = !!family.parent;
 
-                    // Find session_id from any record in the family (parent, child patient, or appointment)
-                    const familySessionId = family.parent?.session_id
-                      || family.children.find(c => c.patientRecord?.session_id)?.patientRecord?.session_id
-                      || family.children.flatMap(c => c.appointments).find(a => a.session_id)?.session_id
-                      || null;
+                    // Find session_id and langfuse_config_id from any record in the family
+                    const familySessionRecord = family.parent?.session_id ? family.parent
+                      : family.children.find(c => c.patientRecord?.session_id)?.patientRecord
+                      ?? family.children.flatMap(c => c.appointments).find(a => a.session_id)
+                      ?? null;
+                    const familySessionId = familySessionRecord?.session_id || null;
+                    const familyLangfuseConfigId = familySessionRecord?.langfuse_config_id || null;
+                    const familySessionUrl = familySessionId ? getLangfuseSessionUrl(familySessionId, familyLangfuseConfigId) : null;
 
                     return (
                       <React.Fragment key={family.familyKey}>
@@ -953,18 +985,64 @@ export function ProdTestTrackerPage() {
                               </span>
                               {/* Langfuse Session ID on Family Header */}
                               {familySessionId && (
+                                <>
+                                <span className="text-gray-400 mx-3">|</span>
                                 <div className="flex items-center gap-1 px-2 py-0.5 bg-orange-100 dark:bg-orange-900/30 rounded text-xs" onClick={(e) => e.stopPropagation()}>
                                   <svg className="w-3 h-3 text-orange-600 dark:text-orange-400" viewBox="0 0 24 24" fill="currentColor">
                                     <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
                                   </svg>
-                                  <span className="font-mono text-orange-700 dark:text-orange-300 max-w-[180px] truncate" title={familySessionId}>
-                                    {familySessionId}
-                                  </span>
+                                  {familySessionUrl ? (
+                                    <a
+                                      href={familySessionUrl}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="font-mono text-orange-700 dark:text-orange-300 hover:text-orange-900 dark:hover:text-orange-100 hover:underline max-w-[180px] truncate"
+                                      title={`View session in Langfuse: ${familySessionId}`}
+                                      onClick={(e) => e.stopPropagation()}
+                                    >
+                                      {familySessionId}
+                                    </a>
+                                  ) : (
+                                    <span className="font-mono text-orange-700 dark:text-orange-300 max-w-[180px] truncate" title={familySessionId}>
+                                      {familySessionId}
+                                    </span>
+                                  )}
                                   <button
-                                    onClick={(e) => {
+                                    onClick={async (e) => {
                                       e.stopPropagation();
-                                      navigator.clipboard.writeText(familySessionId);
-                                      toast.showSuccess('Session ID copied!');
+                                      e.preventDefault();
+                                      try {
+                                        if (navigator.clipboard && navigator.clipboard.writeText) {
+                                          await navigator.clipboard.writeText(familySessionId);
+                                        } else {
+                                          // Fallback for older browsers
+                                          const textArea = document.createElement('textarea');
+                                          textArea.value = familySessionId;
+                                          textArea.style.position = 'fixed';
+                                          textArea.style.left = '-9999px';
+                                          document.body.appendChild(textArea);
+                                          textArea.select();
+                                          document.execCommand('copy');
+                                          document.body.removeChild(textArea);
+                                        }
+                                        toast.showSuccess('Session ID copied!');
+                                      } catch (err) {
+                                        console.error('Copy failed:', err);
+                                        // Try fallback on error
+                                        try {
+                                          const textArea = document.createElement('textarea');
+                                          textArea.value = familySessionId;
+                                          textArea.style.position = 'fixed';
+                                          textArea.style.left = '-9999px';
+                                          document.body.appendChild(textArea);
+                                          textArea.select();
+                                          document.execCommand('copy');
+                                          document.body.removeChild(textArea);
+                                          toast.showSuccess('Session ID copied!');
+                                        } catch (fallbackErr) {
+                                          toast.showError('Failed to copy to clipboard');
+                                        }
+                                      }
                                     }}
                                     className="p-0.5 hover:bg-orange-200 dark:hover:bg-orange-800 rounded transition-colors"
                                     title="Copy session ID"
@@ -974,6 +1052,7 @@ export function ProdTestTrackerPage() {
                                     </svg>
                                   </button>
                                 </div>
+                                </>
                               )}
                             </div>
                             {family.familyId && (
@@ -1163,9 +1242,12 @@ export function ProdTestTrackerPage() {
                                   <div className="flex items-center gap-2">
                                     <Badge variant="warning">Appt</Badge>
                                     {childName && (
-                                      <span className="text-sm font-medium text-purple-600 dark:text-purple-400">
-                                        {childName}
-                                      </span>
+                                      <>
+                                        <span className="text-sm font-medium text-purple-600 dark:text-purple-400">
+                                          {childName}
+                                        </span>
+                                        <span className="text-gray-400">|</span>
+                                      </>
                                     )}
                                     <span className="text-sm text-gray-900 dark:text-gray-100">
                                       {appt.appointment_datetime

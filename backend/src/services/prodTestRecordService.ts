@@ -11,6 +11,7 @@
 import BetterSqlite3 from 'better-sqlite3';
 import { EventEmitter } from 'events';
 import { Cloud9Client } from './cloud9/client';
+import { Cloud9Config } from '../config/cloud9';
 
 // Rate limit buffer between Cloud9 API calls (5 seconds)
 export const CANCELLATION_DELAY_MS = 5000;
@@ -140,10 +141,10 @@ export class ProdTestRecordService {
   private db: BetterSqlite3.Database;
   private cloud9Client: Cloud9Client;
 
-  constructor(db: BetterSqlite3.Database) {
+  constructor(db: BetterSqlite3.Database, cloud9ConfigOverride?: Cloud9Config) {
     this.db = db;
     // Use production environment for Cloud9 client since we're tracking prod data
-    this.cloud9Client = new Cloud9Client('production');
+    this.cloud9Client = new Cloud9Client('production', cloud9ConfigOverride);
   }
 
   // ============================================================================
@@ -184,11 +185,11 @@ export class ProdTestRecordService {
         WHERE pt.langfuse_config_id = ?
           AND pt.started_at >= ?
           AND (
-            -- SetPatient success responses (matches "Patient Added:" or "Patient GUID Added:")
-            (pto.name = 'chord_ortho_patient' AND (pto.output LIKE '%Patient Added:%' OR pto.output LIKE '%Patient GUID Added%'))
+            -- SetPatient success responses (matches "Patient Added:" or "Patient GUID Added:" or JSON patientGUID)
+            (pto.name = 'chord_ortho_patient' AND (pto.output LIKE '%Patient Added:%' OR pto.output LIKE '%Patient GUID Added%' OR pto.output LIKE '%"patientGUID"%'))
             OR
-            -- SetAppointment success responses
-            (pto.name = 'schedule_appointment_ortho' AND pto.output LIKE '%Appointment GUID Added%')
+            -- SetAppointment success responses (old text format or new JSON format)
+            (pto.name = 'schedule_appointment_ortho' AND (pto.output LIKE '%Appointment GUID Added%' OR pto.output LIKE '%"appointmentGUID"%'))
           )
       `;
 
@@ -239,7 +240,7 @@ export class ProdTestRecordService {
           } else if (obs.name === 'schedule_appointment_ortho' && output) {
             const appointmentGuid = this.extractAppointmentGuid(output);
             if (appointmentGuid) {
-              const imported = await this.importAppointmentRecord(obs, input, appointmentGuid);
+              const imported = await this.importAppointmentRecord(obs, input, appointmentGuid, output);
               if (imported) {
                 result.appointmentsFound++;
                 existingObservationIds.add(obs.observation_id); // Add to set for subsequent checks
@@ -273,6 +274,20 @@ export class ProdTestRecordService {
       return output.patientGUID;
     }
 
+    // New format: parent.patientGUID
+    if (typeof output === 'object' && output.parent?.patientGUID) {
+      return output.parent.patientGUID;
+    }
+
+    // New format: children[].patientGUID (return first one found)
+    if (typeof output === 'object' && output.children && Array.isArray(output.children)) {
+      for (const child of output.children) {
+        if (child.patientGUID) {
+          return child.patientGUID;
+        }
+      }
+    }
+
     const outputStr = typeof output === 'string' ? output : JSON.stringify(output);
 
     // Pattern: "Patient Added: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
@@ -283,12 +298,16 @@ export class ProdTestRecordService {
     const guidAddedMatch = outputStr.match(/Patient GUID Added:\s*([a-f0-9-]{36})/i);
     if (guidAddedMatch) return guidAddedMatch[1];
 
+    // Fallback: extract from JSON string with regex
+    const jsonMatch = outputStr.match(/"patientGUID"\s*:\s*"([a-f0-9-]{36})"/i);
+    if (jsonMatch) return jsonMatch[1];
+
     return null;
   }
 
   /**
    * Extract Appointment GUID from SetAppointment response
-   * Pattern: "Appointment GUID Added: {guid}" or similar
+   * Pattern: "Appointment GUID Added: {guid}" or similar, or JSON formats
    */
   private extractAppointmentGuid(output: any): string | null {
     const outputStr = typeof output === 'string' ? output : JSON.stringify(output);
@@ -297,10 +316,23 @@ export class ProdTestRecordService {
     const match = outputStr.match(/Appointment GUID Added:\s*([a-f0-9-]{36})/i);
     if (match) return match[1];
 
-    // Alternative pattern: appointmentGUID in JSON response
+    // Alternative pattern: appointmentGUID in JSON response (top level)
     if (typeof output === 'object' && output.appointmentGUID) {
       return output.appointmentGUID;
     }
+
+    // New format: nested in children[].appointment.appointmentGUID
+    if (typeof output === 'object' && output.children && Array.isArray(output.children)) {
+      for (const child of output.children) {
+        if (child.appointment?.appointmentGUID) {
+          return child.appointment.appointmentGUID;
+        }
+      }
+    }
+
+    // Fallback: extract from JSON string with regex
+    const jsonMatch = outputStr.match(/"appointmentGUID"\s*:\s*"([a-f0-9-]{36})"/i);
+    if (jsonMatch) return jsonMatch[1];
 
     return null;
   }
@@ -445,8 +477,9 @@ export class ProdTestRecordService {
   /**
    * Import an appointment record from observation data
    * Looks up patient info from existing records or Cloud9 API if not in input
+   * For new JSON format (v71+), patient/appointment data is in output.children[]
    */
-  private async importAppointmentRecord(obs: any, input: any, appointmentGuid: string): Promise<boolean> {
+  private async importAppointmentRecord(obs: any, input: any, appointmentGuid: string, output?: any): Promise<boolean> {
     // Check for duplicate
     const existing = this.db.prepare(`
       SELECT id FROM prod_test_records WHERE appointment_guid = ? AND record_type = 'appointment'
@@ -457,13 +490,59 @@ export class ProdTestRecordService {
       return false;
     }
 
-    // Extract appointment info from input
+    // Extract appointment info from input (old format) or output (new JSON format)
     const apptData = input || {};
-    const patientGuid = apptData.PatientGUID || apptData.patientGUID || '';
+
+    // Try to get patient GUID from output.children[] (new format) first
+    let patientGuid = apptData.PatientGUID || apptData.patientGUID || '';
+    let childInfo: any = null;
+
+    // New JSON format: Find the child with matching appointmentGUID
+    if (output?.children && Array.isArray(output.children)) {
+      childInfo = output.children.find((c: any) => c.appointment?.appointmentGUID === appointmentGuid);
+      if (childInfo) {
+        patientGuid = childInfo.patientGUID || patientGuid;
+        console.log(`[ProdTestRecordService] Found child info from output: ${childInfo.firstName || 'Unknown'} (${patientGuid})`);
+      }
+    }
 
     // Try to get patient name from multiple sources
-    let patientFirstName = apptData.patientFirstName || null;
-    let patientLastName = apptData.patientLastName || null;
+    // Priority: childInfo (from output) > parsed input children > parent lastName > apptData > existing records > Cloud9 API
+    let patientFirstName = childInfo?.firstName || apptData.patientFirstName || null;
+    let patientLastName = childInfo?.lastName || apptData.patientLastName || null;
+
+    // If no lastName from output, try to get it from the input's children JSON string
+    // The input has children as a JSON string like: "[{\"firstName\":\"Kalli\",\"lastName\":\"Test\",...}]"
+    if (!patientLastName && apptData.children && typeof apptData.children === 'string') {
+      try {
+        const parsedChildren = JSON.parse(apptData.children);
+        if (Array.isArray(parsedChildren) && parsedChildren.length > 0) {
+          // Find the child that matches the firstName or just use the first one's lastName
+          const matchingChild = parsedChildren.find((c: any) =>
+            c.firstName?.toLowerCase() === (childInfo?.firstName || patientFirstName || '').toLowerCase()
+          );
+          const childFromInput = matchingChild || parsedChildren[0];
+          if (childFromInput?.lastName) {
+            patientLastName = childFromInput.lastName;
+            console.log(`[ProdTestRecordService] Got lastName from input children: ${patientLastName}`);
+          }
+        }
+      } catch (e) {
+        // Ignore parsing errors
+      }
+    }
+
+    // If still no lastName, use parent's lastName (same family)
+    if (!patientLastName && output?.parent?.lastName) {
+      patientLastName = output.parent.lastName;
+      console.log(`[ProdTestRecordService] Got lastName from parent: ${patientLastName}`);
+    }
+
+    // Also extract family and parent info from output for the new format
+    let familyId = output?.familyId || apptData.familyId || apptData.family_id || null;
+    let parentPatientGuid = output?.parent?.patientGUID || apptData.parentPatientGuid || apptData.parent_patient_guid || null;
+    let isChild = childInfo ? true : (apptData.isChild || apptData.is_child || false);
+    let appointmentStartTime = childInfo?.appointment?.startTime || apptData.StartTime || apptData.startTime || null;
 
     // If patient name not in input, try to get from existing records
     if (!patientFirstName && !patientLastName && patientGuid) {
@@ -487,8 +566,18 @@ export class ProdTestRecordService {
         const cloud9Response = await this.cloud9Client.getPatientInformation(patientGuid);
         if (cloud9Response.status === 'Success' && cloud9Response.records.length > 0) {
           const patientInfo = cloud9Response.records[0];
+          // Try separate name fields first
           patientFirstName = patientInfo.FirstName || patientInfo.persFirstName || null;
           patientLastName = patientInfo.LastName || patientInfo.persLastName || null;
+
+          // If no separate names but we have PatientFullName, split it
+          // Cloud9 GetPatientInformation returns PatientFullName as combined "FirstName LastName"
+          if (!patientFirstName && !patientLastName && patientInfo.PatientFullName) {
+            const fullName = (patientInfo.PatientFullName || '').trim();
+            const parts = fullName.split(' ');
+            patientFirstName = parts[0] || null;
+            patientLastName = parts.slice(1).join(' ') || null;
+          }
           console.log(`[ProdTestRecordService] Got patient name from Cloud9: ${patientFirstName} ${patientLastName}`);
         }
       } catch (err: any) {
@@ -544,7 +633,7 @@ export class ProdTestRecordService {
       appointmentGuid,
       patientFirstName,
       patientLastName,
-      apptData.StartTime || apptData.startTime || null,
+      appointmentStartTime,
       apptData.appointmentType || null,
       apptData.AppointmentTypeGUID || apptData.appointmentTypeGUID || null,
       apptData.Minutes || apptData.minutes || null,
@@ -561,13 +650,13 @@ export class ProdTestRecordService {
       'active',
       obs.started_at,
       appointmentNote,
-      // v72 Individual Patient Model fields
-      apptData.familyId || apptData.family_id || null,
-      apptData.isChild || apptData.is_child ? 1 : 0,
-      apptData.parentPatientGuid || apptData.parent_patient_guid || null
+      // v72 Individual Patient Model fields - use extracted values from output when available
+      familyId,
+      isChild ? 1 : 0,
+      parentPatientGuid
     );
 
-    console.log(`[ProdTestRecordService] Imported appointment: ${appointmentGuid} (patient: ${patientFirstName || 'Unknown'} ${patientLastName || ''}, isChild: ${apptData.isChild || false})${appointmentNote ? ' with note' : ''}`);
+    console.log(`[ProdTestRecordService] Imported appointment: ${appointmentGuid} (patient: ${patientFirstName || 'Unknown'} ${patientLastName || ''}, isChild: ${isChild})${appointmentNote ? ' with note' : ''}`);
     return true;
   }
 
@@ -846,7 +935,7 @@ export class ProdTestRecordService {
             }
           } else {
             // Import new record
-            const imported = await this.importAppointmentRecord(obs, input, appointmentGuid);
+            const imported = await this.importAppointmentRecord(obs, input, appointmentGuid, output);
             if (imported) {
               result.appointmentsImported++;
               console.log(`[ProdTestRecordService] Imported appointment ${appointmentGuid}`);
@@ -1886,7 +1975,7 @@ export class ProdTestRecordService {
           else if (obs.name === 'schedule_appointment_ortho' && output) {
             const appointmentGuid = this.extractAppointmentGuid(output);
             if (appointmentGuid) {
-              const imported = await this.importAppointmentRecord(obs, input, appointmentGuid);
+              const imported = await this.importAppointmentRecord(obs, input, appointmentGuid, output);
               if (imported) {
                 result.appointmentsFound++;
                 existingObservationIds.add(obs.observation_id);

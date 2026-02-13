@@ -2262,6 +2262,38 @@ export interface CurrentBookingData {
   errors: string[];
 }
 
+// ============================================================================
+// INTENT VS DELIVERY COMPARISON TYPES
+// ============================================================================
+
+export interface ChildComparison {
+  childName: string;
+  requested: {
+    name: string;
+    date: string | null;
+  };
+  delivered: {
+    appointmentBooked: boolean;
+    appointmentGUID: string | null;
+    actualSlot: string | null;
+    error: string | null;
+  };
+  status: 'match' | 'date_mismatch' | 'failed' | 'queued' | 'not_attempted';
+  discrepancy: string | null;
+}
+
+export interface TransferComparison {
+  requested: boolean;
+  delivered: boolean;
+  status: 'match' | 'mismatch';
+}
+
+export interface IntentDeliveryComparison {
+  children: ChildComparison[];
+  transfer: TransferComparison | null;
+  overallStatus: 'match' | 'partial' | 'mismatch' | 'pending';
+}
+
 export interface TraceAnalysisResponse {
   sessionId: string;
   traces: TraceAnalysisTrace[];
@@ -2271,6 +2303,7 @@ export interface TraceAnalysisResponse {
   verification?: TraceAnalysisVerification | null;
   callReport?: CallReport | null;
   currentBookingData?: CurrentBookingData | null;
+  intentDeliveryComparison?: IntentDeliveryComparison | null;
   analyzedAt: string;
   cached: boolean;
 }

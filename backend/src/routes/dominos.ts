@@ -29,6 +29,9 @@ router.get('/metrics', dominos.getMetrics);
 // Orders
 router.post('/orders/submit', dominos.submitOrder);
 
+// Store info
+router.get('/store/:storeId/info', dominos.getStoreInfo);
+
 // Menu
 router.get('/menu/:storeId', dominos.getStoreMenu);
 

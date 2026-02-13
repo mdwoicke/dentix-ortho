@@ -96,3 +96,14 @@ export function getDefaultEnvironment(): Environment {
 export function isCachingEnabled(): boolean {
   return process.env.ENABLE_CACHING === 'true';
 }
+
+/**
+ * Get Cloud9 config from a TenantContext for a given environment.
+ * Import TenantContext from middleware/tenantContext to avoid circular deps.
+ */
+export function getCloud9ConfigFromTenant(
+  tenantCloud9: { production: Cloud9Config; sandbox: Cloud9Config },
+  environment: Environment
+): Cloud9Config {
+  return environment === 'production' ? tenantCloud9.production : tenantCloud9.sandbox;
+}
