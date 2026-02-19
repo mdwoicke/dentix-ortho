@@ -7,6 +7,8 @@
 
 import React from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { useNavigate } from 'react-router-dom';
 import type { ChatMessage as ChatMessageType } from '../../../hooks/useApiAgentChat';
 
 interface ChatMessageProps {
@@ -22,6 +24,7 @@ function formatTime(date: Date): string {
 
 const ChatMessageComponent: React.FC<ChatMessageProps> = ({ message }) => {
   const isUser = message.role === 'user';
+  const navigate = useNavigate();
 
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
@@ -42,6 +45,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({ message }) => {
           ) : (
             <div className="api-agent-markdown">
               <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
                 components={{
                   // Headings
                   h1: ({ children }) => (
@@ -82,36 +86,56 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({ message }) => {
                   pre: ({ children }) => <div className="my-1">{children}</div>,
                   // Tables
                   table: ({ children }) => (
-                    <div className="overflow-x-auto my-2">
+                    <div className="overflow-x-auto my-2 rounded-lg border border-gray-200 dark:border-gray-600">
                       <table className="min-w-full text-xs border-collapse">{children}</table>
                     </div>
                   ),
                   thead: ({ children }) => (
-                    <thead className="bg-gray-200 dark:bg-gray-700">{children}</thead>
+                    <thead className="bg-gray-200/80 dark:bg-gray-700/80">{children}</thead>
+                  ),
+                  tbody: ({ children }) => (
+                    <tbody className="divide-y divide-gray-200 dark:divide-gray-600">{children}</tbody>
+                  ),
+                  tr: ({ children }) => (
+                    <tr className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">{children}</tr>
                   ),
                   th: ({ children }) => (
-                    <th className="px-2 py-1 text-left font-semibold border border-gray-300 dark:border-gray-600">
+                    <th className="px-3 py-1.5 text-left font-semibold text-gray-700 dark:text-gray-300 text-[11px] uppercase tracking-wider">
                       {children}
                     </th>
                   ),
                   td: ({ children }) => (
-                    <td className="px-2 py-1 border border-gray-300 dark:border-gray-600">
+                    <td className="px-3 py-1.5 text-gray-800 dark:text-gray-200">
                       {children}
                     </td>
                   ),
                   // Horizontal rule
                   hr: () => <hr className="my-2 border-gray-300 dark:border-gray-600" />,
                   // Links
-                  a: ({ href, children }) => (
-                    <a
-                      href={href}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-indigo-600 dark:text-indigo-400 underline hover:text-indigo-800 dark:hover:text-indigo-300"
-                    >
-                      {children}
-                    </a>
-                  ),
+                  a: ({ href, children }) => {
+                    const isInternal = href?.startsWith('/');
+                    if (isInternal) {
+                      return (
+                        <a
+                          href={href}
+                          onClick={(e) => { e.preventDefault(); navigate(href!); }}
+                          className="text-indigo-600 dark:text-indigo-400 underline hover:text-indigo-800 dark:hover:text-indigo-300"
+                        >
+                          {children}
+                        </a>
+                      );
+                    }
+                    return (
+                      <a
+                        href={href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-indigo-600 dark:text-indigo-400 underline hover:text-indigo-800 dark:hover:text-indigo-300"
+                      >
+                        {children}
+                      </a>
+                    );
+                  },
                 }}
               >
                 {message.content}

@@ -55,7 +55,8 @@ async function execute(query: string): Promise<SkillResult> {
       const dob = p.birthdate || '-';
       const phone = p.phone || '-';
       const email = p.email || '-';
-      lines.push(`| ${name} | ${id} | ${dob} | ${phone} | ${email} |`);
+      const nameCell = p.patient_guid ? `[${name}](/patients/${p.patient_guid})` : name;
+      lines.push(`| ${nameCell} | ${id} | ${dob} | ${phone} | ${email} |`);
     }
 
     return { success: true, markdown: lines.join('\n'), data: patients };

@@ -5,6 +5,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   getProductionSessions,
   getProductionSession,
@@ -610,6 +611,8 @@ function ConversationDetailModal({
 // ============================================================================
 
 export default function DominosCallTracing() {
+  const [searchParams, setSearchParams] = useSearchParams();
+
   // Config state
   const [configs, setConfigs] = useState<LangfuseConfigProfile[]>([]);
   const [selectedConfigId, setSelectedConfigId] = useState<number | null>(null);
@@ -719,6 +722,15 @@ export default function DominosCallTracing() {
   const openSession = (sessionId: string) => {
     setSelectedSessionId(sessionId);
   };
+
+  // Deep link: open session from ?sessionId= URL param
+  useEffect(() => {
+    const sessionIdParam = searchParams.get('sessionId');
+    if (sessionIdParam) {
+      openSession(sessionIdParam);
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
 
   // Search by session ID
   const handleSearch = () => {
