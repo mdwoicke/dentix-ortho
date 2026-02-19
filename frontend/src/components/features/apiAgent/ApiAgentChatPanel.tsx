@@ -4,12 +4,13 @@
  * Slides in from the right side of the screen with a backdrop overlay.
  */
 
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { useAppSelector } from '../../../store/hooks';
 import { selectCurrentTenant } from '../../../store/slices/tenantSlice';
 import { useApiAgentChat } from '../../../hooks/useApiAgentChat';
 import type { ApiSource } from '../../../hooks/useApiAgentChat';
 import ChatMessage from './ChatMessage';
+import { matchSkill } from '../../../skills/cloud9';
 
 interface ApiAgentChatPanelProps {
   isOpen: boolean;
@@ -22,9 +23,9 @@ type TenantKind = 'ortho' | 'dominos';
 const SUGGESTED_QUERIES: Record<ApiSource, Record<TenantKind, string[]>> = {
   cloud9: {
     ortho: [
+      'Find patient Canales',
       'Show all locations',
-      'List available appointment types',
-      'Find patients with last name Smith',
+      'List appointment types',
       'Show providers list',
     ],
     dominos: [
@@ -36,10 +37,10 @@ const SUGGESTED_QUERIES: Record<ApiSource, Record<TenantKind, string[]>> = {
   },
   nodered: {
     ortho: [
-      'Search patient by name Canales',
-      'Get available appointment slots for next week',
-      'Show location details',
-      'List patient appointments',
+      'Cache health status',
+      'Show recent sessions',
+      'Booking queue stats',
+      'Show prompt versions',
     ],
     dominos: [
       'Show Dominos dashboard stats',
@@ -71,6 +72,7 @@ const ApiAgentChatPanel: React.FC<ApiAgentChatPanelProps> = ({ isOpen, onClose }
     sendMessage,
     clearChat,
     abortStream,
+    addExchange,
   } = useApiAgentChat();
 
   const currentTenant = useAppSelector(selectCurrentTenant);
@@ -80,6 +82,7 @@ const ApiAgentChatPanel: React.FC<ApiAgentChatPanelProps> = ({ isOpen, onClose }
   );
 
   const [input, setInput] = useState('');
+  const [skillRunning, setSkillRunning] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -99,15 +102,39 @@ const ApiAgentChatPanel: React.FC<ApiAgentChatPanelProps> = ({ isOpen, onClose }
     }
   }, [isOpen]);
 
+  /**
+   * Try to run a local skill first; fall back to the backend API agent.
+   */
+  const handleSend = useCallback(async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed || isLoading || skillRunning) return;
+
+    const skill = matchSkill(trimmed);
+    if (skill) {
+      setSkillRunning(true);
+      try {
+        const result = await skill.execute(trimmed);
+        addExchange(trimmed, result.markdown);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Skill execution failed';
+        addExchange(trimmed, `Error running **${skill.label}**: ${msg}`);
+      } finally {
+        setSkillRunning(false);
+      }
+    } else {
+      sendMessage(trimmed);
+    }
+  }, [isLoading, skillRunning, sendMessage, addExchange]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim() || isLoading) return;
-    sendMessage(input);
+    if (!input.trim() || isLoading || skillRunning) return;
+    handleSend(input);
     setInput('');
   };
 
   const handleSuggestionClick = (query: string) => {
-    sendMessage(query);
+    handleSend(query);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -183,7 +210,7 @@ const ApiAgentChatPanel: React.FC<ApiAgentChatPanelProps> = ({ isOpen, onClose }
           <span className="text-xs text-gray-500 dark:text-gray-400 mr-1">API:</span>
           <button
             onClick={() => setApiSource('cloud9')}
-            disabled={isLoading}
+            disabled={isLoading || skillRunning}
             className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors
               ${apiSource === 'cloud9'
                 ? 'bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-700'
@@ -195,7 +222,7 @@ const ApiAgentChatPanel: React.FC<ApiAgentChatPanelProps> = ({ isOpen, onClose }
           </button>
           <button
             onClick={() => setApiSource('nodered')}
-            disabled={isLoading}
+            disabled={isLoading || skillRunning}
             className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors
               ${apiSource === 'nodered'
                 ? 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 border border-red-300 dark:border-red-700'
@@ -277,7 +304,7 @@ const ApiAgentChatPanel: React.FC<ApiAgentChatPanelProps> = ({ isOpen, onClose }
                     ? 'Ask about Cloud9 API data...'
                     : 'Ask about Node-RED endpoints...'
               }
-              disabled={isLoading}
+              disabled={isLoading || skillRunning}
               className="flex-1 px-3 py-2 text-sm rounded-lg
                 border border-gray-300 dark:border-gray-600
                 bg-white dark:bg-gray-800
@@ -287,7 +314,7 @@ const ApiAgentChatPanel: React.FC<ApiAgentChatPanelProps> = ({ isOpen, onClose }
                 disabled:opacity-50 disabled:cursor-not-allowed
                 outline-none transition-colors"
             />
-            {isLoading ? (
+            {isLoading || skillRunning ? (
               <button
                 type="button"
                 onClick={abortStream}
@@ -304,7 +331,7 @@ const ApiAgentChatPanel: React.FC<ApiAgentChatPanelProps> = ({ isOpen, onClose }
             ) : (
               <button
                 type="submit"
-                disabled={!input.trim()}
+                disabled={!input.trim() || skillRunning}
                 className="px-3 py-2 rounded-lg text-sm font-medium
                   bg-indigo-600 hover:bg-indigo-700
                   disabled:bg-indigo-400 disabled:cursor-not-allowed
