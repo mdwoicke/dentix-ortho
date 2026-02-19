@@ -1991,6 +1991,26 @@ export class ProdTestRecordService {
 
       console.log(`[ProdTestRecordService] Session ${sessionId} sync complete: ${result.patientsFound} patients, ${result.appointmentsFound} appointments, ${result.alreadyImported} already imported`);
 
+      // Enrich newly imported appointments with full Cloud9 data (location, provider, type, chair)
+      if (result.appointmentsFound > 0) {
+        const patientGuids = this.db.prepare(`
+          SELECT DISTINCT patient_guid FROM prod_test_records
+          WHERE session_id = ? AND record_type = 'appointment' AND patient_guid IS NOT NULL
+            AND (location_name IS NULL OR provider_name IS NULL OR appointment_type IS NULL)
+        `).all(sessionId) as { patient_guid: string }[];
+
+        for (const { patient_guid } of patientGuids) {
+          try {
+            const enrichResult = await this.enrichAppointmentsFromCloud9(patient_guid);
+            if (enrichResult.enriched > 0) {
+              console.log(`[ProdTestRecordService] Enriched ${enrichResult.enriched} appointments for patient ${patient_guid}`);
+            }
+          } catch (err: any) {
+            console.log(`[ProdTestRecordService] Could not enrich appointments for ${patient_guid}: ${err.message}`);
+          }
+        }
+      }
+
     } catch (err: any) {
       result.errors.push(`Sync failed: ${err.message}`);
       console.error('[ProdTestRecordService] Session sync error:', err);

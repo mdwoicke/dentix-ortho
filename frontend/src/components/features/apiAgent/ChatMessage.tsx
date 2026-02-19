@@ -13,6 +13,7 @@ import type { ChatMessage as ChatMessageType } from '../../../hooks/useApiAgentC
 
 interface ChatMessageProps {
   message: ChatMessageType;
+  onNavigate?: () => void;
 }
 
 function formatTime(date: Date): string {
@@ -22,7 +23,7 @@ function formatTime(date: Date): string {
   });
 }
 
-const ChatMessageComponent: React.FC<ChatMessageProps> = ({ message }) => {
+const ChatMessageComponent: React.FC<ChatMessageProps> = ({ message, onNavigate }) => {
   const isUser = message.role === 'user';
   const navigate = useNavigate();
 
@@ -118,7 +119,6 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({ message }) => {
                       return (
                         <a
                           href={href}
-                          onClick={(e) => { e.preventDefault(); navigate(href!); }}
                           className="text-indigo-600 dark:text-indigo-400 underline hover:text-indigo-800 dark:hover:text-indigo-300"
                         >
                           {children}

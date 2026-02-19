@@ -9,7 +9,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useApiAgentChat } from '../../../hooks/useApiAgentChat';
 import type { ApiSource } from '../../../hooks/useApiAgentChat';
 import ChatMessage from './ChatMessage';
-import { matchSkill } from '../../../skills/dominos';
+import { matchSkill, clearLastSkill } from '../../../skills/dominos';
 
 interface DominosChatPanelProps {
   isOpen: boolean;
@@ -39,17 +39,24 @@ const CATEGORY_COLORS: Record<DominosCategory, { active: string }> = {
 const SUGGESTED_QUERIES: Record<DominosCategory, string[]> = {
   'dominos-menu': [
     'Menu code for large Extravaganza',
+    'Menu code for thin crust pepperoni',
     'Find coupons with wings for store 4332',
-    'Show pizza coupons for store 7539',
-    'List all coupons for store 4332',
+    'Find coupons under $10',
+    'Live menu for store 4332',
+    'Store info for 4332',
+    'Store address for 7539',
   ],
   'dominos-orders': [
-    'Create a sample order',
     'Show dashboard stats',
-    'List recent order logs',
+    'List recent failed orders',
+    'List recent orders',
     'Show error breakdown',
+    'What is the success rate?',
+    'Create a sample order',
   ],
   'dominos-traces': [
+    'Service health status',
+    'Is the service up?',
     'Show recent monitoring results',
     'Analyze session intent',
     'Verify session goals',
@@ -146,6 +153,7 @@ const DominosChatPanel: React.FC<DominosChatPanelProps> = ({ isOpen, onClose }) 
 
   const handleCategoryChange = (cat: DominosCategory) => {
     setApiSource(cat as ApiSource);
+    clearLastSkill();
   };
 
   const suggestions = SUGGESTED_QUERIES[category] ?? SUGGESTED_QUERIES['dominos-orders'];
@@ -185,7 +193,7 @@ const DominosChatPanel: React.FC<DominosChatPanelProps> = ({ isOpen, onClose }) 
           </div>
           <div className="flex items-center gap-2">
             <button
-              onClick={clearChat}
+              onClick={() => { clearChat(); clearLastSkill(); }}
               className="px-2.5 py-1.5 text-xs font-medium rounded-md
                 text-gray-600 dark:text-gray-300
                 hover:bg-gray-100 dark:hover:bg-gray-800
@@ -269,7 +277,7 @@ const DominosChatPanel: React.FC<DominosChatPanelProps> = ({ isOpen, onClose }) 
 
           {/* Message list */}
           {messages.map((m) => (
-            <ChatMessage key={m.id} message={m} />
+            <ChatMessage key={m.id} message={m} onNavigate={onClose} />
           ))}
 
           {/* Error display */}

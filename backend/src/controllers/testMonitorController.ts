@@ -9907,6 +9907,8 @@ function transformSessionRow(row: any): any {
     hasSuccessfulBooking: Boolean(row.has_successful_booking),
     hasTransfer: Boolean(row.has_transfer),
     hasOrder: Boolean(row.has_order),
+    patientNames: row.patient_names || null,
+    patientGuids: row.patient_guids || null,
   };
 }
 
@@ -10237,8 +10239,13 @@ export async function getTraceInsights(
     }
 
     // Calculate date range
-    let from = fromDate as string;
-    let to = (toDate as string) || new Date().toISOString();
+    // If date-only strings (YYYY-MM-DD), normalize to full ISO timestamps
+    const rawFrom = fromDate as string;
+    const rawTo = toDate as string;
+    let from = rawFrom && rawFrom.length === 10 ? rawFrom + 'T00:00:00.000Z' : rawFrom;
+    let to = rawTo
+      ? (rawTo.length === 10 ? rawTo + 'T23:59:59.999Z' : rawTo)
+      : new Date().toISOString();
 
     if (lastDays) {
       const d = new Date();

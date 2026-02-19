@@ -735,8 +735,9 @@ export class LangfuseTraceService {
       params.push(fromDate);
     }
     if (toDate) {
+      const toDateValue = toDate.length === 10 ? toDate + 'T23:59:59.999Z' : toDate;
       whereClauses.push('pt.started_at <= ?');
-      params.push(toDate);
+      params.push(toDateValue);
     }
     if (sessionId) {
       whereClauses.push('pt.session_id = ?');
@@ -1148,8 +1149,10 @@ export class LangfuseTraceService {
       params.push(fromDate);
     }
     if (toDate) {
+      // If date-only string (YYYY-MM-DD), append end-of-day so sessions from that day are included
+      const toDateValue = toDate.length === 10 ? toDate + 'T23:59:59.999Z' : toDate;
       whereClauses.push('ps.last_trace_at <= ?');   // Session ended on or before toDate
-      params.push(toDate);
+      params.push(toDateValue);
     }
     if (userId) {
       whereClauses.push('ps.user_id = ?');
@@ -1168,7 +1171,40 @@ export class LangfuseTraceService {
       ORDER BY ps.last_trace_at DESC
       LIMIT ? OFFSET ?
     `;
-    const sessions = this.db.prepare(sql).all(...params, limit, offset);
+    const sessions = this.db.prepare(sql).all(...params, limit, offset) as any[];
+
+    // Enrich booking sessions with patient name + GUID from tool observations
+    const bookingSessions = sessions.filter((s: any) => s.has_successful_booking);
+    if (bookingSessions.length > 0) {
+      const bookingStmt = this.db.prepare(`
+        SELECT o.input, o.output FROM production_trace_observations o
+        JOIN production_traces t ON o.trace_id = t.trace_id
+        WHERE t.session_id = ?
+          AND o.name = 'schedule_appointment_ortho'
+          AND o.input LIKE '%book_child%'
+        LIMIT 1
+      `);
+      for (const s of bookingSessions) {
+        try {
+          const row = bookingStmt.get(s.session_id) as any;
+          if (row) {
+            const inp = JSON.parse(row.input);
+            const children = JSON.parse(inp.children || '[]');
+            s.patient_names = children.map((c: any) => `${c.firstName} ${c.lastName}`).join(', ');
+
+            // Extract patient GUIDs from the output
+            if (row.output) {
+              const out = JSON.parse(row.output);
+              if (out.children && Array.isArray(out.children)) {
+                s.patient_guids = out.children
+                  .filter((c: any) => c.patientGUID)
+                  .map((c: any) => ({ name: c.firstName, guid: c.patientGUID }));
+              }
+            }
+          }
+        } catch { /* ignore parse errors */ }
+      }
+    }
 
     // Get total count
     const countSql = `

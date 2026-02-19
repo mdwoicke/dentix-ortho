@@ -1134,6 +1134,8 @@ export interface ProductionSession {
   hasSuccessfulBooking: boolean;
   hasTransfer?: boolean;
   hasOrder?: boolean;
+  patientNames?: string | null;
+  patientGuids?: Array<{ name: string; guid: string }> | null;
 }
 
 /**

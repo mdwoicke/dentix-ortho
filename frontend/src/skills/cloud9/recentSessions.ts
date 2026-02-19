@@ -11,6 +11,7 @@
 
 import type { SkillEntry, SkillResult } from '../dominos/types';
 import { getProductionSessions } from '../../services/api/testMonitorApi';
+import { parseTimeframe } from './timeframeUtils';
 
 function extractLimit(query: string): number {
   const m = query.match(/(?:last|recent|top)\s+(\d+)/i);
@@ -25,29 +26,29 @@ function truncText(text: string, max: number): string {
   return text.length > max ? text.slice(0, max - 3) + '...' : text;
 }
 
-function formatMs(ms: number | null): string {
-  if (ms == null) return '-';
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
-
 async function execute(query: string): Promise<SkillResult> {
   const limit = extractLimit(query);
+  const timeframe = parseTimeframe(query);
 
   try {
-    const response = await getProductionSessions({ limit });
+    const response = await getProductionSessions({
+      limit,
+      ...(timeframe && { fromDate: timeframe.startDate, toDate: timeframe.endDate }),
+    });
     const sessions = response.sessions || [];
+
+    const headerLabel = timeframe ? timeframe.label : 'Recent';
 
     if (sessions.length === 0) {
       return {
         success: true,
-        markdown: '## Recent Sessions\n\nNo sessions found.',
+        markdown: `## ${headerLabel} Sessions\n\nNo sessions found.`,
         data: [],
       };
     }
 
     const lines: string[] = [];
-    lines.push(`## Recent Sessions (${sessions.length} of ${response.total})\n`);
+    lines.push(`## ${headerLabel} Sessions (${sessions.length} of ${response.total})\n`);
 
     for (const s of sessions) {
       const flags: string[] = [];
@@ -58,12 +59,11 @@ async function execute(query: string): Promise<SkillResult> {
 
       const flagStr = flags.length > 0 ? ` [${flags.join(', ')}]` : '';
       const preview = s.inputPreview ? truncText(s.inputPreview, 60) : '';
-      const latency = formatMs(s.totalLatencyMs);
       const time = s.firstTraceAt ? new Date(s.firstTraceAt).toLocaleString() : '-';
 
       lines.push(`[**${truncId(s.sessionId)}**](/test-monitor/call-trace?sessionId=${s.sessionId})${flagStr}`);
-      lines.push(`- Time: ${time} | Traces: ${s.traceCount} | Latency: ${latency}`);
-      if (preview) lines.push(`- Input: _${preview}_`);
+      lines.push(`- ${time}`);
+      if (preview) lines.push(`- _"${preview}"_`);
       lines.push('');
     }
 
@@ -84,6 +84,7 @@ export const recentSessionsSkill: SkillEntry = {
     /(?:show|list|get)\s+(?:the\s+)?recent\s+(?:sessions|calls|conversations)/i,
     /recent\s+(?:sessions|calls|conversations)/i,
     /last\s+\d+\s+(?:sessions|calls|conversations)/i,
+    /sessions?\s+(?:from\s+)?(?:today|yesterday|this\s+\w+|last\s+\w+)/i,
   ],
   execute,
 };

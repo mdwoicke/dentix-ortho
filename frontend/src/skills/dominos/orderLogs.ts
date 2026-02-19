@@ -70,7 +70,7 @@ function formatLogEntry(log: DominosOrderLog, index: number): string {
   details.push(`HTTP ${log.status_code}`);
   details.push(`${log.response_time_ms}ms`);
   if (log.store_id) details.push(`Store ${log.store_id}`);
-  if (log.session_id) details.push(`Session [\`${truncate(log.session_id, 8)}\`](/dominos/call-tracing?sessionId=${log.session_id})`);
+  if (log.session_id) details.push(`Session \`${truncate(log.session_id, 8)}\``);
   lines.push(details.join(' | '));
 
   if (log.error_message) {

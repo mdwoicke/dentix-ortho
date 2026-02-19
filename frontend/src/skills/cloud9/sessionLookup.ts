@@ -20,12 +20,6 @@ function truncText(text: string, max: number): string {
   return text.length > max ? text.slice(0, max - 3) + '...' : text;
 }
 
-function formatMs(ms: number | null): string {
-  if (ms == null) return '-';
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
-
 function extractSessionId(query: string): string | null {
   const m = query.match(/session\s+(?:detail\s+)?([a-f0-9-]{6,})/i);
   return m ? m[1] : null;
@@ -56,12 +50,9 @@ async function execute(query: string): Promise<SkillResult> {
     lines.push(`|-------|-------|`);
     lines.push(`| **ID** | [\`${s.sessionId}\`](/test-monitor/call-trace?sessionId=${s.sessionId}) |`);
     lines.push(`| **Config** | ${s.configName} |`);
-    lines.push(`| **First Trace** | ${s.firstTraceAt ? new Date(s.firstTraceAt).toLocaleString() : '-'} |`);
-    lines.push(`| **Last Trace** | ${s.lastTraceAt ? new Date(s.lastTraceAt).toLocaleString() : '-'} |`);
-    lines.push(`| **Traces** | ${s.traceCount} |`);
-    lines.push(`| **Cost** | ${s.totalCost != null ? `$${s.totalCost.toFixed(4)}` : '-'} |`);
-    lines.push(`| **Latency** | ${formatMs(s.totalLatencyMs)} |`);
-    lines.push(`| **Flags** | ${flags.length > 0 ? flags.join(', ') : 'None'} |`);
+    lines.push(`| **Started** | ${s.firstTraceAt ? new Date(s.firstTraceAt).toLocaleString() : '-'} |`);
+    lines.push(`| **Ended** | ${s.lastTraceAt ? new Date(s.lastTraceAt).toLocaleString() : '-'} |`);
+    lines.push(`| **Outcome** | ${flags.length > 0 ? flags.join(', ') : 'None'} |`);
     lines.push('');
 
     // Transcript preview (first 4 turns)

@@ -15,7 +15,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { getAuthToken, getCurrentTenantId } from '../services/api/client';
 import { STORAGE_KEYS } from '../utils/constants';
 
-export type ApiSource = 'cloud9' | 'nodered' | 'dominos-menu' | 'dominos-orders' | 'dominos-traces';
+export type ApiSource = 'call' | 'cloud9' | 'nodered' | 'dominos-menu' | 'dominos-orders' | 'dominos-traces';
 
 export interface ChatMessage {
   id: string;
@@ -88,7 +88,7 @@ function loadSessionId(key: string): string {
   return id;
 }
 
-const VALID_SOURCES: ApiSource[] = ['cloud9', 'nodered', 'dominos-menu', 'dominos-orders', 'dominos-traces'];
+const VALID_SOURCES: ApiSource[] = ['call', 'cloud9', 'nodered', 'dominos-menu', 'dominos-orders', 'dominos-traces'];
 
 function loadApiSource(key: string, defaultSource: ApiSource): ApiSource {
   try {
@@ -116,7 +116,7 @@ function saveMessages(key: string, messages: ChatMessage[]): void {
 
 export function useApiAgentChat(options?: UseApiAgentChatOptions) {
   const namespace = options?.namespace;
-  const defaultSource = options?.defaultSource ?? 'cloud9';
+  const defaultSource = options?.defaultSource ?? 'call';
   const keys = getStorageKeys(namespace);
 
   const [messages, setMessages] = useState<ChatMessage[]>(() => loadMessages(keys.messages));

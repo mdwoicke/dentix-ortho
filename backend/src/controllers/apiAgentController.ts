@@ -107,6 +107,8 @@ function extractAgentResponse(raw: string): {
  */
 function buildSourcePrefix(source: string): string {
   switch (source) {
+    case 'call':
+      return '[IMPORTANT: Focus on call session and trace endpoints: /api/test-monitor/sessions/*, /api/test-monitor/prod-tracker/*, /api/trace-analysis/*. Use these for call stats, session lookup, trace insights, and error analysis.]\n\n';
     case 'nodered':
       return '[IMPORTANT: Only use the Node-RED Ortho endpoints (paths starting with /api/nodered/ortho/). Do NOT use Cloud9 direct endpoints.]\n\n';
     case 'dominos-menu':
@@ -126,13 +128,13 @@ function buildSourcePrefix(source: string): string {
  * Accepts { message, sessionId?, source? } and streams the api-agent response
  * back to the client as Server-Sent Events.
  *
- * source: 'cloud9' (default) | 'nodered' — tells the agent which API set to query.
+ * source: 'call' (default) | 'cloud9' | 'nodered' — tells the agent which API set to query.
  */
 export const chat = async (req: Request, res: Response): Promise<void> => {
   const { message } = req.body;
   const sessionId = req.body.sessionId || uuidv4();
-  const VALID_SOURCES = ['cloud9', 'nodered', 'dominos-menu', 'dominos-orders', 'dominos-traces'];
-  const source: string = VALID_SOURCES.includes(req.body.source) ? req.body.source : 'cloud9';
+  const VALID_SOURCES = ['call', 'cloud9', 'nodered', 'dominos-menu', 'dominos-orders', 'dominos-traces'];
+  const source: string = VALID_SOURCES.includes(req.body.source) ? req.body.source : 'call';
 
   if (!message || typeof message !== 'string') {
     res.status(400).json({ success: false, error: 'message is required and must be a string' });

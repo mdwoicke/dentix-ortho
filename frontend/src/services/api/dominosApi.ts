@@ -38,8 +38,11 @@ dominosClient.interceptors.request.use((config) => {
 });
 
 // Dashboard
-export async function getDashboardStats(): Promise<DominosDashboardStats> {
-  const { data } = await dominosClient.get('/dashboard/stats');
+export async function getDashboardStats(params?: {
+  startDate?: string;
+  endDate?: string;
+}): Promise<DominosDashboardStats> {
+  const { data } = await dominosClient.get('/dashboard/stats', { params });
   const raw = data.data || data;
   return {
     totalOrders: raw.total_requests ?? 0,

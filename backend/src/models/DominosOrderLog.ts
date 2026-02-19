@@ -57,7 +57,8 @@ export class DominosOrderLogModel {
       }
       if (endDate) {
         where += ' AND timestamp <= ?';
-        params.push(endDate);
+        // Append end-of-day time if only a date was provided (YYYY-MM-DD)
+        params.push(endDate.length === 10 ? `${endDate} 23:59:59` : endDate);
       }
 
       const row = db.prepare(`
@@ -138,7 +139,7 @@ export class DominosOrderLogModel {
       }
       if (endDate) {
         where += ' AND timestamp <= ?';
-        params.push(endDate);
+        params.push(endDate.length === 10 ? `${endDate} 23:59:59` : endDate);
       }
 
       const logs = db.prepare(`

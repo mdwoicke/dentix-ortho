@@ -12,6 +12,7 @@
 
 import type { SkillEntry, SkillResult } from '../dominos/types';
 import { getProductionSessions } from '../../services/api/testMonitorApi';
+import { parseTimeframe } from './timeframeUtils';
 
 function truncId(id: string): string {
   return id.length > 12 ? id.slice(0, 8) + '...' : id;
@@ -21,12 +22,6 @@ function truncText(text: string, max: number): string {
   return text.length > max ? text.slice(0, max - 3) + '...' : text;
 }
 
-function formatMs(ms: number | null): string {
-  if (ms == null) return '-';
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
-
 function extractLimit(query: string): number {
   const m = query.match(/(?:last|top|limit)\s+(\d+)/i);
   return m ? Math.min(parseInt(m[1], 10), 50) : 25;
@@ -34,21 +29,27 @@ function extractLimit(query: string): number {
 
 async function execute(query: string): Promise<SkillResult> {
   const limit = extractLimit(query);
+  const timeframe = parseTimeframe(query);
 
   try {
-    const response = await getProductionSessions({ limit });
+    const response = await getProductionSessions({
+      limit,
+      ...(timeframe && { fromDate: timeframe.startDate, toDate: timeframe.endDate }),
+    });
     const errorSessions = (response.sessions || []).filter(s => s.errorCount > 0);
+
+    const headerSuffix = timeframe ? ` - ${timeframe.label}` : '';
 
     if (errorSessions.length === 0) {
       return {
         success: true,
-        markdown: `## Error Sessions\n\nNo sessions with errors found in the last ${limit} sessions.`,
+        markdown: `## Error Sessions${headerSuffix}\n\nNo sessions with errors found.`,
         data: [],
       };
     }
 
     const lines: string[] = [];
-    lines.push(`## Error Sessions (${errorSessions.length} found)\n`);
+    lines.push(`## Error Sessions (${errorSessions.length} found)${headerSuffix}\n`);
 
     for (const s of errorSessions) {
       const flags: string[] = [];
@@ -61,8 +62,8 @@ async function execute(query: string): Promise<SkillResult> {
       const time = s.firstTraceAt ? new Date(s.firstTraceAt).toLocaleString() : '-';
 
       lines.push(`[**${truncId(s.sessionId)}**](/test-monitor/call-trace?sessionId=${s.sessionId}) — ${s.errorCount} error${s.errorCount > 1 ? 's' : ''}${flagStr}`);
-      lines.push(`- Time: ${time} | Traces: ${s.traceCount} | Latency: ${formatMs(s.totalLatencyMs)}`);
-      if (preview) lines.push(`- Input: _${preview}_`);
+      lines.push(`- ${time}`);
+      if (preview) lines.push(`- _"${preview}"_`);
       lines.push('');
     }
 
@@ -86,6 +87,7 @@ export const errorSessionsSkill: SkillEntry = {
     /problem\s+(?:calls|sessions)/i,
     /(?:show|find|list)\s+(?:error|failed)\s+(?:sessions|calls)/i,
     /find\s+sessions?\s+with\s+errors/i,
+    /errors?\s+(?:today|yesterday|this\s+\w+|last\s+\w+)/i,
   ],
   execute,
 };
