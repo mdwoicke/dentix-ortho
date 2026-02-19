@@ -103,6 +103,25 @@ export class LangfuseTraceService {
     } catch {
       // Column already exists, ignore
     }
+
+    // Ensure original_session_id column exists on production_traces
+    // Stores the original Langfuse session ID before rebuildSessions overwrites session_id with conv_ IDs
+    try {
+      this.db.exec(`ALTER TABLE production_traces ADD COLUMN original_session_id TEXT`);
+      // Backfill: for existing traces, set original_session_id = session_id where not already a conv_ ID
+      this.db.exec(`
+        UPDATE production_traces
+        SET original_session_id = session_id
+        WHERE original_session_id IS NULL AND session_id NOT LIKE 'conv_%'
+      `);
+    } catch {
+      // Column already exists, ignore
+    }
+    try {
+      this.db.exec(`CREATE INDEX IF NOT EXISTS idx_production_traces_original_session ON production_traces(original_session_id)`);
+    } catch {
+      // Index already exists, ignore
+    }
   }
 
   /**
@@ -325,13 +344,14 @@ export class LangfuseTraceService {
           // Track this user for incremental rebuild
           affectedUserIds.add(userId);
 
-          // Insert trace
+          // Insert trace (store original Langfuse session ID for reverse-lookup after rebuildSessions)
           this.db.prepare(`
             INSERT INTO production_traces (
               trace_id, langfuse_config_id, session_id, user_id, name,
               input, output, metadata_json, tags_json, release, version,
-              total_cost, latency_ms, started_at, ended_at, environment
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              total_cost, latency_ms, started_at, ended_at, environment,
+              original_session_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `).run(
             trace.id,
             configId,
@@ -348,29 +368,16 @@ export class LangfuseTraceService {
             trace.latency || null,
             trace.timestamp,
             null, // ended_at calculated from observations
-            (trace.metadata as any)?.environment || null
+            (trace.metadata as any)?.environment || null,
+            effectiveSessionId
           );
 
-          // Upsert session record - groups all traces with same session_id
-          const inputPreview = this.extractInputPreview(trace.input);
-          this.upsertSession({
-            sessionId: effectiveSessionId,
-            configId,
-            userId: trace.userId || null,
-            environment: (trace.metadata as any)?.environment || null,
-            traceTimestamp: trace.timestamp,
-            cost: trace.totalCost || 0,
-            latencyMs: trace.latency || 0,
-            inputPreview,
-            tags: trace.tags || null,
-            metadata: trace.metadata || null,
-          });
+          // Skip upsertSession here - rebuildSessionsForUsers (called after page)
+          // will create properly grouped conv_ sessions. Creating raw sessions here
+          // causes orphan 1-message sessions if the page is viewed during import.
 
           // Fetch and store observations (tool calls, generations)
           await this.importTraceObservations(config, trace.id);
-
-          // Update cached error/booking stats on the session
-          this.updateSessionCachedStats(effectiveSessionId, configId);
 
           tracesImported++;
         }
@@ -865,13 +872,24 @@ export class LangfuseTraceService {
       // Use session_id if available, otherwise use trace_id as synthetic session
       const effectiveSessionId = traceData.sessionId || traceData.id;
 
-      // Insert trace into database
+      // Check if trace already exists with a grouped conv_ session - don't overwrite
+      const existingTrace = this.db.prepare(`SELECT * FROM production_traces WHERE trace_id = ?`).get(traceData.id) as any;
+      const alreadyGrouped = existingTrace?.session_id?.startsWith('conv_');
+
+      if (alreadyGrouped) {
+        // Trace already imported and grouped - return existing data
+        const existingObs = this.db.prepare(`SELECT * FROM production_trace_observations WHERE trace_id = ? ORDER BY started_at ASC`).all(traceData.id);
+        return { trace: existingTrace, observations: existingObs };
+      }
+
+      // Insert trace into database (store original Langfuse session ID for reverse-lookup)
       this.db.prepare(`
         INSERT OR REPLACE INTO production_traces (
           trace_id, langfuse_config_id, session_id, user_id, name,
           input, output, metadata_json, tags_json, release, version,
-          total_cost, latency_ms, started_at, ended_at, environment
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          total_cost, latency_ms, started_at, ended_at, environment,
+          original_session_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         traceData.id,
         configId,
@@ -888,7 +906,8 @@ export class LangfuseTraceService {
         traceData.latency || null,
         traceData.timestamp,
         null,
-        (traceData.metadata as any)?.environment || null
+        (traceData.metadata as any)?.environment || null,
+        effectiveSessionId
       );
 
       // Upsert session record
@@ -1000,6 +1019,16 @@ export class LangfuseTraceService {
 
       console.log(`[LangfuseTraceService] Found ${tracesData.length} traces for session ${sessionId}`);
 
+      // Check if any of these traces are already imported and grouped into a conv_ session
+      // If so, return the grouped session instead of re-importing
+      for (const traceData of tracesData) {
+        const existingTrace = this.db.prepare(`SELECT session_id FROM production_traces WHERE trace_id = ?`).get(traceData.id) as any;
+        if (existingTrace?.session_id?.startsWith('conv_')) {
+          console.log(`[LangfuseTraceService] Trace ${traceData.id} already grouped in session ${existingTrace.session_id}, returning grouped session`);
+          return this.getSession(existingTrace.session_id, configId);
+        }
+      }
+
       // Import each trace and its observations
       for (const traceData of tracesData) {
         const effectiveSessionId = traceData.sessionId || traceData.id;
@@ -1008,8 +1037,9 @@ export class LangfuseTraceService {
           INSERT OR REPLACE INTO production_traces (
             trace_id, langfuse_config_id, session_id, user_id, name,
             input, output, metadata_json, tags_json, release, version,
-            total_cost, latency_ms, started_at, ended_at, environment
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            total_cost, latency_ms, started_at, ended_at, environment,
+            original_session_id
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           traceData.id,
           configId,
@@ -1026,7 +1056,8 @@ export class LangfuseTraceService {
           traceData.latency || null,
           traceData.timestamp,
           null,
-          (traceData.metadata as any)?.environment || null
+          (traceData.metadata as any)?.environment || null,
+          effectiveSessionId
         );
 
         // Upsert session record
@@ -1151,6 +1182,31 @@ export class LangfuseTraceService {
       sessions,
       total: countResult?.count || 0,
     };
+  }
+
+  /**
+   * Reverse-lookup: find a session by the original Langfuse session ID
+   * Used when rebuildSessions has renamed session_id to a conv_ ID
+   */
+  getSessionByOriginalId(originalSessionId: string, configId?: number): {
+    session: any;
+    traces: any[];
+    observations: any[];
+  } | null {
+    // Find any trace that had this original Langfuse session ID
+    let query = `SELECT session_id FROM production_traces WHERE original_session_id = ?`;
+    const params: any[] = [originalSessionId];
+    if (configId) {
+      query += ` AND langfuse_config_id = ?`;
+      params.push(configId);
+    }
+    query += ` LIMIT 1`;
+
+    const trace = this.db.prepare(query).get(...params) as any;
+    if (!trace || trace.session_id === originalSessionId) return null; // No redirect needed
+
+    console.log(`[LangfuseTraceService] Reverse-lookup: ${originalSessionId} -> ${trace.session_id}`);
+    return this.getSession(trace.session_id, configId);
   }
 
   /**

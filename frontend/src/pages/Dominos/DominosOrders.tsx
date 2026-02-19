@@ -11,7 +11,8 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import * as dominosApi from '../../services/api/dominosApi';
-import type { DominosOrderLog, DominosLogDetail, ParsedOrder, ParsedOrderItem } from '../../types/dominos.types';
+import type { DominosOrderLog, DominosLogDetail, ParsedOrder, ParsedOrderItem, ToppingOption } from '../../types/dominos.types';
+import DiagnosisPanel from '../../components/Dominos/DiagnosisPanel';
 
 // ============================================================================
 // AUTO-REFRESH CONSTANTS & HELPERS
@@ -97,9 +98,19 @@ function CopyButton({ text }: { text: string }) {
   return (
     <button
       onClick={handleCopy}
-      className="ml-2 px-2 py-0.5 text-xs rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors"
+      title={copied ? 'Copied!' : 'Copy'}
+      className="ml-1 p-0.5 rounded text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300 transition-colors flex-shrink-0"
     >
-      {copied ? 'Copied!' : 'Copy'}
+      {copied ? (
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-green-500">
+          <polyline points="20 6 9 17 4 12" />
+        </svg>
+      ) : (
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+        </svg>
+      )}
     </button>
   );
 }
@@ -331,17 +342,18 @@ function inferCategory(code: string): string {
   return 'Other';
 }
 
-function formatToppings(options: Record<string, Record<string, string>> | undefined): string[] {
+function formatToppings(options: Record<string, Record<string, string>> | undefined): ToppingOption[] {
   if (!options || typeof options !== 'object') return [];
   return Object.entries(options)
     .filter(([key]) => key !== 'GOB') // Show GOB separately as base
     .map(([key, val]) => {
       const name = TOPPING_NAMES[key] || key;
       const amount = Object.values(val || {})[0];
-      if (amount === '1.5') return `Extra ${name}`;
-      if (amount === '2') return `Double ${name}`;
-      if (amount === '0.5') return `Light ${name}`;
-      return name;
+      if (amount === '0') return { name, modifier: 'none' as const };
+      if (amount === '0.5') return { name, modifier: 'light' as const };
+      if (amount === '1.5') return { name, modifier: 'extra' as const };
+      if (amount === '2') return { name, modifier: 'double' as const };
+      return { name, modifier: 'normal' as const };
     });
 }
 
@@ -365,8 +377,8 @@ function parseOrderRequest(requestBody: unknown): ParsedOrder | null {
       const toppings = formatToppings(p.Options || p.options);
       const hasGarlicBase = p.Options?.GOB || p.options?.GOB;
 
-      const optionsList = [
-        ...(hasGarlicBase ? ['Garlic Oil Base'] : []),
+      const optionsList: ToppingOption[] = [
+        ...(hasGarlicBase ? [{ name: 'Garlic Oil Base', modifier: 'normal' as const }] : []),
         ...toppings,
       ];
 
@@ -427,6 +439,7 @@ function ParsedOrderCard({ order, detail }: { order: ParsedOrder; detail: Domino
   })();
   const [couponDescription, setCouponDescription] = useState('');
   const [storeLabel, setStoreLabel] = useState('');
+  const [storePhone, setStorePhone] = useState('');
 
   useEffect(() => {
     if (!order.storeNumber) return;
@@ -434,6 +447,7 @@ function ParsedOrderCard({ order, detail }: { order: ParsedOrder; detail: Domino
     dominosApi.getStoreInfo(order.storeNumber).then(info => {
       if (cancelled || !info) return;
       setStoreLabel(info.address || [info.city, info.region].filter(Boolean).join(', '));
+      if (info.phone) setStorePhone(info.phone);
     }).catch(() => {});
     return () => { cancelled = true; };
   }, [order.storeNumber]);
@@ -462,7 +476,7 @@ function ParsedOrderCard({ order, detail }: { order: ParsedOrder; detail: Domino
         <div className="flex items-center gap-3">
           {order.storeNumber && (
             <span className="text-white text-sm font-medium flex items-center gap-2">
-              {storeLabel && <span className="text-blue-100">({storeLabel})</span>}
+              {storeLabel && <span className="text-blue-100">({storeLabel}){storePhone && <> &nbsp;|&nbsp; {formatPhone(storePhone)}</>}</span>}
               {storeLabel && <span className="text-blue-300">|</span>}
               Store #{order.storeNumber}
             </span>
@@ -538,14 +552,29 @@ function ParsedOrderCard({ order, detail }: { order: ParsedOrder; detail: Domino
                     </div>
                     {item.options.length > 0 && (
                       <div className="flex flex-wrap gap-1 mt-1">
-                        {item.options.map((opt, oi) => (
-                          <span
-                            key={oi}
-                            className="inline-flex items-center px-1.5 py-0.5 text-xs rounded bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400"
-                          >
-                            {opt}
-                          </span>
-                        ))}
+                        {item.options.map((opt, oi) => {
+                          const badgeStyles: Record<string, string> = {
+                            normal: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400',
+                            none: 'bg-red-100 dark:bg-red-900/40 text-red-600 dark:text-red-400 line-through',
+                            light: 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400',
+                            extra: 'bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400',
+                            double: 'bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400',
+                          };
+                          const prefix: Record<string, string> = { light: 'Light ', extra: 'Extra ', double: 'Double ' };
+                          return (
+                            <span
+                              key={oi}
+                              className={`inline-flex items-center px-1.5 py-0.5 text-xs rounded ${badgeStyles[opt.modifier] || badgeStyles.normal}`}
+                            >
+                              {opt.modifier === 'none' && (
+                                <svg className="w-3 h-3 mr-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                              )}
+                              {prefix[opt.modifier] || ''}{opt.name}
+                            </span>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -780,15 +809,24 @@ function OrderResultSummary({ result, showRawJson, onToggleRaw }: { result: Reco
             </div>
           )}
           {sessionId && (
-            <div className="bg-gray-50 dark:bg-gray-900 rounded-md p-3 border border-gray-200 dark:border-gray-700">
-              <div className="text-xs text-gray-500 dark:text-gray-400 uppercase">Session</div>
-              <div className="text-sm font-semibold text-gray-900 dark:text-gray-100 mt-0.5 truncate" title={sessionId}>{sessionId}</div>
+            <div className="bg-gray-50 dark:bg-gray-900 rounded-md p-3 border border-gray-200 dark:border-gray-700 col-span-2 sm:col-span-3">
+              <div className="flex items-center justify-between">
+                <div className="text-xs text-gray-500 dark:text-gray-400 uppercase">Session</div>
+                <CopyButton text={sessionId} />
+              </div>
+              <div className="text-sm font-semibold text-gray-900 dark:text-gray-100 mt-0.5 font-mono break-all">
+                <span className="sm:hidden">…{sessionId.slice(-4)}</span>
+                <span className="hidden sm:inline">{sessionId}</span>
+              </div>
             </div>
           )}
           {requestId && (
-            <div className="bg-gray-50 dark:bg-gray-900 rounded-md p-3 border border-gray-200 dark:border-gray-700">
-              <div className="text-xs text-gray-500 dark:text-gray-400 uppercase">Request ID</div>
-              <div className="text-sm font-semibold text-gray-900 dark:text-gray-100 mt-0.5 truncate font-mono" title={requestId}>{requestId}</div>
+            <div className="bg-gray-50 dark:bg-gray-900 rounded-md p-3 border border-gray-200 dark:border-gray-700 col-span-2 sm:col-span-3">
+              <div className="flex items-center justify-between">
+                <div className="text-xs text-gray-500 dark:text-gray-400 uppercase">Request ID</div>
+                <CopyButton text={requestId} />
+              </div>
+              <div className="text-sm font-semibold text-gray-900 dark:text-gray-100 mt-0.5 font-mono break-all">{requestId}</div>
             </div>
           )}
           {summary && (
@@ -1040,12 +1078,14 @@ export default function DominosOrders() {
   const [dateEnd, setDateEnd] = useState('');
   const [activeQuickFilter, setActiveQuickFilter] = useState('');
 
-  // Fetch all logs once (large limit, client-side filtering like original)
-  const fetchLogs = useCallback(async () => {
+  // Fetch logs – passes sessionId to backend for LIKE search when set
+  const fetchLogs = useCallback(async (sessionFilter?: string) => {
     try {
       setError(null);
       setLoading(true);
-      const res = await dominosApi.getDashboardLogs({ limit: 1000 });
+      const params: Parameters<typeof dominosApi.getDashboardLogs>[0] = { limit: 1000 };
+      if (sessionFilter) params.sessionId = sessionFilter;
+      const res = await dominosApi.getDashboardLogs(params);
       setAllLogs(res.logs || []);
     } catch (err: any) {
       setError(err.message || 'Failed to load logs');
@@ -1057,6 +1097,14 @@ export default function DominosOrders() {
   useEffect(() => {
     fetchLogs();
   }, [fetchLogs]);
+
+  // Re-fetch from backend when session filter changes (debounced)
+  useEffect(() => {
+    if (!filterSessionId) { fetchLogs(); return; }
+    const timer = setTimeout(() => fetchLogs(filterSessionId), 400);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterSessionId]);
 
   // Client-side filtering – only show /api/v1/direct-order endpoint
   const filteredLogs = useMemo(() => {
@@ -1191,7 +1239,7 @@ export default function DominosOrders() {
       const result = await dominosApi.importOrderLogs();
       setImportResult(result);
       if (result.imported > 0) {
-        fetchLogs();
+        fetchLogs(filterSessionId || undefined);
       }
       // Auto-clear the result message after 5 seconds
       setTimeout(() => setImportResult(null), 5000);
@@ -1224,7 +1272,7 @@ export default function DominosOrders() {
       const order = JSON.parse(orderJson);
       const result = await dominosApi.submitOrder(order);
       setSubmitResult(result);
-      fetchLogs();
+      fetchLogs(filterSessionId || undefined);
     } catch (err: any) {
       setSubmitError(err.message);
     } finally {
@@ -1306,7 +1354,7 @@ export default function DominosOrders() {
             {importing ? 'Importing...' : 'Import Orders'}
           </button>
           <button
-            onClick={fetchLogs}
+            onClick={() => fetchLogs(filterSessionId || undefined)}
             className="px-4 py-1.5 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 transition-colors"
           >
             Refresh
@@ -1472,7 +1520,7 @@ export default function DominosOrders() {
               </select>
               <input
                 type="text"
-                placeholder="Search session..."
+                placeholder="Search session ID (partial)..."
                 value={filterSessionId}
                 onChange={(e) => setFilterSessionId(e.target.value)}
                 className="px-3 py-1.5 text-sm rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
@@ -1573,7 +1621,13 @@ export default function DominosOrders() {
                       }`}>{log.status_code || 200}</span>
                     </td>
                     <td className="px-4 py-2 text-sm text-gray-600 dark:text-gray-400">{log.response_time_ms || 0}ms</td>
-                    <td className="px-4 py-2 text-xs font-mono text-gray-600 dark:text-gray-400 truncate max-w-[250px]" title={log.session_id}>{log.session_id || 'unknown'}</td>
+                    <td className="px-4 py-2 text-xs font-mono text-gray-600 dark:text-gray-400">
+                      <div className="flex items-center gap-1">
+                        <span className="break-all md:hidden" title={log.session_id || ''}>{log.session_id ? `…${log.session_id.slice(-4)}` : 'unknown'}</span>
+                        <span className="break-all hidden md:inline">{log.session_id || 'unknown'}</span>
+                        {log.session_id && <CopyButton text={log.session_id} />}
+                      </div>
+                    </td>
                     <td className="px-4 py-2 text-center">
                       {log.error_message ? (
                         <span className="text-red-500" title={log.error_message}>&#9888;</span>
@@ -1633,7 +1687,12 @@ export default function DominosOrders() {
                     <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-2">Overview</h4>
                     <div className="bg-gray-50 dark:bg-gray-900 rounded-md p-3 text-sm space-y-1">
                       <div><span className="font-medium text-gray-700 dark:text-gray-300">Request ID:</span> <span className="font-mono text-gray-600 dark:text-gray-400">{selectedLog.request_id || selectedLog.id}</span></div>
-                      <div><span className="font-medium text-gray-700 dark:text-gray-300">Session ID:</span> <span className="font-mono text-gray-600 dark:text-gray-400">{selectedLog.session_id || 'N/A'}</span></div>
+                      <div className="flex items-center gap-1">
+                        <span className="font-medium text-gray-700 dark:text-gray-300">Session ID:</span>
+                        <span className="font-mono text-gray-600 dark:text-gray-400 sm:hidden">{selectedLog.session_id ? `…${selectedLog.session_id.slice(-4)}` : 'N/A'}</span>
+                        <span className="font-mono text-gray-600 dark:text-gray-400 hidden sm:inline">{selectedLog.session_id || 'N/A'}</span>
+                        {selectedLog.session_id && <CopyButton text={selectedLog.session_id} />}
+                      </div>
                       <div><span className="font-medium text-gray-700 dark:text-gray-300">Timestamp:</span> <span className="text-gray-600 dark:text-gray-400">{selectedLog.timestamp_cst || selectedLog.timestamp}</span></div>
                       <div><span className="font-medium text-gray-700 dark:text-gray-300">Method:</span> <span className="text-gray-600 dark:text-gray-400">{selectedLog.method || 'GET'}</span></div>
                       <div><span className="font-medium text-gray-700 dark:text-gray-300">Endpoint:</span> <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded text-xs">{selectedLog.endpoint || '/'}</code></div>
@@ -1724,6 +1783,11 @@ export default function DominosOrders() {
                         ))}
                       </div>
                     </div>
+                  )}
+
+                  {/* Error Diagnosis - only for failed orders with request body */}
+                  {!selectedLog.success && selectedLog.request_body && (
+                    <DiagnosisPanel logId={selectedLog.id} />
                   )}
                 </>
               )}

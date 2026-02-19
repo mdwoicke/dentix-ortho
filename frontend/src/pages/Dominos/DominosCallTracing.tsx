@@ -11,6 +11,7 @@ import {
   importProductionTraces,
 } from '../../services/api/testMonitorApi';
 import { getLangfuseConfigs, getAppSettings } from '../../services/api/appSettingsApi';
+import { getOrderTraceCorrelation, type OrderTraceMatch } from '../../services/api/dominosApi';
 import { TranscriptViewer } from '../../components/features/testMonitor/TranscriptViewer';
 import { PerformanceWaterfall } from '../../components/features/testMonitor/PerformanceWaterfall';
 import type { LangfuseConfigProfile } from '../../types/appSettings.types';
@@ -113,8 +114,13 @@ const Icons = {
     </svg>
   ),
   Order: () => (
-    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" />
+    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <g transform="rotate(20 12 12)">
+        <path d="M12 2C8 2 4.5 4 3 7l9 15 9-15c-1.5-3-5-5-9-5z" strokeLinecap="round" strokeLinejoin="round" />
+        <circle cx="10" cy="8" r="1.2" fill="#ef4444" stroke="none" />
+        <circle cx="14" cy="10" r="1.2" fill="#ef4444" stroke="none" />
+        <circle cx="11" cy="13" r="1.2" fill="#ef4444" stroke="none" />
+      </g>
     </svg>
   ),
   PhoneForward: () => (
@@ -194,7 +200,7 @@ function CopyButton({ text }: { text: string }) {
 // CONVERSATION DETAIL MODAL (matches Ortho Call Trace exactly)
 // ============================================================================
 
-type DetailTab = 'transcript' | 'performance' | 'traces';
+type DetailTab = 'transcript' | 'performance' | 'traces' | 'orders';
 
 function ConversationDetailModal({
   sessionId,
@@ -215,6 +221,11 @@ function ConversationDetailModal({
   const [activeTab, setActiveTab] = useState<DetailTab>('transcript');
   const [copied, setCopied] = useState(false);
 
+  // Correlated orders state
+  const [correlatedOrders, setCorrelatedOrders] = useState<OrderTraceMatch[]>([]);
+  const [ordersLoading, setOrdersLoading] = useState(false);
+  const [ordersLoaded, setOrdersLoaded] = useState(false);
+
   useEffect(() => {
     async function fetchSession() {
       setLoading(true);
@@ -230,6 +241,22 @@ function ConversationDetailModal({
     }
     fetchSession();
   }, [sessionId, configId]);
+
+  // Load correlated orders when the orders tab is selected
+  useEffect(() => {
+    if (activeTab !== 'orders' || ordersLoaded) return;
+    (async () => {
+      setOrdersLoading(true);
+      try {
+        const result = await getOrderTraceCorrelation({ sessionId, direction: 'trace-to-order' });
+        setCorrelatedOrders(result.matches || []);
+      } catch { /* silent */ }
+      finally {
+        setOrdersLoading(false);
+        setOrdersLoaded(true);
+      }
+    })();
+  }, [activeTab, sessionId, ordersLoaded]);
 
   // Handle escape key
   useEffect(() => {
@@ -397,6 +424,24 @@ function ConversationDetailModal({
                   {sessionDetail.traces.length}
                 </span>
               </button>
+              <button
+                onClick={() => setActiveTab('orders')}
+                className={`px-4 py-2 text-sm font-medium rounded-lg transition-all flex items-center gap-2 ${
+                  activeTab === 'orders'
+                    ? 'bg-purple-600 text-white shadow-md'
+                    : 'bg-white dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600 border border-gray-200 dark:border-gray-600'
+                }`}
+              >
+                <Icons.Order />
+                Related Orders
+                {ordersLoaded && correlatedOrders.length > 0 && (
+                  <span className={`px-1.5 py-0.5 text-xs rounded-full ${
+                    activeTab === 'orders' ? 'bg-purple-500 text-white' : 'bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300'
+                  }`}>
+                    {correlatedOrders.length}
+                  </span>
+                )}
+              </button>
             </nav>
           </div>
         )}
@@ -483,6 +528,71 @@ function ConversationDetailModal({
                   {trace.input && (
                     <div className="mt-2 text-xs text-gray-600 dark:text-gray-300 truncate">
                       Input: {typeof trace.input === 'string' ? trace.input : JSON.stringify(trace.input).substring(0, 200)}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {sessionDetail && activeTab === 'orders' && (
+            <div className="space-y-3">
+              <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-4">
+                Related Order Logs
+              </h3>
+              {ordersLoading && (
+                <div className="flex items-center justify-center py-8">
+                  <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-purple-600" />
+                </div>
+              )}
+              {ordersLoaded && correlatedOrders.length === 0 && (
+                <div className="text-center py-8 text-sm text-gray-500 dark:text-gray-400 space-y-2">
+                  <p className="font-medium">No matching orders found</p>
+                  <p className="text-xs">Correlation uses phone number + time window matching between this call trace and order API logs.</p>
+                  <p className="text-xs text-gray-400">This can happen when: the datasets don't overlap in time, phone numbers don't match, or recent orders lack customer data.</p>
+                </div>
+              )}
+              {correlatedOrders.map((order, idx) => (
+                <div key={order.id || idx} className="p-4 rounded-lg bg-white dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs font-bold text-gray-500 dark:text-gray-400 w-6">#{idx + 1}</span>
+                      <span className="text-sm font-medium text-gray-900 dark:text-white">
+                        {order.customer_name || 'Unknown Customer'}
+                      </span>
+                      {order.order_confirmed ? (
+                        <span className="text-xs px-2 py-0.5 rounded bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300">
+                          Confirmed
+                        </span>
+                      ) : (
+                        <span className="text-xs px-2 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
+                          Not Confirmed
+                        </span>
+                      )}
+                      <span className={`text-xs px-2 py-0.5 rounded ${
+                        order.matchConfidence === 'high'
+                          ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300'
+                          : 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300'
+                      }`}>
+                        {order.matchMethod} ({order.matchConfidence})
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400">
+                      {order.order_total != null && order.order_total > 0 && (
+                        <span className="text-green-600 dark:text-green-400 font-medium">${order.order_total.toFixed(2)}</span>
+                      )}
+                      {order.store_id && <span>Store #{order.store_id}</span>}
+                    </div>
+                  </div>
+                  <div className="mt-1 flex items-center gap-4 text-xs text-gray-500 dark:text-gray-400">
+                    {order.customer_phone && <span>{order.customer_phone}</span>}
+                    {order.timestamp && <span>{formatTimestamp(order.timestamp)}</span>}
+                    {order.endpoint && <span className="font-mono">{order.endpoint}</span>}
+                    {order.items_count != null && order.items_count > 0 && <span>{order.items_count} items</span>}
+                  </div>
+                  {order.order_summary && (
+                    <div className="mt-2 text-xs text-gray-600 dark:text-gray-300 truncate">
+                      {order.order_summary}
                     </div>
                   )}
                 </div>

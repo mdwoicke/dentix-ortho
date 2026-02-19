@@ -125,8 +125,8 @@ export class DominosOrderLogModel {
       }
 
       if (sessionId) {
-        where += ' AND session_id = ?';
-        params.push(sessionId);
+        where += ' AND session_id LIKE ?';
+        params.push(`%${sessionId}%`);
       }
       if (storeId) {
         where += ' AND store_id = ?';

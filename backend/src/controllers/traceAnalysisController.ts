@@ -890,6 +890,11 @@ export async function analyzeSession(req: Request, res: Response): Promise<void>
     let sessionData = service.getSession(sessionId, configId);
     let wasJustImported = false;
 
+    // Reverse-lookup: sessionId may be an original Langfuse ID regrouped into a conv_ session
+    if (!sessionData) {
+      sessionData = service.getSessionByOriginalId(sessionId, configId);
+    }
+
     if (!sessionData) {
       // Try importing from Langfuse
       try {
@@ -1064,6 +1069,11 @@ export async function getIntent(req: Request, res: Response): Promise<void> {
     let sessionData = service.getSession(sessionId, configId);
     let wasJustImported = false;
 
+    // Reverse-lookup: sessionId may be an original Langfuse ID regrouped into a conv_ session
+    if (!sessionData) {
+      sessionData = service.getSessionByOriginalId(sessionId, configId);
+    }
+
     if (!sessionData) {
       try {
         sessionData = await service.importSessionTraces(sessionId, configId);
@@ -1171,6 +1181,11 @@ export async function verifySession(req: Request, res: Response): Promise<void> 
     const service = new LangfuseTraceService(db);
     let sessionData = service.getSession(sessionId, configId);
     let wasJustImported = false;
+
+    // Reverse-lookup: sessionId may be an original Langfuse ID regrouped into a conv_ session
+    if (!sessionData) {
+      sessionData = service.getSessionByOriginalId(sessionId, configId);
+    }
 
     if (!sessionData) {
       try {

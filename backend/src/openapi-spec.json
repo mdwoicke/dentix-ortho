@@ -1,0 +1,1497 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Dentix-Ortho API",
+    "version": "1.0.0",
+    "description": "Express backend API for Dentix-Ortho practice management, test monitoring, Dominos integration, and trace analysis. IMPORTANT: All Cloud9 API endpoints (Patients, Appointments, Reference) support an 'environment' query parameter. Always use environment=production to get real production data. The default (sandbox) has limited test data only."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3002",
+      "description": "Local development server"
+    }
+  ],
+  "tags": [
+    { "name": "Patients", "description": "Patient search and demographics (Cloud9 API proxy)" },
+    { "name": "Appointments", "description": "Appointment scheduling and availability (Cloud9 API proxy)" },
+    { "name": "Reference", "description": "Reference data: locations, providers, appointment types" },
+    { "name": "Test Monitor", "description": "Test runs, production calls, sessions, prompt management" },
+    { "name": "Dominos", "description": "Dominos order dashboard, sessions, health, and diagnostics" },
+    { "name": "Trace Analysis", "description": "Session-level trace analysis, intent classification, corrections" },
+    { "name": "Node-RED Ortho", "description": "Node-RED middleware endpoints for Cloud9 Ortho operations (patient lookup, scheduling, appointments). These proxy through Express to the production Node-RED server." }
+  ],
+  "paths": {
+    "/api/patients/search": {
+      "get": {
+        "tags": ["Patients"],
+        "summary": "Search patients by name",
+        "description": "Searches Cloud9 for patients matching a 'LastName, FirstName' filter string. Use environment=production for real data.",
+        "parameters": [
+          { "name": "query", "in": "query", "required": true, "schema": { "type": "string" }, "description": "Search filter, typically 'LastName, FirstName' or patient ID" },
+          { "name": "environment", "in": "query", "required": true, "schema": { "type": "string", "enum": ["production", "sandbox"], "default": "production" }, "description": "Cloud9 environment. Always use 'production' for real data." },
+          { "name": "pageIndex", "in": "query", "schema": { "type": "integer", "default": 1 }, "description": "Page index for pagination" },
+          { "name": "pageSize", "in": "query", "schema": { "type": "integer", "default": 25 }, "description": "Number of results per page" }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of matching patients",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "patients": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "PatientName": { "type": "string" },
+                          "PatientID": { "type": "string" },
+                          "PatientBirthDate": { "type": "string" },
+                          "ResponsiblePartyName": { "type": "string" }
+                        }
+                      }
+                    },
+                    "cached": { "type": "boolean" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/patients/{patientGuid}": {
+      "get": {
+        "tags": ["Patients"],
+        "summary": "Get patient by GUID",
+        "description": "Retrieves full patient information from Cloud9 by patient GUID. Use environment=production for real data.",
+        "parameters": [
+          { "name": "patientGuid", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" }, "description": "Cloud9 patient GUID" },
+          { "name": "environment", "in": "query", "required": true, "schema": { "type": "string", "enum": ["production", "sandbox"], "default": "production" }, "description": "Cloud9 environment. Always use 'production' for real data." }
+        ],
+        "responses": {
+          "200": {
+            "description": "Patient details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "patient": {
+                      "type": "object",
+                      "properties": {
+                        "FullName": { "type": "string" },
+                        "BirthDate": { "type": "string" },
+                        "Email": { "type": "string" },
+                        "Phone": { "type": "string" },
+                        "Orthodontist": { "type": "string" }
+                      }
+                    },
+                    "cached": { "type": "boolean" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/appointments/patient/{patientGuid}": {
+      "get": {
+        "tags": ["Appointments"],
+        "summary": "Get appointments for a patient",
+        "description": "Retrieves all appointments for a specific patient from Cloud9. Use environment=production for real data.",
+        "parameters": [
+          { "name": "patientGuid", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" }, "description": "Cloud9 patient GUID" },
+          { "name": "environment", "in": "query", "required": true, "schema": { "type": "string", "enum": ["production", "sandbox"], "default": "production" }, "description": "Cloud9 environment. Always use 'production' for real data." }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of patient appointments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "appointments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "AppointmentGUID": { "type": "string" },
+                          "StartTime": { "type": "string" },
+                          "EndTime": { "type": "string" },
+                          "AppointmentType": { "type": "string" },
+                          "Status": { "type": "string" },
+                          "Location": { "type": "string" },
+                          "Provider": { "type": "string" }
+                        }
+                      }
+                    },
+                    "cached": { "type": "boolean" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/appointments/available": {
+      "get": {
+        "tags": ["Appointments"],
+        "summary": "Check available appointment slots",
+        "description": "Returns available scheduling slots from Cloud9 online reservations. Date range must be within 28 weeks. Use environment=production for real data.",
+        "parameters": [
+          { "name": "startDate", "in": "query", "required": true, "schema": { "type": "string" }, "description": "Start date (MM/DD/YYYY)" },
+          { "name": "endDate", "in": "query", "required": true, "schema": { "type": "string" }, "description": "End date (MM/DD/YYYY)" },
+          { "name": "environment", "in": "query", "required": true, "schema": { "type": "string", "enum": ["production", "sandbox"], "default": "production" }, "description": "Cloud9 environment. Always use 'production' for real data." },
+          { "name": "locationGuid", "in": "query", "schema": { "type": "string", "format": "uuid" }, "description": "Filter by location GUID" },
+          { "name": "scheduleViewGUID", "in": "query", "schema": { "type": "string", "format": "uuid" }, "description": "Filter by schedule view GUID" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Available appointment slots",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "slots": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "StartTime": { "type": "string" },
+                          "EndTime": { "type": "string" },
+                          "ScheduleViewGUID": { "type": "string" },
+                          "ScheduleColumnGUID": { "type": "string" }
+                        }
+                      }
+                    },
+                    "cached": { "type": "boolean" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/appointments/date-range": {
+      "get": {
+        "tags": ["Appointments"],
+        "summary": "[DEPRECATED] Get appointments by date range",
+        "description": "Returns HTTP 410 Gone. Cloud9 API does not support date range queries directly.",
+        "parameters": [
+          { "name": "startDate", "in": "query", "schema": { "type": "string" } },
+          { "name": "endDate", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "410": { "description": "Gone - endpoint deprecated" }
+        },
+        "deprecated": true
+      }
+    },
+    "/api/reference/locations": {
+      "get": {
+        "tags": ["Reference"],
+        "summary": "Get all practice locations",
+        "description": "Returns all locations from Cloud9. Always fetched in real-time. IMPORTANT: Use environment=production to get all real locations. Default sandbox has very limited data.",
+        "parameters": [
+          { "name": "environment", "in": "query", "required": true, "schema": { "type": "string", "enum": ["production", "sandbox"], "default": "production" }, "description": "Cloud9 environment. Always use 'production' for real data." }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of locations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "locations": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "LocationGUID": { "type": "string" },
+                          "LocationName": { "type": "string" }
+                        }
+                      }
+                    },
+                    "cached": { "type": "boolean" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/reference/providers": {
+      "get": {
+        "tags": ["Reference"],
+        "summary": "Get all providers",
+        "description": "Returns all providers/doctors from Cloud9. Use environment=production for real data.",
+        "parameters": [
+          { "name": "environment", "in": "query", "required": true, "schema": { "type": "string", "enum": ["production", "sandbox"], "default": "production" }, "description": "Cloud9 environment. Always use 'production' for real data." }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of providers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "providers": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "ProviderGUID": { "type": "string" },
+                          "ProviderName": { "type": "string" },
+                          "Specialty": { "type": "string" }
+                        }
+                      }
+                    },
+                    "cached": { "type": "boolean" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/reference/appointment-types": {
+      "get": {
+        "tags": ["Reference"],
+        "summary": "Get appointment types",
+        "description": "Returns all available appointment types from Cloud9. Use environment=production for real data.",
+        "parameters": [
+          { "name": "environment", "in": "query", "required": true, "schema": { "type": "string", "enum": ["production", "sandbox"], "default": "production" }, "description": "Cloud9 environment. Always use 'production' for real data." }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of appointment types",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "appointmentTypes": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "AppointmentTypeGUID": { "type": "string" },
+                          "AppointmentTypeName": { "type": "string" },
+                          "Minutes": { "type": "integer" }
+                        }
+                      }
+                    },
+                    "cached": { "type": "boolean" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/test-monitor/runs": {
+      "get": {
+        "tags": ["Test Monitor"],
+        "summary": "List all test runs",
+        "description": "Returns paginated list of test runs with their status and result summary.",
+        "parameters": [
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 20 }, "description": "Max results to return" },
+          { "name": "offset", "in": "query", "schema": { "type": "integer", "default": 0 }, "description": "Offset for pagination" }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of test runs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "runs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "run_id": { "type": "string" },
+                          "status": { "type": "string", "enum": ["running", "completed", "failed", "aborted"] },
+                          "total_tests": { "type": "integer" },
+                          "passed": { "type": "integer" },
+                          "failed": { "type": "integer" },
+                          "started_at": { "type": "string", "format": "date-time" },
+                          "completed_at": { "type": "string", "format": "date-time" }
+                        }
+                      }
+                    },
+                    "total": { "type": "integer" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/test-monitor/runs/{runId}": {
+      "get": {
+        "tags": ["Test Monitor"],
+        "summary": "Get single test run with results",
+        "description": "Returns a test run with all individual test results.",
+        "parameters": [
+          { "name": "runId", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Test run ID" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Test run details with results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "run": { "type": "object" },
+                    "results": { "type": "array", "items": { "type": "object" } }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/test-monitor/dashboard-stats": {
+      "get": {
+        "tags": ["Test Monitor"],
+        "summary": "Get dashboard statistics",
+        "description": "Returns aggregated stats for the TestHealthWidget: pass rates, recent run counts, trends.",
+        "responses": {
+          "200": {
+            "description": "Dashboard statistics object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "totalRuns": { "type": "integer" },
+                    "passRate": { "type": "number" },
+                    "recentRuns": { "type": "array", "items": { "type": "object" } }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/test-monitor/production-calls": {
+      "get": {
+        "tags": ["Test Monitor"],
+        "summary": "List imported production traces",
+        "description": "Returns Langfuse traces imported into the local database. Supports filtering and pagination.",
+        "parameters": [
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 50 } },
+          { "name": "offset", "in": "query", "schema": { "type": "integer", "default": 0 } },
+          { "name": "status", "in": "query", "schema": { "type": "string" }, "description": "Filter by trace status" },
+          { "name": "fromDate", "in": "query", "schema": { "type": "string", "format": "date" }, "description": "Filter traces from this date" },
+          { "name": "toDate", "in": "query", "schema": { "type": "string", "format": "date" }, "description": "Filter traces up to this date" }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of production traces",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "traces": { "type": "array", "items": { "type": "object" } },
+                    "total": { "type": "integer" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/test-monitor/production-calls/sessions": {
+      "get": {
+        "tags": ["Test Monitor"],
+        "summary": "List production sessions",
+        "description": "Returns sessions (grouped conversations) from imported production traces.",
+        "parameters": [
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 50 } },
+          { "name": "offset", "in": "query", "schema": { "type": "integer", "default": 0 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of production sessions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "sessions": { "type": "array", "items": { "type": "object" } },
+                    "total": { "type": "integer" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/test-monitor/production-calls/sessions/{sessionId}": {
+      "get": {
+        "tags": ["Test Monitor"],
+        "summary": "Get single production session",
+        "description": "Returns a single session with all its traces and observations.",
+        "parameters": [
+          { "name": "sessionId", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Session ID" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Session details with traces",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "session": { "type": "object" },
+                    "traces": { "type": "array", "items": { "type": "object" } }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/test-monitor/production-calls/{traceId}": {
+      "get": {
+        "tags": ["Test Monitor"],
+        "summary": "Get single trace with observations",
+        "description": "Returns a single imported trace with its Langfuse observations.",
+        "parameters": [
+          { "name": "traceId", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Langfuse trace ID" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Trace details with observations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "trace": { "type": "object" },
+                    "observations": { "type": "array", "items": { "type": "object" } }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/test-monitor/production-calls/insights": {
+      "get": {
+        "tags": ["Test Monitor"],
+        "summary": "Get trace insights",
+        "description": "Returns comprehensive aggregated insights across imported traces.",
+        "responses": {
+          "200": {
+            "description": "Trace insights",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/api/test-monitor/tests/{testId}/transcript": {
+      "get": {
+        "tags": ["Test Monitor"],
+        "summary": "Get conversation transcript for a test",
+        "description": "Returns the full conversation transcript (messages exchanged) for a specific test result.",
+        "parameters": [
+          { "name": "testId", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Test result ID" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Conversation transcript",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/api/test-monitor/tests/{testId}/api-calls": {
+      "get": {
+        "tags": ["Test Monitor"],
+        "summary": "Get API calls for a test",
+        "description": "Returns all Cloud9 API calls made during a specific test.",
+        "parameters": [
+          { "name": "testId", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Test result ID" }
+        ],
+        "responses": {
+          "200": {
+            "description": "API call log",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/api/test-monitor/scenarios": {
+      "get": {
+        "tags": ["Test Monitor"],
+        "summary": "List available test scenarios",
+        "description": "Returns all configured test scenarios that can be executed.",
+        "responses": {
+          "200": {
+            "description": "List of test scenarios",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/api/test-monitor/goal-tests": {
+      "get": {
+        "tags": ["Test Monitor"],
+        "summary": "List goal-based test cases",
+        "description": "Returns all goal-oriented test cases.",
+        "responses": {
+          "200": {
+            "description": "List of goal test cases",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/api/test-monitor/prompts": {
+      "get": {
+        "tags": ["Test Monitor"],
+        "summary": "List all prompt files",
+        "description": "Returns all managed prompt files (system prompt, tools, Node-RED flows).",
+        "responses": {
+          "200": {
+            "description": "List of prompt files with metadata",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/api/test-monitor/prompts/{fileKey}": {
+      "get": {
+        "tags": ["Test Monitor"],
+        "summary": "Get prompt content",
+        "description": "Returns the current content of a specific prompt file.",
+        "parameters": [
+          { "name": "fileKey", "in": "path", "required": true, "schema": { "type": "string", "enum": ["system_prompt", "scheduling_tool", "patient_tool", "nodered_flow"] }, "description": "Prompt file key" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Prompt file content",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/api/test-monitor/prompts/{fileKey}/history": {
+      "get": {
+        "tags": ["Test Monitor"],
+        "summary": "Get prompt version history",
+        "description": "Returns version history for a specific prompt file.",
+        "parameters": [
+          { "name": "fileKey", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Prompt file key" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Version history",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/api/test-monitor/nodered/status": {
+      "get": {
+        "tags": ["Test Monitor"],
+        "summary": "Get Node-RED connection status",
+        "description": "Checks if the backend can reach the Node-RED instance.",
+        "responses": {
+          "200": {
+            "description": "Connection status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "connected": { "type": "boolean" },
+                    "url": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/test-monitor/nodered/flows": {
+      "get": {
+        "tags": ["Test Monitor"],
+        "summary": "List all Node-RED flow tabs",
+        "description": "Returns all flow tabs currently deployed in Node-RED.",
+        "responses": {
+          "200": {
+            "description": "List of flow tabs",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/api/test-monitor/flowise-configs": {
+      "get": {
+        "tags": ["Test Monitor"],
+        "summary": "Get all Flowise configurations",
+        "description": "Returns all Flowise chatflow configuration profiles.",
+        "responses": {
+          "200": {
+            "description": "List of Flowise configs",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/api/test-monitor/environment-presets": {
+      "get": {
+        "tags": ["Test Monitor"],
+        "summary": "Get all environment presets",
+        "description": "Returns environment presets (Prod, Sandbox A, Sandbox B) with their linked Flowise config IDs.",
+        "responses": {
+          "200": {
+            "description": "List of environment presets",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/api/test-monitor/prod-test-records": {
+      "get": {
+        "tags": ["Test Monitor"],
+        "summary": "List production test records",
+        "description": "Returns all tracked production test data records (patients created, appointments booked during testing).",
+        "parameters": [
+          { "name": "status", "in": "query", "schema": { "type": "string" }, "description": "Filter by record status" }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of production test records",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/api/test-monitor/prod-test-records/stats": {
+      "get": {
+        "tags": ["Test Monitor"],
+        "summary": "Get production test record statistics",
+        "description": "Returns summary statistics for tracked production test records.",
+        "responses": {
+          "200": {
+            "description": "Summary statistics",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/api/test-monitor/cache-health": {
+      "get": {
+        "tags": ["Test Monitor"],
+        "summary": "Get Redis slot cache health",
+        "description": "Returns health status of the Redis slot cache used by Node-RED.",
+        "responses": {
+          "200": {
+            "description": "Cache health status",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/api/dominos/dashboard/stats": {
+      "get": {
+        "tags": ["Dominos"],
+        "summary": "Get dashboard statistics",
+        "description": "Returns aggregated order statistics for the Dominos dashboard.",
+        "responses": {
+          "200": {
+            "description": "Dashboard stats",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "totalOrders": { "type": "integer" },
+                    "successRate": { "type": "number" },
+                    "avgResponseTime": { "type": "number" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dominos/dashboard/logs": {
+      "get": {
+        "tags": ["Dominos"],
+        "summary": "Get order logs",
+        "description": "Returns paginated Dominos order logs.",
+        "parameters": [
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 50 } },
+          { "name": "offset", "in": "query", "schema": { "type": "integer", "default": 0 } },
+          { "name": "status", "in": "query", "schema": { "type": "string" }, "description": "Filter by order status" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Order logs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "logs": { "type": "array", "items": { "type": "object" } },
+                    "total": { "type": "integer" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dominos/dashboard/logs/{id}": {
+      "get": {
+        "tags": ["Dominos"],
+        "summary": "Get single order log by ID",
+        "description": "Returns a specific Dominos order log entry.",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" }, "description": "Order log ID" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Order log detail",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/api/dominos/dashboard/performance": {
+      "get": {
+        "tags": ["Dominos"],
+        "summary": "Get performance metrics",
+        "description": "Returns performance metrics for Dominos order processing.",
+        "responses": {
+          "200": {
+            "description": "Performance data",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/api/dominos/dashboard/errors": {
+      "get": {
+        "tags": ["Dominos"],
+        "summary": "Get error logs",
+        "description": "Returns Dominos order error logs.",
+        "responses": {
+          "200": {
+            "description": "Error logs",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/api/dominos/dashboard/errors/by-type": {
+      "get": {
+        "tags": ["Dominos"],
+        "summary": "Get errors grouped by type",
+        "description": "Returns Dominos errors aggregated by error type.",
+        "responses": {
+          "200": {
+            "description": "Errors by type",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/api/dominos/dashboard/sessions/{sessionId}": {
+      "get": {
+        "tags": ["Dominos"],
+        "summary": "Get session detail",
+        "description": "Returns details for a specific Dominos order session.",
+        "parameters": [
+          { "name": "sessionId", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Session ID" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Session detail",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/api/dominos/sessions/{sessionId}": {
+      "get": {
+        "tags": ["Dominos"],
+        "summary": "Get session detail (alternate path)",
+        "description": "Alias for /dashboard/sessions/{sessionId}.",
+        "parameters": [
+          { "name": "sessionId", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Session ID" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Session detail",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/api/dominos/health": {
+      "get": {
+        "tags": ["Dominos"],
+        "summary": "Health check",
+        "description": "Returns basic health status of the Dominos integration.",
+        "responses": {
+          "200": {
+            "description": "Health status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string", "enum": ["ok", "degraded", "down"] }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dominos/health/detailed": {
+      "get": {
+        "tags": ["Dominos"],
+        "summary": "Detailed health check",
+        "description": "Returns detailed health status for all Dominos integration components.",
+        "responses": {
+          "200": {
+            "description": "Detailed health status",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/api/dominos/metrics": {
+      "get": {
+        "tags": ["Dominos"],
+        "summary": "Get operational metrics",
+        "description": "Returns operational metrics for the Dominos integration.",
+        "responses": {
+          "200": {
+            "description": "Metrics data",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/api/dominos/correlation": {
+      "get": {
+        "tags": ["Dominos"],
+        "summary": "Get order-trace correlation",
+        "description": "Returns correlation data linking Dominos orders to call traces.",
+        "responses": {
+          "200": {
+            "description": "Correlation data",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/api/dominos/store/{storeId}/info": {
+      "get": {
+        "tags": ["Dominos"],
+        "summary": "Get store info",
+        "description": "Returns information about a specific Dominos store.",
+        "parameters": [
+          { "name": "storeId", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Dominos store ID" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Store information",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/api/dominos/menu/{storeId}": {
+      "get": {
+        "tags": ["Dominos"],
+        "summary": "Get store menu",
+        "description": "Returns the full menu for a Dominos store.",
+        "parameters": [
+          { "name": "storeId", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Dominos store ID" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Store menu",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/api/dominos/coupons/{storeId}": {
+      "get": {
+        "tags": ["Dominos"],
+        "summary": "Get store coupons",
+        "description": "Returns available coupons for a Dominos store.",
+        "parameters": [
+          { "name": "storeId", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Dominos store ID" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Store coupons",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/api/trace-analysis/monitoring-results": {
+      "get": {
+        "tags": ["Trace Analysis"],
+        "summary": "Get filtered monitoring results",
+        "description": "Returns monitoring results with optional filters for session analysis.",
+        "parameters": [
+          { "name": "limit", "in": "query", "schema": { "type": "integer" } },
+          { "name": "offset", "in": "query", "schema": { "type": "integer" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Monitoring results",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/api/trace-analysis/{sessionId}": {
+      "get": {
+        "tags": ["Trace Analysis"],
+        "summary": "Full session analysis",
+        "description": "Returns full analysis of a session including transcript, intent classification, and tool sequence mapping.",
+        "parameters": [
+          { "name": "sessionId", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Langfuse session ID" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Full session analysis",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/api/trace-analysis/{sessionId}/intent": {
+      "get": {
+        "tags": ["Trace Analysis"],
+        "summary": "Get session intent classification",
+        "description": "Returns intent classification for a specific session.",
+        "parameters": [
+          { "name": "sessionId", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Langfuse session ID" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Intent classification",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/api/trace-analysis/{sessionId}/verify": {
+      "get": {
+        "tags": ["Trace Analysis"],
+        "summary": "Verify session fulfillment",
+        "description": "Checks whether a session's goals were fulfilled correctly.",
+        "parameters": [
+          { "name": "sessionId", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Langfuse session ID" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Fulfillment verification result",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/api/trace-analysis/{sessionId}/correction/history": {
+      "get": {
+        "tags": ["Trace Analysis"],
+        "summary": "Get correction history for a session",
+        "description": "Returns the history of booking corrections applied to a session.",
+        "parameters": [
+          { "name": "sessionId", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Langfuse session ID" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Correction history",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/api/nodered/ortho/getPatientByFilter": {
+      "post": {
+        "tags": ["Node-RED Ortho"],
+        "summary": "Search patients by name via Node-RED",
+        "description": "Calls the Node-RED getPatientByFilter endpoint (wraps Cloud9 GetPortalPatientLookup). Returns patients matching a 'LastName, FirstName' filter. This is the primary patient search endpoint used by the IVA.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["filter"],
+                "properties": {
+                  "filter": { "type": "string", "description": "Patient name filter, typically 'LastName, FirstName' format", "example": "Aleman, Chris" },
+                  "locationGUID": { "type": "string", "format": "uuid", "description": "Location GUID to filter by" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Patient search results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "patients": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "PatientName": { "type": "string" },
+                          "PatientID": { "type": "string" },
+                          "PatientBirthDate": { "type": "string" },
+                          "ResponsiblePartyName": { "type": "string" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/nodered/ortho/getPatient": {
+      "post": {
+        "tags": ["Node-RED Ortho"],
+        "summary": "Get patient details by GUID via Node-RED",
+        "description": "Calls the Node-RED getPatient endpoint. Returns full patient demographics, contact info, treatment staff, and insurance details for a specific patient GUID.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["patientGUID"],
+                "properties": {
+                  "patientGUID": { "type": "string", "format": "uuid", "description": "Cloud9 patient GUID", "example": "c18c1c72-e80e-4861-969b-6d0120e8ab60" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Patient details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "patient": {
+                      "type": "object",
+                      "properties": {
+                        "FullName": { "type": "string" },
+                        "BirthDate": { "type": "string" },
+                        "Email": { "type": "string" },
+                        "Phone": { "type": "string" },
+                        "Orthodontist": { "type": "string" },
+                        "TreatmentCoordinator": { "type": "string" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/nodered/ortho/createPatient": {
+      "post": {
+        "tags": ["Node-RED Ortho"],
+        "summary": "Create a new patient via Node-RED",
+        "description": "Calls the Node-RED createPatient endpoint (wraps Cloud9 SetPatient). Creates a new patient record in Cloud9.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["patientFirstName", "patientLastName", "locationGUID"],
+                "properties": {
+                  "patientFirstName": { "type": "string", "description": "Patient first name" },
+                  "patientLastName": { "type": "string", "description": "Patient last name" },
+                  "birthdayDateTime": { "type": "string", "description": "Birth date (MM/DD/YYYY)" },
+                  "gender": { "type": "string", "enum": ["M", "F"] },
+                  "phoneNumber": { "type": "string" },
+                  "locationGUID": { "type": "string", "format": "uuid", "description": "Location GUID" },
+                  "providerGUID": { "type": "string", "format": "uuid", "description": "Provider/Orthodontist GUID" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Created patient result",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/api/nodered/ortho/getPatientAppts": {
+      "post": {
+        "tags": ["Node-RED Ortho"],
+        "summary": "Get appointments for a patient via Node-RED",
+        "description": "Calls the Node-RED getPatientAppts endpoint (wraps Cloud9 GetAppointmentListByPatient). Returns all scheduled appointments for a patient.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["patientGUID"],
+                "properties": {
+                  "patientGUID": { "type": "string", "format": "uuid", "description": "Cloud9 patient GUID" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Patient appointments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "appointments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "AppointmentGUID": { "type": "string" },
+                          "StartTime": { "type": "string" },
+                          "EndTime": { "type": "string" },
+                          "AppointmentType": { "type": "string" },
+                          "Status": { "type": "string" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/nodered/ortho/getLocation": {
+      "post": {
+        "tags": ["Node-RED Ortho"],
+        "summary": "Get clinic/location details via Node-RED",
+        "description": "Calls the Node-RED getLocation endpoint. Returns clinic details including address, phone, hours for a specific location GUID.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["locationGUID"],
+                "properties": {
+                  "locationGUID": { "type": "string", "format": "uuid", "description": "Cloud9 location GUID" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Location details",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/api/nodered/ortho/editInsurance": {
+      "post": {
+        "tags": ["Node-RED Ortho"],
+        "summary": "Update patient insurance via Node-RED",
+        "description": "Calls the Node-RED editInsurance endpoint. Updates insurance information for a patient.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["patientGUID"],
+                "properties": {
+                  "patientGUID": { "type": "string", "format": "uuid" },
+                  "insuranceProvider": { "type": "string" },
+                  "insuranceGroupNumber": { "type": "string" },
+                  "insuranceMemberId": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Insurance update result",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/api/nodered/ortho/confirmAppt": {
+      "post": {
+        "tags": ["Node-RED Ortho"],
+        "summary": "Confirm an appointment via Node-RED",
+        "description": "Calls the Node-RED confirmAppt endpoint. Sets an appointment's status to confirmed.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["appointmentId"],
+                "properties": {
+                  "appointmentId": { "type": "string", "format": "uuid", "description": "Appointment GUID to confirm" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Confirmation result",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    },
+    "/api/nodered/ortho/getApptSlots": {
+      "post": {
+        "tags": ["Node-RED Ortho"],
+        "summary": "Get available appointment slots via Node-RED",
+        "description": "Calls the Node-RED getApptSlots endpoint. Returns available scheduling slots from the Cloud9 calendar within a date range. Uses Redis-cached slot data with tier-based search (30min, 40min, 60min appointment types).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["startDate", "endDate"],
+                "properties": {
+                  "startDate": { "type": "string", "description": "Start date (MM/DD/YYYY)", "example": "02/18/2026" },
+                  "endDate": { "type": "string", "description": "End date (MM/DD/YYYY)", "example": "03/04/2026" },
+                  "locationGUID": { "type": "string", "format": "uuid", "description": "Location GUID" },
+                  "appointmentTypeGUID": { "type": "string", "format": "uuid", "description": "Appointment type GUID" },
+                  "scheduleViewGUIDs": { "type": "string", "description": "Comma-separated schedule view GUIDs" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Available appointment slots",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "slots": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "date": { "type": "string" },
+                          "startTime": { "type": "string" },
+                          "endTime": { "type": "string" },
+                          "chair": { "type": "string" },
+                          "scheduleViewGUID": { "type": "string" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/nodered/ortho/getGroupedApptSlots": {
+      "post": {
+        "tags": ["Node-RED Ortho"],
+        "summary": "Get grouped/consecutive appointment slots for siblings via Node-RED",
+        "description": "Calls the Node-RED getGroupedApptSlots endpoint. Finds consecutive time slots that can accommodate multiple patients (siblings). Returns groups of back-to-back slots on the same chair.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["startDate", "endDate", "numberOfPatients"],
+                "properties": {
+                  "startDate": { "type": "string", "description": "Start date (MM/DD/YYYY)" },
+                  "endDate": { "type": "string", "description": "End date (MM/DD/YYYY)" },
+                  "numberOfPatients": { "type": "integer", "description": "Number of patients needing consecutive slots", "example": 2 },
+                  "locationGUID": { "type": "string", "format": "uuid" },
+                  "scheduleViewGUIDs": { "type": "string", "description": "Comma-separated schedule view GUIDs" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Grouped consecutive slots",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "groups": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "date": { "type": "string" },
+                          "chair": { "type": "string" },
+                          "slots": { "type": "array", "items": { "type": "object" } }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/nodered/ortho/createAppt": {
+      "post": {
+        "tags": ["Node-RED Ortho"],
+        "summary": "Book an appointment via Node-RED",
+        "description": "Calls the Node-RED createAppt endpoint (wraps Cloud9 SetAppointment). Creates a new appointment for a patient at a specific time slot. Includes slot reservation to prevent double-booking.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["patientGUID", "startTime", "scheduleViewGUID", "scheduleColumnGUID", "appointmentTypeGUID", "minutes"],
+                "properties": {
+                  "patientGUID": { "type": "string", "format": "uuid", "description": "Patient GUID" },
+                  "startTime": { "type": "string", "description": "Appointment start time (MM/DD/YYYY HH:MM AM/PM)", "example": "02/25/2026 10:00 AM" },
+                  "scheduleViewGUID": { "type": "string", "format": "uuid" },
+                  "scheduleColumnGUID": { "type": "string", "format": "uuid" },
+                  "appointmentTypeGUID": { "type": "string", "format": "uuid" },
+                  "minutes": { "type": "integer", "description": "Duration in minutes", "example": 30 },
+                  "childName": { "type": "string", "description": "Child patient name (for sibling booking)" },
+                  "VendorUserName": { "type": "string", "description": "Vendor user identifier", "default": "IntelepeerTest" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Booking result with appointment GUID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean" },
+                    "appointmentGUID": { "type": "string" },
+                    "message": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/nodered/ortho/cancelAppt": {
+      "post": {
+        "tags": ["Node-RED Ortho"],
+        "summary": "Cancel an appointment via Node-RED",
+        "description": "Calls the Node-RED cancelAppt endpoint. Cancels an existing appointment by its GUID.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["appointmentGUID"],
+                "properties": {
+                  "appointmentGUID": { "type": "string", "format": "uuid", "description": "Appointment GUID to cancel" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Cancellation result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean" },
+                    "message": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

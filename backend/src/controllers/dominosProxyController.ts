@@ -1,7 +1,12 @@
 import { Request, Response } from 'express';
 import axios, { AxiosError } from 'axios';
+import path from 'path';
+import BetterSqlite3 from 'better-sqlite3';
 import logger from '../utils/logger';
 import { DominosOrderLogModel } from '../models/DominosOrderLog';
+import { diagnose } from '../services/dominosDiagnosisService';
+
+const TEST_AGENT_DB_PATH = path.resolve(__dirname, '../../../test-agent/data/test-results.db');
 
 const READ_TIMEOUT = 30000;
 const WRITE_TIMEOUT = 60000;
@@ -445,6 +450,77 @@ export const importOrderLogs = async (req: Request, res: Response): Promise<void
   }
 };
 
+// ============================================================================
+// ORDER ERROR DIAGNOSIS
+// ============================================================================
+
+const diagnosisRateLimit = new Map<number, { count: number; resetAt: number }>();
+const DIAGNOSIS_RATE_LIMIT = 5;
+const DIAGNOSIS_RATE_WINDOW = 60000; // 1 minute
+
+export const diagnoseOrder = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const tenantId = getTenantId(req);
+    const logId = parseInt(req.params.logId);
+
+    if (isNaN(logId)) {
+      res.status(400).json({ success: false, error: 'Invalid log ID' });
+      return;
+    }
+
+    // Rate limit
+    const now = Date.now();
+    const rl = diagnosisRateLimit.get(tenantId);
+    if (rl && rl.resetAt > now) {
+      if (rl.count >= DIAGNOSIS_RATE_LIMIT) {
+        res.status(429).json({ success: false, error: 'Too many diagnosis requests. Try again in a minute.' });
+        return;
+      }
+      rl.count++;
+    } else {
+      diagnosisRateLimit.set(tenantId, { count: 1, resetAt: now + DIAGNOSIS_RATE_WINDOW });
+    }
+
+    // Get log
+    const log = DominosOrderLogModel.getById(tenantId, logId);
+    if (!log) {
+      res.status(404).json({ success: false, error: 'Log not found' });
+      return;
+    }
+    if (log.success === 1) {
+      res.status(409).json({ success: false, error: 'This order succeeded — nothing to diagnose' });
+      return;
+    }
+    if (!log.request_body) {
+      res.status(400).json({ success: false, error: 'No request body available for this log entry' });
+      return;
+    }
+
+    // Get service URL
+    const serviceUrl = getServiceUrl(req);
+    if (!serviceUrl) {
+      res.status(400).json({ success: false, error: 'Dominos service URL not configured for this tenant' });
+      return;
+    }
+
+    const options = {
+      skipReplay: req.body?.skipReplay === true,
+      skipFixTest: req.body?.skipFixTest === true,
+    };
+
+    const result = await diagnose(log, serviceUrl, options);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    logger.error('diagnoseOrder error', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    res.status(500).json({
+      success: false,
+      error: `Diagnosis failed: ${error instanceof Error ? error.message : String(error)}`,
+    });
+  }
+};
+
 function tryParseJSON(str: string): unknown {
   try {
     return JSON.parse(str);
@@ -452,3 +528,307 @@ function tryParseJSON(str: string): unknown {
     return str;
   }
 }
+
+// ============================================================================
+// ORDER <-> CALL TRACE CORRELATION
+// ============================================================================
+
+/**
+ * Normalize a phone number to last 10 digits for comparison.
+ * Handles formats like "+17208899120", "720-889-9120", "(720) 889-9120", etc.
+ */
+function normalizePhone(phone: string | null | undefined): string | null {
+  if (!phone) return null;
+  const digits = phone.replace(/\D/g, '');
+  if (digits.length < 10) return null;
+  return digits.slice(-10);
+}
+
+/**
+ * Extract phone number from a Langfuse session_id.
+ * Format: "conv_{configId}_{phone}_{epochMs}"
+ * Example: "conv_5_+17208899120_1770834765476" -> "7208899120"
+ */
+function extractPhoneFromSessionId(sessionId: string): string | null {
+  const parts = sessionId.split('_');
+  if (parts.length < 4 || parts[0] !== 'conv') return null;
+  // Phone is the 3rd segment (index 2)
+  return normalizePhone(parts[2]);
+}
+
+/**
+ * Correlate Dominos order logs with Langfuse call trace sessions.
+ *
+ * Strategy: phone number + time window matching
+ * - Extract phone from Langfuse session_id (conv_{config}_{phone}_{epoch})
+ * - Normalize order customer_phone to 10 digits
+ * - Match where phones are equal AND order timestamp falls within the session's time window (padded by 30 min)
+ */
+export const getOrderTraceCorrelation = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const tenantId = getTenantId(req);
+    const { sessionId, orderId, direction } = req.query;
+    // direction: 'order-to-trace' (given an order session, find Langfuse sessions)
+    //            'trace-to-order' (given a Langfuse session, find order logs)
+
+    let testDb: BetterSqlite3.Database | null = null;
+    try {
+      testDb = new BetterSqlite3(TEST_AGENT_DB_PATH, { readonly: true });
+    } catch (err) {
+      res.status(503).json({ success: false, error: 'Test agent database unavailable' });
+      return;
+    }
+
+    if (direction === 'trace-to-order' && sessionId) {
+      // Given a Langfuse session_id, find matching order logs
+      const phone = extractPhoneFromSessionId(String(sessionId));
+      const session = testDb.prepare(
+        'SELECT session_id, first_trace_at, last_trace_at, has_order FROM production_sessions WHERE session_id = ?'
+      ).get(String(sessionId)) as { session_id: string; first_trace_at: string; last_trace_at: string; has_order: number } | undefined;
+
+      if (!session) {
+        testDb.close();
+        res.json({ success: true, data: { matches: [], matchMethod: 'none', reason: 'Session not found in production_sessions' } });
+        return;
+      }
+
+      const matches: any[] = [];
+      let matchMethod = 'none';
+
+      if (phone) {
+        // Try phone + time window match
+        const paddedStart = new Date(new Date(session.first_trace_at).getTime() - 30 * 60 * 1000).toISOString();
+        const paddedEnd = new Date(new Date(session.last_trace_at).getTime() + 30 * 60 * 1000).toISOString();
+
+        const { getDatabase } = require('../config/database');
+        const mainDb = getDatabase();
+        const orderMatches = mainDb.prepare(`
+          SELECT id, session_id, timestamp, customer_phone, customer_name, store_id,
+                 order_total, items_count, order_confirmed, success, order_summary, endpoint
+          FROM dominos_order_logs
+          WHERE tenant_id = ?
+            AND customer_phone IS NOT NULL
+            AND customer_phone != ''
+            AND timestamp >= ? AND timestamp <= ?
+          ORDER BY timestamp ASC
+        `).all(tenantId, paddedStart, paddedEnd) as any[];
+
+        for (const order of orderMatches) {
+          const orderPhone = normalizePhone(order.customer_phone);
+          if (orderPhone === phone) {
+            matches.push({
+              ...order,
+              matchConfidence: 'high',
+              matchMethod: 'phone+time',
+            });
+          }
+        }
+        matchMethod = matches.length > 0 ? 'phone+time' : 'phone_no_match';
+      }
+
+      // Fallback: time-only matching if no phone match (lower confidence)
+      if (matches.length === 0) {
+        const paddedStart = new Date(new Date(session.first_trace_at).getTime() - 5 * 60 * 1000).toISOString();
+        const paddedEnd = new Date(new Date(session.last_trace_at).getTime() + 5 * 60 * 1000).toISOString();
+
+        const { getDatabase } = require('../config/database');
+        const mainDb = getDatabase();
+        const timeMatches = mainDb.prepare(`
+          SELECT id, session_id, timestamp, customer_phone, customer_name, store_id,
+                 order_total, items_count, order_confirmed, success, order_summary, endpoint
+          FROM dominos_order_logs
+          WHERE tenant_id = ?
+            AND order_confirmed = 1
+            AND timestamp >= ? AND timestamp <= ?
+          ORDER BY timestamp ASC
+          LIMIT 5
+        `).all(tenantId, paddedStart, paddedEnd) as any[];
+
+        for (const order of timeMatches) {
+          matches.push({
+            ...order,
+            matchConfidence: 'low',
+            matchMethod: 'time-only',
+          });
+        }
+        if (matches.length > 0) matchMethod = 'time-only';
+      }
+
+      testDb.close();
+      res.json({ success: true, data: { matches, matchMethod, sessionInfo: session } });
+      return;
+    }
+
+    if (direction === 'order-to-trace' && sessionId) {
+      // Given an order session_id (telephony format), find matching Langfuse sessions
+      const { getDatabase } = require('../config/database');
+      const mainDb = getDatabase();
+
+      // Get all orders in this telephony session
+      const orders = mainDb.prepare(`
+        SELECT id, session_id, timestamp, customer_phone, customer_name, store_id,
+               order_total, items_count, order_confirmed, success
+        FROM dominos_order_logs
+        WHERE tenant_id = ? AND session_id = ?
+        ORDER BY timestamp ASC
+      `).all(tenantId, String(sessionId)) as any[];
+
+      if (orders.length === 0) {
+        testDb.close();
+        res.json({ success: true, data: { matches: [], matchMethod: 'none', reason: 'No orders found for this session' } });
+        return;
+      }
+
+      // Collect phones from orders
+      const orderPhones = new Set<string>();
+      for (const o of orders) {
+        const p = normalizePhone(o.customer_phone);
+        if (p) orderPhones.add(p);
+      }
+
+      // Get time range of orders
+      const minTime = orders[0].timestamp;
+      const maxTime = orders[orders.length - 1].timestamp;
+      const paddedStart = new Date(new Date(minTime).getTime() - 30 * 60 * 1000).toISOString();
+      const paddedEnd = new Date(new Date(maxTime).getTime() + 30 * 60 * 1000).toISOString();
+
+      // Find Langfuse sessions in the time window (Dominos configs: 5 and 6)
+      const langfuseSessions = testDb.prepare(`
+        SELECT session_id, langfuse_config_id, first_trace_at, last_trace_at,
+               trace_count, has_order, has_transfer, error_count, total_latency_ms, input_preview
+        FROM production_sessions
+        WHERE langfuse_config_id IN (5, 6)
+          AND first_trace_at <= ?
+          AND last_trace_at >= ?
+        ORDER BY first_trace_at ASC
+      `).all(paddedEnd, paddedStart) as any[];
+
+      const matches: any[] = [];
+      for (const sess of langfuseSessions) {
+        const sessPhone = extractPhoneFromSessionId(sess.session_id);
+        if (sessPhone && orderPhones.has(sessPhone)) {
+          matches.push({
+            ...sess,
+            matchConfidence: 'high',
+            matchMethod: 'phone+time',
+          });
+        }
+      }
+
+      // Fallback: time-only for sessions without phone match
+      if (matches.length === 0) {
+        for (const sess of langfuseSessions) {
+          matches.push({
+            ...sess,
+            matchConfidence: 'low',
+            matchMethod: 'time-only',
+          });
+        }
+      }
+
+      testDb.close();
+      res.json({ success: true, data: { matches, orderCount: orders.length, orderPhones: [...orderPhones] } });
+      return;
+    }
+
+    // Bulk correlation: return all correlations for recent data
+    if (!sessionId && !orderId) {
+      const { getDatabase } = require('../config/database');
+      const mainDb = getDatabase();
+
+      // Get confirmed orders with phone numbers from last 30 days
+      const orders = mainDb.prepare(`
+        SELECT id, session_id, timestamp, customer_phone, customer_name, store_id,
+               order_total, order_confirmed
+        FROM dominos_order_logs
+        WHERE tenant_id = ?
+          AND customer_phone IS NOT NULL AND customer_phone != ''
+          AND timestamp >= datetime('now', '-30 days')
+        ORDER BY timestamp DESC
+        LIMIT 200
+      `).all(tenantId) as any[];
+
+      // Get all Dominos Langfuse sessions
+      const langfuseSessions = testDb.prepare(`
+        SELECT session_id, langfuse_config_id, first_trace_at, last_trace_at,
+               trace_count, has_order, has_transfer, error_count, input_preview
+        FROM production_sessions
+        WHERE langfuse_config_id IN (5, 6)
+        ORDER BY first_trace_at DESC
+        LIMIT 200
+      `).all() as any[];
+
+      // Build phone -> sessions index
+      const phoneToSessions = new Map<string, any[]>();
+      for (const sess of langfuseSessions) {
+        const phone = extractPhoneFromSessionId(sess.session_id);
+        if (phone) {
+          const arr = phoneToSessions.get(phone) || [];
+          arr.push(sess);
+          phoneToSessions.set(phone, arr);
+        }
+      }
+
+      // Match orders to sessions
+      const correlations: any[] = [];
+      for (const order of orders) {
+        const phone = normalizePhone(order.customer_phone);
+        if (!phone) continue;
+
+        const candidateSessions = phoneToSessions.get(phone) || [];
+        for (const sess of candidateSessions) {
+          // Check time overlap (order within session window +/- 30 min)
+          const orderTime = new Date(order.timestamp).getTime();
+          const sessStart = new Date(sess.first_trace_at).getTime() - 30 * 60 * 1000;
+          const sessEnd = new Date(sess.last_trace_at).getTime() + 30 * 60 * 1000;
+          if (orderTime >= sessStart && orderTime <= sessEnd) {
+            correlations.push({
+              orderId: order.id,
+              orderSessionId: order.session_id,
+              orderTimestamp: order.timestamp,
+              orderPhone: order.customer_phone,
+              orderCustomer: order.customer_name,
+              orderTotal: order.order_total,
+              orderConfirmed: order.order_confirmed,
+              langfuseSessionId: sess.session_id,
+              langfuseConfigId: sess.langfuse_config_id,
+              langfuseFirstTrace: sess.first_trace_at,
+              langfuseLastTrace: sess.last_trace_at,
+              langfuseHasOrder: sess.has_order,
+              langfuseTraceCount: sess.trace_count,
+              matchConfidence: 'high',
+              matchMethod: 'phone+time',
+            });
+          }
+        }
+      }
+
+      testDb.close();
+      res.json({
+        success: true,
+        data: {
+          correlations,
+          stats: {
+            ordersChecked: orders.length,
+            sessionsChecked: langfuseSessions.length,
+            matchesFound: correlations.length,
+            uniquePhonesInOrders: new Set(orders.map((o: any) => normalizePhone(o.customer_phone)).filter(Boolean)).size,
+            uniquePhonesInSessions: phoneToSessions.size,
+          },
+        },
+      });
+      return;
+    }
+
+    if (testDb) testDb.close();
+    res.status(400).json({ success: false, error: 'Provide sessionId with direction=trace-to-order or direction=order-to-trace' });
+  } catch (error) {
+    logger.error('getOrderTraceCorrelation error', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    res.status(500).json({
+      success: false,
+      error: `Correlation failed: ${error instanceof Error ? error.message : String(error)}`,
+    });
+  }
+};

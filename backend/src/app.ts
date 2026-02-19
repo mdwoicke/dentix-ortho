@@ -16,6 +16,9 @@ import skillsRunnerRoutes from './routes/skillsRunner';
 import heartbeatRoutes from './routes/heartbeat';
 import traceAnalysisRoutes from './routes/traceAnalysis';
 import dominosRoutes from './routes/dominos';
+import apiAgentRoutes from './routes/apiAgent';
+import nodeRedProxyRoutes from './routes/nodeRedProxy';
+import path from 'path';
 
 /**
  * Express Application Setup
@@ -66,6 +69,11 @@ app.get('/health', (_req: Request, res: Response) => {
   });
 });
 
+// OpenAPI spec for api-agent introspection
+app.get('/api/docs/openapi.json', (_req: Request, res: Response) => {
+  res.sendFile(path.join(__dirname, 'openapi-spec.json'));
+});
+
 // API Routes
 app.use('/api/reference', referenceRoutes);
 app.use('/api/patients', patientRoutes);
@@ -78,6 +86,8 @@ app.use('/api/skills-runner', skillsRunnerRoutes);
 app.use('/api/heartbeat', heartbeatRoutes);
 app.use('/api/trace-analysis', traceAnalysisRoutes);
 app.use('/api/dominos', dominosRoutes);
+app.use('/api/api-agent', apiAgentRoutes);
+app.use('/api/nodered/ortho', nodeRedProxyRoutes);
 
 // ===========================================
 // Error Handling

@@ -6,6 +6,7 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { PageHeader } from '../../components/layout';
 import { Button, Card, Spinner } from '../../components/ui';
+import ApiAgentChatPanel from '../../components/features/apiAgent/ApiAgentChatPanel';
 
 // Types
 type TestStatus = 'pending' | 'running' | 'success' | 'error';
@@ -2023,6 +2024,9 @@ function Cloud9TestCard({
 
 // Main Page Component
 export function APITestingPage() {
+  // Chat panel state
+  const [isChatOpen, setIsChatOpen] = useState(false);
+
   // API Mode State
   const [apiMode, setApiMode] = useState<ApiMode>('nodeRed');
 
@@ -2473,6 +2477,24 @@ export function APITestingPage() {
           )}
         </>
       )}
+
+      {/* API Agent Chat FAB */}
+      <button
+        onClick={() => setIsChatOpen(true)}
+        className="fixed bottom-6 right-6 z-30 w-14 h-14 rounded-full
+          bg-indigo-600 hover:bg-indigo-700 text-white
+          shadow-lg hover:shadow-xl
+          flex items-center justify-center
+          transition-all duration-200 hover:scale-105"
+        title="Open API Agent Chat"
+      >
+        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+        </svg>
+      </button>
+
+      {/* API Agent Chat Panel */}
+      <ApiAgentChatPanel isOpen={isChatOpen} onClose={() => setIsChatOpen(false)} />
     </div>
   );
 }

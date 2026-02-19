@@ -38,4 +38,10 @@ router.get('/menu/:storeId', dominos.getStoreMenu);
 // Coupons
 router.get('/coupons/:storeId', dominos.getStoreCoupons);
 
+// Order <-> Call Trace Correlation
+router.get('/correlation', dominos.getOrderTraceCorrelation);
+
+// Error Diagnosis
+router.post('/diagnose/:logId', dominos.diagnoseOrder);
+
 export default router;

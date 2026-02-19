@@ -9984,6 +9984,12 @@ export async function getProductionSession(
       parsedConfigId || undefined
     );
 
+    // If not found, try reverse-lookup: the sessionId may be an original Langfuse session ID
+    // that was regrouped into a conv_ session by rebuildSessions
+    if (!result) {
+      result = service.getSessionByOriginalId(sessionId, parsedConfigId || undefined);
+    }
+
     // If not found locally, try on-demand import from Langfuse
     if (!result && parsedConfigId !== null) {
       console.log(`[getProductionSession] Session ${sessionId} not found locally, attempting on-demand import from config ${parsedConfigId}`);

@@ -12,3 +12,5 @@ export { useReference } from './useReference';
 export type { UseReferenceOptions } from './useReference';
 export { usePatients } from './usePatients';
 export { useAppointments } from './useAppointments';
+export { useApiAgentChat } from './useApiAgentChat';
+export type { ChatMessage, ApiSource, UseApiAgentChatOptions } from './useApiAgentChat';

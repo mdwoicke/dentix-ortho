@@ -1139,6 +1139,7 @@ export class Database {
         started_at TEXT NOT NULL,
         ended_at TEXT,
         environment TEXT,
+        original_session_id TEXT,
         imported_at TEXT DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (langfuse_config_id) REFERENCES langfuse_configs(id)
       );
@@ -1420,6 +1421,10 @@ export class Database {
 
     // Add index for environment filtering
     db.exec(`CREATE INDEX IF NOT EXISTS idx_test_runs_environment ON test_runs(environment_preset_name)`);
+
+    // Migration: Add original_session_id to production_traces for reverse-lookup after session rebuild
+    this.addColumnIfNotExists('production_traces', 'original_session_id', 'TEXT');
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_production_traces_original_session ON production_traces(original_session_id)`);
 
     // Initialize built-in enhancement templates
     this.initializeBuiltInTemplates();

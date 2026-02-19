@@ -236,13 +236,18 @@ export async function getStoreMenu(storeId: string): Promise<{
         }
       }
 
+      // A product is available if at least one of its variants has Prepared === true
+      const isAvailable = variantCodes.length === 0
+        ? true
+        : variantCodes.some((vc: string) => variants[vc]?.Prepared === true);
+
       items.push({
         code,
         name: product.Name || code,
         description: product.Description || '',
         price,
         category: product.ProductType || product.Category || '',
-        available: product.AvailableToppings !== undefined || true,
+        available: isAvailable,
       });
     }
 
@@ -338,6 +343,15 @@ function parseCouponsFromMenuObject(obj: Record<string, any>): DominosCoupon[] {
   }));
 }
 
+// Error Diagnosis
+export async function diagnoseOrder(
+  logId: number,
+  options?: { skipReplay?: boolean; skipFixTest?: boolean }
+): Promise<import('../../types/dominos.types').DominosDiagnosisResult> {
+  const { data } = await dominosClient.post(`/diagnose/${logId}`, options || {});
+  return data.data || data;
+}
+
 // Import
 export async function importOrderLogs(dataSourceUrl?: string): Promise<{
   imported: number;
@@ -345,6 +359,43 @@ export async function importOrderLogs(dataSourceUrl?: string): Promise<{
   total_fetched: number;
 }> {
   const { data } = await dominosClient.post('/dashboard/import', dataSourceUrl ? { dataSourceUrl } : {});
+  return data.data || data;
+}
+
+// Order <-> Call Trace Correlation
+export interface OrderTraceMatch {
+  matchConfidence: 'high' | 'low';
+  matchMethod: 'phone+time' | 'time-only' | 'none';
+  // Order fields (when trace-to-order)
+  id?: number;
+  session_id?: string;
+  timestamp?: string;
+  customer_phone?: string;
+  customer_name?: string;
+  store_id?: string;
+  order_total?: number;
+  items_count?: number;
+  order_confirmed?: number;
+  success?: number;
+  order_summary?: string;
+  endpoint?: string;
+  // Langfuse session fields (when order-to-trace)
+  langfuse_config_id?: number;
+  first_trace_at?: string;
+  last_trace_at?: string;
+  trace_count?: number;
+  has_order?: number;
+  has_transfer?: number;
+  error_count?: number;
+  total_latency_ms?: number;
+  input_preview?: string;
+}
+
+export async function getOrderTraceCorrelation(params: {
+  sessionId: string;
+  direction: 'trace-to-order' | 'order-to-trace';
+}): Promise<{ matches: OrderTraceMatch[]; matchMethod?: string; sessionInfo?: any }> {
+  const { data } = await dominosClient.get('/correlation', { params });
   return data.data || data;
 }
 

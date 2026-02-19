@@ -143,6 +143,12 @@ export const STORAGE_KEYS = {
   SIDEBAR_COLLAPSED: 'dentix_sidebar_collapsed',
   AUTH_TOKEN: 'dentix_auth_token',
   TENANT_ID: 'dentix_tenant_id',
+  API_AGENT_MESSAGES: 'dentix_api_agent_messages',
+  API_AGENT_SESSION_ID: 'dentix_api_agent_session_id',
+  API_AGENT_SOURCE: 'dentix_api_agent_source',
+  DOMINOS_CHAT_MESSAGES: 'dentix_dominos_chat_messages',
+  DOMINOS_CHAT_SESSION_ID: 'dentix_dominos_chat_session_id',
+  DOMINOS_CHAT_SOURCE: 'dentix_dominos_chat_source',
 } as const;
 
 /**

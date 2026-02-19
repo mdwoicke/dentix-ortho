@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import * as dominosApi from '../../services/api/dominosApi';
+import type { OrderTraceMatch } from '../../services/api/dominosApi';
 import type { DominosOrderLog, DominosSessionDetail } from '../../types/dominos.types';
 
 // ============================================================================
@@ -70,6 +71,10 @@ export default function DominosSessions() {
   const [sessionDetail, setSessionDetail] = useState<DominosSessionDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
 
+  // Correlated call traces
+  const [correlatedTraces, setCorrelatedTraces] = useState<OrderTraceMatch[]>([]);
+  const [tracesLoading, setTracesLoading] = useState(false);
+
   // Auto-refresh state
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState<boolean>(getStoredAutoRefreshEnabled);
   const [autoRefreshInterval, setAutoRefreshInterval] = useState<number>(getStoredAutoRefreshInterval);
@@ -120,10 +125,12 @@ export default function DominosSessions() {
     if (expandedSession === sessionId) {
       setExpandedSession(null);
       setSessionDetail(null);
+      setCorrelatedTraces([]);
       return;
     }
     setExpandedSession(sessionId);
     setDetailLoading(true);
+    setCorrelatedTraces([]);
     try {
       const detail = await dominosApi.getSessionDetail(sessionId);
       // Build summary from returned logs if not present
@@ -157,6 +164,14 @@ export default function DominosSessions() {
     } finally {
       setDetailLoading(false);
     }
+
+    // Fetch correlated call traces in background
+    setTracesLoading(true);
+    try {
+      const result = await dominosApi.getOrderTraceCorrelation({ sessionId, direction: 'order-to-trace' });
+      setCorrelatedTraces(result.matches || []);
+    } catch { /* silent */ }
+    finally { setTracesLoading(false); }
   };
 
   // Silent auto-refresh: re-fetch logs
@@ -376,6 +391,53 @@ export default function DominosSessions() {
                           <span className="text-red-600">Failed: {sessionDetail.summary?.failCount ?? 0}</span>
                           <span>Total response: {sessionDetail.summary?.totalResponseTime ?? 0}ms</span>
                         </div>
+                        {/* Correlated Call Traces */}
+                        {tracesLoading && (
+                          <div className="flex items-center gap-2 text-xs text-purple-500">
+                            <svg className="animate-spin h-3 w-3" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                            </svg>
+                            <span>Looking for related call traces...</span>
+                          </div>
+                        )}
+                        {!tracesLoading && correlatedTraces.length > 0 && (
+                          <div className="p-3 rounded-lg bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800">
+                            <div className="flex items-center gap-2 mb-2">
+                              <svg className="w-4 h-4 text-purple-600 dark:text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                              </svg>
+                              <span className="text-xs font-medium text-purple-700 dark:text-purple-300">
+                                Related Call Traces ({correlatedTraces.length})
+                              </span>
+                            </div>
+                            {correlatedTraces.map((trace, i) => (
+                              <div key={trace.session_id || i} className="flex items-center gap-3 text-xs py-1">
+                                <span className="font-mono text-purple-600 dark:text-purple-400 truncate max-w-[200px]" title={trace.session_id}>
+                                  {trace.session_id}
+                                </span>
+                                <span className="text-gray-500">{trace.trace_count} msgs</span>
+                                {trace.has_order ? (
+                                  <span className="text-green-600 dark:text-green-400">order placed</span>
+                                ) : null}
+                                {trace.has_transfer ? (
+                                  <span className="text-orange-600 dark:text-orange-400">transferred</span>
+                                ) : null}
+                                {trace.first_trace_at && (
+                                  <span className="text-gray-400">{new Date(trace.first_trace_at).toLocaleString()}</span>
+                                )}
+                                <span className={`px-1.5 py-0.5 rounded text-xs ${
+                                  trace.matchConfidence === 'high'
+                                    ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300'
+                                    : 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300'
+                                }`}>
+                                  {trace.matchMethod}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
                         {/* Timeline */}
                         <div className="space-y-2">
                           {(sessionDetail.logs || []).map((log: any, i: number) => (

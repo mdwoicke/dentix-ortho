@@ -56,6 +56,12 @@ export interface DominosLogDetail extends DominosOrderLog {
   order_confirmed?: number;
 }
 
+/** Topping with customization level */
+export interface ToppingOption {
+  name: string;
+  modifier: 'normal' | 'light' | 'extra' | 'double' | 'none';
+}
+
 /** Parsed order item with category and friendly names */
 export interface ParsedOrderItem {
   categoryCode: string;
@@ -63,7 +69,7 @@ export interface ParsedOrderItem {
   code: string;
   name: string;
   quantity: number;
-  options: string[];
+  options: ToppingOption[];
   icon: string;
 }
 
@@ -169,4 +175,65 @@ export interface DominosOrderSubmission {
   }[];
   paymentType: 'Cash' | 'Card';
   serviceMethod: 'Delivery' | 'Carryout';
+}
+
+// ============================================================================
+// ERROR DIAGNOSIS
+// ============================================================================
+
+export type DiagnosisErrorCategory =
+  | 'INVALID_MENU_ITEM' | 'INVALID_COUPON' | 'SERVICE_METHOD_ERROR'
+  | 'STORE_CLOSED' | 'TIMEOUT' | 'CODE_BUG' | 'INPUT_VALIDATION'
+  | 'ADDRESS_ERROR' | 'OTHER';
+
+export interface DiagnosisInvestigationCheck {
+  name: string;
+  label: string;
+  status: 'pass' | 'fail' | 'warn' | 'skip' | 'error';
+  detail: string;
+}
+
+export interface DiagnosisProblematicItem {
+  code: string;
+  reason: string;
+  alternatives: string[];
+}
+
+export interface DiagnosisReplayResult {
+  performed: boolean;
+  success: boolean;
+  sameError: boolean;
+  statusCode: number;
+  errorMessage: string | null;
+  responseTimeMs: number;
+}
+
+export interface DiagnosisFixProposal {
+  description: string;
+  changes: { field: string; from: string; to: string }[];
+  testResult: {
+    performed: boolean;
+    success: boolean;
+    statusCode: number;
+    responseTimeMs: number;
+    note: string;
+  };
+}
+
+export interface DominosDiagnosisResult {
+  logId: number;
+  category: DiagnosisErrorCategory;
+  categoryLabel: string;
+  confidence: number;
+  rootCause: string;
+  explanation: string;
+  investigation: {
+    checksPerformed: DiagnosisInvestigationCheck[];
+    problematicItems: DiagnosisProblematicItem[];
+  };
+  replay: DiagnosisReplayResult;
+  fixProposal: DiagnosisFixProposal | null;
+  resolution: string[];
+  diagnosedAt: string;
+  durationMs: number;
 }

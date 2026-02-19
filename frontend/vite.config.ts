@@ -14,6 +14,7 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 5174,
     strictPort: true,
+    allowedHosts: ['.digitalresponsetech.com'],
     proxy: {
       // Proxy backend API calls - enables network access via any IP
       '/api': {

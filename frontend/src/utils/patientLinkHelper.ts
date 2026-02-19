@@ -243,11 +243,20 @@ export function extractPatientsFromApiCall(apiCall: ApiCall): ExtractedPatient[]
  */
 export function extractPatientsFromApiCalls(apiCalls: ApiCall[]): ExtractedPatient[] {
   const patients = new Map<string, ExtractedPatient>();
+  const seenNames = new Set<string>();
 
   for (const call of apiCalls) {
     const callPatients = extractPatientsFromApiCall(call);
     for (const patient of callPatients) {
       if (!patients.has(patient.patientGuid)) {
+        // Deduplicate by name too - if same name with different GUID (duplicate patient records), keep only the first
+        const nameKey = (patient.fullName || '').toLowerCase().trim();
+        if (nameKey && nameKey !== 'unknown patient' && seenNames.has(nameKey)) {
+          continue;
+        }
+        if (nameKey && nameKey !== 'unknown patient') {
+          seenNames.add(nameKey);
+        }
         patients.set(patient.patientGuid, patient);
       }
     }
