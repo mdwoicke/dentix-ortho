@@ -100,6 +100,8 @@ async function execute(_query: string): Promise<SkillResult> {
 export const cacheHealthSkill: SkillEntry = {
   id: 'cache-health',
   label: 'Cache Health',
+  category: 'nodered',
+  sampleQuery: 'Cache health status',
   triggers: [
     /cache\s+health/i,
     /(?:slot\s+)?cache\s+status/i,

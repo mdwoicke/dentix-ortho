@@ -109,6 +109,8 @@ async function execute(_query: string): Promise<SkillResult> {
 export const familyRecordsSkill: SkillEntry = {
   id: 'family-records',
   label: 'Family Records',
+  category: 'cloud9',
+  sampleQuery: 'Show family records',
   triggers: [
     /(?:show|list|get)\s+(?:me\s+)?(?:the\s+)?famil(?:y|ies)\s*(?:records?|groups?|bookings?)?/i,
     /family\s+(?:records?|groups?|bookings?|members?)/i,

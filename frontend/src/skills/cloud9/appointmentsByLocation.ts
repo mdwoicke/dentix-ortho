@@ -118,6 +118,8 @@ async function execute(query: string): Promise<SkillResult> {
 export const appointmentsByLocationSkill: SkillEntry = {
   id: 'appointments-by-location',
   label: 'Appointments by Location',
+  category: 'cloud9',
+  sampleQuery: 'Appointments at Philly',
   triggers: [
     /appointments?\s+(?:by|per|at|for|in)\s+(?:location|office)/i,
     /(?:bookings?|appointments?)\s+(?:at|for|in)\s+\w+/i,

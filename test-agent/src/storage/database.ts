@@ -460,8 +460,8 @@ export class Database {
     // Increase cache size to 64MB for better performance
     this.db.pragma('cache_size = -64000');
 
-    // Wait up to 5 seconds when database is locked (parallel writes)
-    this.db.pragma('busy_timeout = 5000');
+    // Wait up to 30 seconds when database is locked (parallel writes)
+    this.db.pragma('busy_timeout = 30000');
 
     // Enable memory-mapped I/O for faster reads (256MB)
     this.db.pragma('mmap_size = 268435456');

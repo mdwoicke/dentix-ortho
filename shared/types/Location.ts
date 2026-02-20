@@ -7,6 +7,7 @@ export interface Location {
   guid: string;
   name: string;
   code: string;
+  printedName?: string;
   timeZone?: string;
   address?: {
     street?: string;

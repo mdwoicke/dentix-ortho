@@ -80,6 +80,8 @@ async function execute(query: string): Promise<SkillResult> {
 export const recentSessionsSkill: SkillEntry = {
   id: 'recent-sessions',
   label: 'Recent Sessions',
+  category: 'call',
+  sampleQuery: 'Show recent sessions',
   triggers: [
     /(?:show|list|get)\s+(?:the\s+)?recent\s+(?:sessions|calls|conversations)/i,
     /recent\s+(?:sessions|calls|conversations)/i,

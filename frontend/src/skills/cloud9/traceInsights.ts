@@ -14,6 +14,7 @@
 
 import type { SkillEntry, SkillResult } from '../dominos/types';
 import { getTraceInsights } from '../../services/api/testMonitorApi';
+import { getActiveLangfuseConfig } from '../../services/api/appSettingsApi';
 import { parseTimeframe } from './timeframeUtils';
 
 function extractDays(query: string): number {
@@ -21,13 +22,22 @@ function extractDays(query: string): number {
   return m ? parseInt(m[1], 10) : 7;
 }
 
-function extractConfigId(query: string): number {
+function extractConfigId(query: string): number | null {
   const m = query.match(/config\s+(\d+)/i);
-  return m ? parseInt(m[1], 10) : 1;
+  return m ? parseInt(m[1], 10) : null;
 }
 
 async function execute(query: string): Promise<SkillResult> {
-  const configId = extractConfigId(query);
+  // Use explicit config if specified, otherwise fetch the active default
+  let configId = extractConfigId(query);
+  if (configId == null) {
+    try {
+      const active = await getActiveLangfuseConfig();
+      configId = active?.id ?? 1;
+    } catch {
+      configId = 1;
+    }
+  }
   const timeframe = parseTimeframe(query);
 
   // Use explicit date range if timeframe detected, otherwise fall back to lastDays
@@ -44,6 +54,20 @@ async function execute(query: string): Promise<SkillResult> {
       ? `${(o.patientToBookingConversion * 100).toFixed(1)}%`
       : '-';
 
+    // Compute link dates for clickable counts
+    let linkFrom: string, linkTo: string;
+    if (timeframe) {
+      linkFrom = timeframe.startDate;
+      linkTo = timeframe.endDate;
+    } else {
+      const days = extractDays(query);
+      const now = new Date();
+      const start = new Date(now); start.setDate(start.getDate() - days);
+      const fmt = (d: Date) => d.toISOString().split('T')[0];
+      linkFrom = fmt(start); linkTo = fmt(now);
+    }
+    const base = `/test-monitor/call-trace?fromDate=${linkFrom}&toDate=${linkTo}`;
+
     const lines: string[] = [];
     const headerLabel = timeframe ? timeframe.label : `Last ${data.timeframe.daysCount} days`;
     lines.push(`## Trace Insights (${headerLabel})\n`);
@@ -52,8 +76,8 @@ async function execute(query: string): Promise<SkillResult> {
     lines.push(`### Overview\n`);
     lines.push(`| Metric | Value |`);
     lines.push(`|--------|-------|`);
-    lines.push(`| **Total Sessions** | ${o.totalSessions} |`);
-    lines.push(`| **Successful Bookings** | ${o.successfulBookings} |`);
+    lines.push(`| **Total Sessions** | [${o.totalSessions}](${base}) |`);
+    lines.push(`| **Successful Bookings** | ${o.successfulBookings > 0 ? `[${o.successfulBookings}](${base}&disposition=bookings)` : '0'} |`);
     lines.push(`| **Patients Created** | ${o.patientsCreated} |`);
     lines.push(`| **Conversion Rate** | ${convRate} |`);
     lines.push('');
@@ -105,6 +129,8 @@ async function execute(query: string): Promise<SkillResult> {
 export const traceInsightsSkill: SkillEntry = {
   id: 'trace-insights',
   label: 'Trace Insights',
+  category: 'call',
+  sampleQuery: 'Show trace insights',
   triggers: [
     /(?:show|get)\s+(?:trace\s+)?insights/i,
     /trace\s+insights/i,

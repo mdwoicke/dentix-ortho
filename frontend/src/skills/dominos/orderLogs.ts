@@ -132,6 +132,8 @@ async function execute(query: string): Promise<SkillResult> {
 export const orderLogsSkill: SkillEntry = {
   id: 'order-logs',
   label: 'Order Logs',
+  category: 'dominos-orders',
+  sampleQuery: 'List recent orders',
   triggers: [
     /(?:list|show|get|display)\s+(?:the\s+)?(?:recent\s+)?(?:order\s+)?logs/i,
     /(?:list|show|get)\s+(?:the\s+)?recent\s+(?:\w+\s+)?orders/i,

@@ -59,9 +59,10 @@ export const getLocations = asyncHandler(async (req: Request, res: Response) => 
     guid: loc.LocationGUID,
     name: loc.LocationName,
     code: loc.LocationCode,
+    printedName: loc.LocationPrintedName,
     timeZone: loc.TimeZone,
     address: {
-      street: loc.AddressStreet,
+      street: loc.LocationAddress || loc.AddressStreet,
       city: loc.LocationCity || loc.AddressCity,
       state: loc.LocationState || loc.AddressState,
       postalCode: loc.LocationPostalCode || loc.AddressPostalCode,

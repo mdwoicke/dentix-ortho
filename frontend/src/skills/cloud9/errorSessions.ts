@@ -80,6 +80,8 @@ async function execute(query: string): Promise<SkillResult> {
 export const errorSessionsSkill: SkillEntry = {
   id: 'error-sessions',
   label: 'Error Sessions',
+  category: 'call',
+  sampleQuery: 'Find sessions with errors',
   triggers: [
     /error\s+sessions/i,
     /failed\s+(?:sessions|calls)/i,

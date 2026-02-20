@@ -118,6 +118,8 @@ async function execute(query: string): Promise<SkillResult> {
 export const appointmentsByProviderSkill: SkillEntry = {
   id: 'appointments-by-provider',
   label: 'Appointments by Provider',
+  category: 'cloud9',
+  sampleQuery: 'Appointments with Dr. Lee',
   triggers: [
     /appointments?\s+(?:by|per|with|for)\s+(?:provider|doctor|dr\.?)/i,
     /(?:bookings?|appointments?)\s+(?:with|for)\s+(?:Dr\.?\s+)?\w+/i,

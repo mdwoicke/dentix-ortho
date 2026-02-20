@@ -11,7 +11,7 @@
  */
 
 import type { SkillEntry, SkillResult } from '../dominos/types';
-import { getProductionSessions, getProdTestRecords } from '../../services/api/testMonitorApi';
+import { getProductionSessions, getProductionSessionStats, getProdTestRecords } from '../../services/api/testMonitorApi';
 import type { ProdTestRecord } from '../../services/api/testMonitorApi';
 import { parseTimeframe } from './timeframeUtils';
 
@@ -52,16 +52,43 @@ async function execute(query: string): Promise<SkillResult> {
   const metricFilter = detectMetricFilter(query);
 
   try {
+    // Summary mode: use the stats endpoint (computed from observations, not cached flags)
+    if (!metricFilter) {
+      const stats = await getProductionSessionStats({
+        fromDate: timeframe.startDate,
+        toDate: timeframe.endDate,
+      });
+
+      const base = `/test-monitor/call-trace?fromDate=${timeframe.startDate}&toDate=${timeframe.endDate}`;
+      const lines: string[] = [];
+      lines.push(`## Call Summary (${timeframe.label})\n`);
+      lines.push('| Metric | Value |');
+      lines.push('|--------|-------|');
+      lines.push(`| **Total Calls** | [${stats.total}](${base}) |`);
+      lines.push(`| **Bookings** | ${stats.bookings > 0 ? `[${stats.bookings}](${base}&disposition=bookings)` : '0'} |`);
+      lines.push(`| **Errors** | ${stats.errors > 0 ? `[${stats.errors}](${base}&disposition=errors)` : '0'} |`);
+      lines.push(`| **Transfers** | ${stats.transfers > 0 ? `[${stats.transfers}](${base}&disposition=transfers)` : '0'} |`);
+
+      return { success: true, markdown: lines.join('\n'), data: stats };
+    }
+
+    // Detail list mode: fetch sessions with higher limit
+    const probe = await getProductionSessions({
+      fromDate: timeframe.startDate,
+      toDate: timeframe.endDate,
+      limit: 1,
+    });
+    const fetchLimit = Math.max(probe.total, 200);
     const response = await getProductionSessions({
       fromDate: timeframe.startDate,
       toDate: timeframe.endDate,
-      limit: 200,
+      limit: fetchLimit,
     });
 
     const sessions = response.sessions || [];
 
     // Detail list mode: show filtered sessions
-    if (metricFilter) {
+    {
       const filtered = metricFilter === 'bookings'
         ? sessions.filter(s => s.hasSuccessfulBooking)
         : metricFilter === 'errors'
@@ -168,23 +195,6 @@ async function execute(query: string): Promise<SkillResult> {
 
       return { success: true, markdown: lines.join('\n'), data: filtered };
     }
-
-    // Count summary mode
-    const total = sessions.length;
-    const bookings = sessions.filter(s => s.hasSuccessfulBooking).length;
-    const errors = sessions.filter(s => s.errorCount > 0).length;
-    const transfers = sessions.filter(s => s.hasTransfer).length;
-
-    const lines: string[] = [];
-    lines.push(`## Call Summary (${timeframe.label})\n`);
-    lines.push('| Metric | Value |');
-    lines.push('|--------|-------|');
-    lines.push(`| **Total Calls** | ${total}${response.total > total ? ` (of ${response.total})` : ''} |`);
-    lines.push(`| **Bookings** | ${bookings} |`);
-    lines.push(`| **Errors** | ${errors} |`);
-    lines.push(`| **Transfers** | ${transfers} |`);
-
-    return { success: true, markdown: lines.join('\n'), data: { total, bookings, errors, transfers } };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return {
@@ -197,6 +207,8 @@ async function execute(query: string): Promise<SkillResult> {
 export const callStatsSkill: SkillEntry = {
   id: 'call-stats',
   label: 'Call Stats',
+  category: 'call',
+  sampleQuery: 'How many calls today',
   triggers: [
     /how\s+many\s+(?:calls?|sessions?|conversations?|bookings?|appointments?|errors?|transfers?)/i,
     /(?:calls?|sessions?|bookings?|appointments?|errors?|transfers?)\s+(?:from\s+)?(?:today|yesterday|this\s+\w+|last\s+\w+|past\s+\w+)/i,

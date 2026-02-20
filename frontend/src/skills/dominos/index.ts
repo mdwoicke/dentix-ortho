@@ -5,7 +5,7 @@
  * and produce formatted output without hitting the backend API agent.
  *
  * Usage:
- *   import { matchSkill, clearLastSkill } from '../../skills/dominos';
+ *   import { matchSkill, clearLastSkill, setCurrentApiSource } from '../../skills/dominos';
  *   const skill = matchSkill(userInput);
  *   if (skill) { const result = await skill.execute(userInput); }
  */
@@ -21,13 +21,22 @@ import { orderLogsSkill } from './orderLogs';
 import { errorAnalysisSkill } from './errorAnalysis';
 import { serviceHealthSkill } from './serviceHealth';
 import { sampleOrderSkill } from './sampleOrder';
+import { createAvailableSearchesSkill } from '../shared/availableSearches';
 import type { SkillEntry } from './types';
 
+/** Tracks the currently active Dominos category tab. */
+let _currentApiSource = 'dominos-orders';
+
+/** Update the active tab so the available-searches skill can filter by it. */
+export function setCurrentApiSource(source: string): void {
+  _currentApiSource = source;
+}
+
 /**
- * All registered Dominos skills.
+ * All registered Dominos skills (excluding the meta help skill).
  * Order matters — first match wins. More specific triggers come first.
  */
-const skills: SkillEntry[] = [
+const coreSkills: SkillEntry[] = [
   menuLookupSkill,      // "menu code for..." — local catalog
   couponSearchSkill,    // "find coupons..." — live API
   menuBrowserSkill,     // "show menu for store..." — live API (must be after menuLookup)
@@ -38,6 +47,14 @@ const skills: SkillEntry[] = [
   serviceHealthSkill,   // "is service up"
   sampleOrderSkill,     // "create a sample order" — last (broadest triggers)
 ];
+
+/** Meta skill: lists available searches for the current tab. */
+const availableSearchesSkill = createAvailableSearchesSkill(coreSkills, {
+  getCurrentSource: () => _currentApiSource,
+});
+
+/** Full skill list with available-searches checked first. */
+const skills: SkillEntry[] = [availableSearchesSkill, ...coreSkills];
 
 /** Skills that support follow-up timeframe queries */
 const TIMEFRAME_SKILL_IDS = new Set(['dashboard-stats', 'order-logs', 'error-analysis']);

@@ -5,7 +5,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import ApiAgentChatPanel from '../../components/features/apiAgent/ApiAgentChatPanel';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useLocation } from 'react-router-dom';
 import { PageHeader } from '../../components/layout';
 import { Button, Card, Spinner } from '../../components/ui';
 import { TranscriptViewer } from '../../components/features/testMonitor/TranscriptViewer';
@@ -866,7 +866,8 @@ type ViewMode = 'sessions' | 'traces' | 'insights' | 'monitoring';
 
 export default function CallTracePage() {
   // URL parameters
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [, setSearchParams] = useSearchParams();
+  const location = useLocation();
 
   // Chat panel state
   const [isChatOpen, setIsChatOpen] = useState(false);
@@ -897,6 +898,7 @@ export default function CallTracePage() {
   const [filterToDate, setFilterToDate] = useState('');
   const [filterSessionId, setFilterSessionId] = useState('');
   const [filterPhone, setFilterPhone] = useState('');
+  const [refreshCounter, setRefreshCounter] = useState(0);
   const [showFilters, setShowFilters] = useState(false);
   const [showConnectionsManager, setShowConnectionsManager] = useState(false);
 
@@ -917,6 +919,11 @@ export default function CallTracePage() {
   const [activeIssueFilter, setActiveIssueFilter] = useState<string | null>(null);
   const [activeIssueDescription, setActiveIssueDescription] = useState<string | null>(null);
 
+  // Disposition filter state (for drill-down from chat skill links)
+  type DispositionFilter = 'bookings' | 'errors' | 'transfers' | null;
+  const [dispositionFilter, setDispositionFilter] = useState<DispositionFilter>(null);
+  const [dispositionLabel, setDispositionLabel] = useState<string | null>(null);
+
   // Insights cache state (persists when switching tabs)
   const [cachedInsights, setCachedInsights] = useState<TraceInsightsResponse | null>(null);
   const [cachedInsightsLastDays, setCachedInsightsLastDays] = useState<number>(7);
@@ -936,7 +943,7 @@ export default function CallTracePage() {
   const [showCustomInput, setShowCustomInput] = useState<boolean>(() => isCustomInterval(getStoredAutoRefreshInterval()));
 
   // Check if any filters are active
-  const hasActiveFilters = filterFromDate || filterToDate || filterSessionId || filterPhone;
+  const hasActiveFilters = filterFromDate || filterToDate || filterSessionId || filterPhone || dispositionFilter;
 
   // Get current timezone info
   const currentTimezoneInfo = US_TIMEZONES.find(tz => tz.value === timezone) || US_TIMEZONES[0];
@@ -987,23 +994,42 @@ export default function CallTracePage() {
     reloadConfigs(false);
   }, []);
 
-  // Handle URL parameters for deep linking (traceId, sessionId)
+  // Handle URL parameters for deep linking (traceId, sessionId, disposition)
+  // Uses location.search + location.key for reliable change detection on same-route navigation.
   useEffect(() => {
-    const traceIdParam = searchParams.get('traceId');
-    const sessionIdParam = searchParams.get('sessionId');
+    if (!location.search) return; // No params to process
+
+    const params = new URLSearchParams(location.search);
+    const traceIdParam = params.get('traceId');
+    const sessionIdParam = params.get('sessionId');
+    const dispositionParam = params.get('disposition');
+    const fromDateParam = params.get('fromDate');
+    const toDateParam = params.get('toDate');
 
     if (traceIdParam) {
       setSelectedTraceId(traceIdParam);
       setViewMode('traces');
-      // Clear the URL parameter after opening
       setSearchParams({}, { replace: true });
     } else if (sessionIdParam) {
       setSelectedSessionId(sessionIdParam);
       setViewMode('sessions');
-      // Clear the URL parameter after opening
+      setSearchParams({}, { replace: true });
+    } else if (fromDateParam || dispositionParam) {
+      // Chat skill link: date range + optional disposition filter
+      if (fromDateParam) setFilterFromDate(fromDateParam);
+      if (toDateParam) setFilterToDate(toDateParam);
+      if (dispositionParam && ['bookings', 'errors', 'transfers'].includes(dispositionParam)) {
+        const label = dispositionParam === 'bookings' ? 'Bookings'
+          : dispositionParam === 'errors' ? 'Errors' : 'Transfers';
+        setDispositionFilter(dispositionParam as 'bookings' | 'errors' | 'transfers');
+        setDispositionLabel(label);
+      }
+      setViewMode('sessions');
+      setPage(0);
+      setRefreshCounter(c => c + 1); // Force data reload with new filters
       setSearchParams({}, { replace: true });
     }
-  }, [searchParams, setSearchParams]);
+  }, [location.search, location.key, setSearchParams]);
 
   // Fetch Langfuse project ID from app settings (for URL linking)
   useEffect(() => {
@@ -1038,35 +1064,40 @@ export default function CallTracePage() {
   const loadSessions = useCallback(async () => {
     if (!selectedConfigId) return;
 
+    const needsClientFilter = !!filteredSessionIds;
+
     try {
       setLoading(true);
       setError(null);
       const result = await getProductionSessions({
         configId: selectedConfigId,
-        limit: filteredSessionIds ? 100 : pageSize, // Load more when filtering by issue
-        offset: filteredSessionIds ? 0 : page * pageSize,
+        limit: needsClientFilter ? 200 : pageSize,
+        offset: needsClientFilter ? 0 : page * pageSize,
         fromDate: filterFromDate || undefined,
         toDate: filterToDate || undefined,
         callerPhone: filterPhone || undefined,
+        disposition: dispositionFilter || undefined,
       });
+
+      let finalSessions = result.sessions;
+      let finalTotal = result.total;
 
       // Filter by specific session IDs if set (from insights drill-down)
       if (filteredSessionIds && filteredSessionIds.length > 0) {
-        const filtered = result.sessions.filter(s =>
+        finalSessions = finalSessions.filter(s =>
           filteredSessionIds.includes(s.sessionId)
         );
-        setSessions(filtered);
-        setSessionsTotal(filtered.length);
-      } else {
-        setSessions(result.sessions);
-        setSessionsTotal(result.total);
+        finalTotal = finalSessions.length;
       }
+
+      setSessions(finalSessions);
+      setSessionsTotal(finalTotal);
     } catch (err: any) {
       setError(err.message || 'Failed to load sessions');
     } finally {
       setLoading(false);
     }
-  }, [selectedConfigId, page, pageSize, filterFromDate, filterToDate, filterPhone, filteredSessionIds]);
+  }, [selectedConfigId, page, pageSize, filterFromDate, filterToDate, filterPhone, filteredSessionIds, dispositionFilter]);
 
   // Load traces with filters
   const loadTraces = useCallback(async () => {
@@ -1179,6 +1210,8 @@ export default function CallTracePage() {
     setFilteredSessionIds(null);
     setActiveIssueFilter(null);
     setActiveIssueDescription(null);
+    setDispositionFilter(null);
+    setDispositionLabel(null);
   }, []);
 
   // Clear all filters
@@ -1190,17 +1223,57 @@ export default function CallTracePage() {
     setFilteredSessionIds(null);
     setActiveIssueFilter(null);
     setActiveIssueDescription(null);
+    setDispositionFilter(null);
+    setDispositionLabel(null);
     setPage(0);
   };
 
-  // Apply filters - useEffect handles refetch via dependency chain
-  // (filterFromDate → loadSessions → loadData → useEffect)
-  // We use a refresh counter to force refetch even when filters haven't changed
-  const [refreshCounter, setRefreshCounter] = useState(0);
+  // Apply filters - bump refresh counter to force refetch
   const applyFilters = () => {
     setPage(0);
     setRefreshCounter(c => c + 1);
   };
+
+  // Handle internal link clicks from chat panel (bypasses React Router for same-page links)
+  const handleChatLinkClick = useCallback((href: string): boolean => {
+    try {
+      const url = new URL(href, window.location.origin);
+      // Only handle links targeting this page
+      if (url.pathname !== '/test-monitor/call-trace') return false;
+
+      const traceId = url.searchParams.get('traceId');
+      const sessionId = url.searchParams.get('sessionId');
+      const disposition = url.searchParams.get('disposition');
+      const fromDate = url.searchParams.get('fromDate');
+      const toDate = url.searchParams.get('toDate');
+
+      if (traceId) {
+        setSelectedTraceId(traceId);
+        setViewMode('traces');
+      } else if (sessionId) {
+        setSelectedSessionId(sessionId);
+        setViewMode('sessions');
+      } else if (fromDate || disposition) {
+        if (fromDate) setFilterFromDate(fromDate);
+        if (toDate) setFilterToDate(toDate);
+        if (disposition && ['bookings', 'errors', 'transfers'].includes(disposition)) {
+          const label = disposition === 'bookings' ? 'Bookings'
+            : disposition === 'errors' ? 'Errors' : 'Transfers';
+          setDispositionFilter(disposition as 'bookings' | 'errors' | 'transfers');
+          setDispositionLabel(label);
+        }
+        setViewMode('sessions');
+        setPage(0);
+        setRefreshCounter(c => c + 1);
+      } else {
+        return false;
+      }
+      return true;
+    } catch (err) {
+      console.error('[DeepLink] Error:', err);
+      return false;
+    }
+  }, []);
 
   // Load data when config, page, or view mode changes (only after initial import)
   useEffect(() => {
@@ -1944,6 +2017,27 @@ export default function CallTracePage() {
           </div>
         )}
 
+        {/* Disposition Filter Banner (from chat skill links) */}
+        {dispositionFilter && viewMode === 'sessions' && (
+          <div className="px-4 py-3 bg-teal-50 dark:bg-teal-900/20 border-b border-teal-200 dark:border-teal-800 flex items-center justify-between">
+            <div className="flex items-center gap-2 text-sm text-teal-700 dark:text-teal-300">
+              <Icons.Filter />
+              <span>Showing:</span>
+              <span className="px-2 py-0.5 bg-teal-100 dark:bg-teal-800 rounded font-medium">
+                {dispositionLabel}
+              </span>
+              <span className="text-teal-500 dark:text-teal-400">({sessionsTotal} sessions)</span>
+            </div>
+            <button
+              onClick={() => { setDispositionFilter(null); setDispositionLabel(null); }}
+              className="flex items-center gap-1 px-2 py-1 text-sm text-teal-600 dark:text-teal-400 hover:text-teal-800 dark:hover:text-teal-200 hover:bg-teal-100 dark:hover:bg-teal-800 rounded transition-colors"
+            >
+              <Icons.XCircle />
+              Clear Filter
+            </button>
+          </div>
+        )}
+
         {/* Sessions Table View */}
         {viewMode === 'sessions' && (
           <div className="overflow-x-auto">
@@ -2040,24 +2134,38 @@ export default function CallTracePage() {
                         ) : null}
                       </td>
                       <td className="px-4 py-3 text-center">
-                        {(session.hasSuccessfulBooking || session.hasOrder) && (
+                        {(session.hasSuccessfulBooking || session.hasOrder) ? (
                           <span
                             className="inline-flex items-center justify-center text-green-600 dark:text-green-400"
                             title={session.hasOrder ? "Appointment confirmed" : "Appointment successfully booked"}
                           >
                             <Icons.CalendarCheck />
                           </span>
-                        )}
+                        ) : dispositionFilter === 'bookings' ? (
+                          <span
+                            className="inline-flex items-center justify-center text-yellow-600 dark:text-yellow-400"
+                            title="Booking attempted"
+                          >
+                            <Icons.CalendarCheck />
+                          </span>
+                        ) : null}
                       </td>
                       <td className="px-4 py-3 text-center">
-                        {session.hasTransfer && (
+                        {session.hasTransfer ? (
                           <span
                             className="inline-flex items-center justify-center text-orange-600 dark:text-orange-400"
                             title="Call was transferred to human agent"
                           >
                             <Icons.PhoneForward />
                           </span>
-                        )}
+                        ) : dispositionFilter === 'transfers' ? (
+                          <span
+                            className="inline-flex items-center justify-center text-orange-600 dark:text-orange-400"
+                            title="Transfer detected"
+                          >
+                            <Icons.PhoneForward />
+                          </span>
+                        ) : null}
                       </td>
                       <td className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
                         {formatDate(session.lastTraceAt)}
@@ -2503,7 +2611,7 @@ export default function CallTracePage() {
       </button>
 
       {/* API Agent Chat Panel */}
-      <ApiAgentChatPanel isOpen={isChatOpen} onClose={() => setIsChatOpen(false)} pageContext="call-tracing" />
+      <ApiAgentChatPanel isOpen={isChatOpen} onClose={() => setIsChatOpen(false)} pageContext="call-tracing" onLinkClick={handleChatLinkClick} />
     </div>
   );
 }

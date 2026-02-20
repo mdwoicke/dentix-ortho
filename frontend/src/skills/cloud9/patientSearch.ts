@@ -72,10 +72,12 @@ async function execute(query: string): Promise<SkillResult> {
 export const patientSearchSkill: SkillEntry = {
   id: 'patient-search',
   label: 'Patient Search',
+  category: 'cloud9',
+  sampleQuery: 'Find patient Canales',
   triggers: [
     /(?:find|search|look\s*up)\s+(?:for\s+)?patient/i,
     /patient\s+(?:search|lookup|look\s*up)/i,
-    /(?:find|search|look\s*up)\s+(?:for\s+)?\w+/i,
+    /(?:find|search|look\s*up)\s+(?:for\s+)?(?!(?:session|call|error|failed|test|record|location|appointment|provider|tracker|cache|queue|prompt|insight|family|recent|active|cancelled)\w*\b)\w+/i,
     /(?:search|find)\s+(?:for\s+)?(?:patients?\s+)?(?:named|called|with\s+last\s+name)/i,
   ],
   execute,

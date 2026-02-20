@@ -1539,6 +1539,23 @@ export async function getLastImportDate(configId: number): Promise<string | null
 // ============================================================================
 
 /**
+ * Get aggregated session stats (computed from observation data, not cached flags)
+ */
+export async function getProductionSessionStats(options?: {
+  fromDate?: string;
+  toDate?: string;
+}): Promise<{ total: number; transfers: number; bookings: number; errors: number }> {
+  const params = new URLSearchParams();
+  if (options?.fromDate) params.append('fromDate', options.fromDate);
+  if (options?.toDate) params.append('toDate', options.toDate);
+
+  const queryString = params.toString();
+  const url = `/test-monitor/production-calls/session-stats${queryString ? `?${queryString}` : ''}`;
+  const response = await get<TestMonitorApiResponse<{ total: number; transfers: number; bookings: number; errors: number }>>(url);
+  return response.data;
+}
+
+/**
  * Get list of production sessions (grouped conversations)
  */
 export async function getProductionSessions(options?: {
@@ -1549,6 +1566,7 @@ export async function getProductionSessions(options?: {
   toDate?: string;
   userId?: string;
   callerPhone?: string;
+  disposition?: 'bookings' | 'errors' | 'transfers';
 }): Promise<ProductionSessionsResponse> {
   const params = new URLSearchParams();
   if (options?.configId) params.append('configId', options.configId.toString());
@@ -1558,6 +1576,7 @@ export async function getProductionSessions(options?: {
   if (options?.toDate) params.append('toDate', options.toDate);
   if (options?.userId) params.append('userId', options.userId);
   if (options?.callerPhone) params.append('callerPhone', options.callerPhone);
+  if (options?.disposition) params.append('disposition', options.disposition);
 
   const queryString = params.toString();
   const url = `/test-monitor/production-calls/sessions${queryString ? `?${queryString}` : ''}`;

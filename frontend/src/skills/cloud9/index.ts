@@ -5,7 +5,7 @@
  * and produce formatted output without hitting the backend API agent.
  *
  * Usage:
- *   import { matchSkill, clearLastSkill } from '../../skills/cloud9';
+ *   import { matchSkill, clearLastSkill, setCurrentApiSource } from '../../skills/cloud9';
  *   const skill = matchSkill(userInput);
  *   if (skill) { const result = await skill.execute(userInput); }
  */
@@ -28,26 +28,37 @@ import { cancelledRecordsSkill } from './cancelledRecords';
 import { appointmentsByLocationSkill } from './appointmentsByLocation';
 import { appointmentsByProviderSkill } from './appointmentsByProvider';
 import { familyRecordsSkill } from './familyRecords';
+import { appointmentsByPhoneSkill } from './appointmentsByPhone';
+import { sessionsByCallerIdSkill } from './sessionsByCallerId';
 import { cacheHealthSkill } from './cacheHealth';
 import { recentSessionsSkill } from './recentSessions';
 import { queueActivitySkill } from './queueActivity';
 import { promptVersionsSkill } from './promptVersions';
+import { createAvailableSearchesSkill } from '../shared/availableSearches';
 import type { SkillEntry } from '../dominos/types';
 
+/** Tracks the currently active API source tab (call / cloud9 / nodered). */
+let _currentApiSource = 'call';
+
+/** Update the active tab so the available-searches skill can filter by it. */
+export function setCurrentApiSource(source: string): void {
+  _currentApiSource = source;
+}
+
 /**
- * All registered Cloud9 skills.
+ * All registered Cloud9 skills (excluding the meta help skill).
  * Order matters - first match wins. More specific triggers come first.
  */
-const skills: SkillEntry[] = [
-  patientSearchSkill,          // "find patient..." - most specific
-  trackerSearchSkill,          // "find test record..." / "tracker search..." - before generic
+const coreSkills: SkillEntry[] = [
+  // Specific skills first - these have precise triggers
+  trackerSearchSkill,          // "find test record..." / "tracker search..."
   locationsSkill,              // "show locations"
   appointmentTypesSkill,       // "show appointment types"
   providersSkill,              // "show providers"
   sessionLookupSkill,          // "show session {id}" - before recentSessions
   callStatsSkill,              // "how many calls today" / "call stats"
   traceInsightsSkill,          // "show insights" / "call analytics"
-  errorSessionsSkill,          // "error sessions" / "failed calls"
+  errorSessionsSkill,          // "error sessions" / "failed calls" / "find sessions with errors"
   sessionsByPatientSkill,      // "calls for Smith" - before recentSessions
   trackerStatsSkill,           // "tracker stats"
   activeAppointmentsSkill,     // "active test appointments"
@@ -55,11 +66,23 @@ const skills: SkillEntry[] = [
   appointmentsByLocationSkill, // "appointments at Philly"
   appointmentsByProviderSkill, // "appointments with Dr..."
   familyRecordsSkill,          // "family records"
+  sessionsByCallerIdSkill,     // "appointments from 2677383941" / "calls from ..."
+  appointmentsByPhoneSkill,    // "appointments for 555-123-4567"
   cacheHealthSkill,            // "cache health"
+  // Catch-all skills last - broad triggers that match "find <word>"
+  patientSearchSkill,          // "find patient..." / "find <name>" - broad catch-all
   recentSessionsSkill,         // "recent sessions"
   queueActivitySkill,          // "queue stats"
   promptVersionsSkill,         // "prompt versions"
 ];
+
+/** Meta skill: lists available searches for the current tab. */
+const availableSearchesSkill = createAvailableSearchesSkill(coreSkills, {
+  getCurrentSource: () => _currentApiSource,
+});
+
+/** Full skill list with available-searches checked first (before broad catch-alls). */
+const skills: SkillEntry[] = [availableSearchesSkill, ...coreSkills];
 
 /** Skills that support follow-up timeframe queries */
 const TIMEFRAME_SKILL_IDS = new Set([

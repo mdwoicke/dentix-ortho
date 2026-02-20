@@ -64,6 +64,8 @@ async function execute(query: string): Promise<SkillResult> {
 export const queueActivitySkill: SkillEntry = {
   id: 'queue-activity',
   label: 'Queue Activity',
+  category: 'nodered',
+  sampleQuery: 'Booking queue stats',
   triggers: [
     /(?:booking\s+)?queue\s+(?:stats|statistics|status|activity)/i,
     /(?:show|list|get)\s+(?:the\s+)?(?:booking\s+)?queue/i,

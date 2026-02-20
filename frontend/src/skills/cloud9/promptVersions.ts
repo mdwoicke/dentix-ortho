@@ -47,6 +47,8 @@ async function execute(_query: string): Promise<SkillResult> {
 export const promptVersionsSkill: SkillEntry = {
   id: 'prompt-versions',
   label: 'Prompt Versions',
+  category: 'nodered',
+  sampleQuery: 'Show prompt versions',
   triggers: [
     /(?:show|list|get)\s+(?:the\s+)?prompt\s+versions?/i,
     /(?:current|latest)\s+versions?/i,

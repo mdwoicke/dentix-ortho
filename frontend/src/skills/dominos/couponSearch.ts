@@ -174,6 +174,8 @@ async function execute(query: string): Promise<SkillResult> {
 export const couponSearchSkill: SkillEntry = {
   id: 'coupon-search',
   label: 'Search Coupons',
+  category: 'dominos-menu',
+  sampleQuery: 'Find coupons with wings',
   triggers: [
     /(?:find|search|show|list|get|look\s*up)\s+(?:.*\s+)?coupons?/i,
     /coupons?\s+(?:for|at|with|that|matching|having)/i,

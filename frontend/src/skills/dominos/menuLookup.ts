@@ -289,6 +289,8 @@ async function execute(query: string): Promise<SkillResult> {
 export const menuLookupSkill: SkillEntry = {
   id: 'menu-lookup',
   label: 'Menu Code Lookup',
+  category: 'dominos-menu',
+  sampleQuery: 'Menu code for large pepperoni',
   triggers: [
     /(?:what(?:'s|\s+is|\s+are)?\s+)?(?:the\s+)?menu\s+code/i,
     /(?:look\s*up|find|search|show|get)\s+(?:the\s+)?(?:menu\s+)?(?:code|item)/i,

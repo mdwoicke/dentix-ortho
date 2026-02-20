@@ -82,6 +82,8 @@ async function execute(query: string): Promise<SkillResult> {
 export const cancelledRecordsSkill: SkillEntry = {
   id: 'cancelled-records',
   label: 'Cancelled Records',
+  category: 'cloud9',
+  sampleQuery: 'Show cancelled appointments',
   triggers: [
     /(?:show|list|get)\s+(?:me\s+)?(?:the\s+)?cancelled\s+(?:appointments?|records?|patients?)/i,
     /cancelled\s+(?:appointments?|records?|test\s+records?)/i,

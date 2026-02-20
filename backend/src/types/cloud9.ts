@@ -9,6 +9,8 @@ export interface Cloud9Location {
   LocationName: string;
   LocationCode: string;
   TimeZone?: string;
+  LocationAddress?: string;
+  LocationPrintedName?: string;
   AddressStreet?: string;
   AddressCity?: string;
   AddressState?: string;

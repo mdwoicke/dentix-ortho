@@ -10,6 +10,10 @@ const allowedOrigins = [
   'http://localhost:5174', // Alternate Vite port
   'http://localhost:5175', // Alternate Vite port
   'http://localhost:5176', // Alternate Vite port
+  'https://localhost:5173', // Vite dev server default (HTTPS/basicSsl)
+  'https://localhost:5174', // Alternate Vite port (HTTPS/basicSsl)
+  'https://localhost:5175', // Alternate Vite port (HTTPS/basicSsl)
+  'https://localhost:5176', // Alternate Vite port (HTTPS/basicSsl)
   'http://localhost:3000', // Alternate frontend port
   'https://crm.digitalresponsetech.com', // Cloudflare Tunnel external access
   process.env.FRONTEND_URL || '', // Production frontend URL

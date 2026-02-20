@@ -10,6 +10,7 @@
  */
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useSearchParams, useLocation } from 'react-router-dom';
 import * as dominosApi from '../../services/api/dominosApi';
 import type { DominosOrderLog, DominosLogDetail, ParsedOrder, ParsedOrderItem, ToppingOption } from '../../types/dominos.types';
 import DiagnosisPanel from '../../components/Dominos/DiagnosisPanel';
@@ -1038,6 +1039,8 @@ function OrderResultSummary({ result, showRawJson, onToggleRaw }: { result: Reco
 }
 
 export default function DominosOrders() {
+  const [, setSearchParams] = useSearchParams();
+  const location = useLocation();
   const [allLogs, setAllLogs] = useState<DominosOrderLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1079,6 +1082,10 @@ export default function DominosOrders() {
   const [dateEnd, setDateEnd] = useState('');
   const [activeQuickFilter, setActiveQuickFilter] = useState('');
 
+  // Outcome filter from chat deep links (success/failed)
+  const [filterOutcome, setFilterOutcome] = useState<'success' | 'failed' | ''>('');
+  const [filterOutcomeLabel, setFilterOutcomeLabel] = useState('');
+
   // Fetch logs – passes sessionId to backend for LIKE search when set
   const fetchLogs = useCallback(async (sessionFilter?: string) => {
     try {
@@ -1106,6 +1113,33 @@ export default function DominosOrders() {
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterSessionId]);
+
+  // Deep link: apply filters from URL params (e.g. from chat skill links)
+  // Uses location.search (string) as dependency for reliable change detection.
+  useEffect(() => {
+    if (!location.search) return;
+
+    const params = new URLSearchParams(location.search);
+    const fromDate = params.get('fromDate');
+    const toDate = params.get('toDate');
+    const status = params.get('status');
+
+    if (fromDate || toDate || status) {
+      if (fromDate) {
+        const start = new Date(fromDate);
+        setDateStart(formatDateForInput(start));
+      }
+      if (toDate) {
+        const end = new Date(toDate + 'T23:59');
+        setDateEnd(formatDateForInput(end));
+      }
+      if (status === 'success' || status === 'failed') {
+        setFilterOutcome(status);
+        setFilterOutcomeLabel(status === 'success' ? 'Successful Orders' : 'Failed Orders');
+      }
+      setSearchParams({}, { replace: true });
+    }
+  }, [location.search, setSearchParams]);
 
   // Client-side filtering – only show /api/v1/direct-order endpoint
   const filteredLogs = useMemo(() => {
@@ -1137,9 +1171,13 @@ export default function DominosOrders() {
         }
       }
 
+      // Outcome filter from chat deep links
+      if (filterOutcome === 'success' && !log.success) return false;
+      if (filterOutcome === 'failed' && log.success) return false;
+
       return true;
     });
-  }, [allLogs, filterStatus, filterMethod, filterEndpoint, filterSessionId, filterPhone, dateStart, dateEnd]);
+  }, [allLogs, filterStatus, filterMethod, filterEndpoint, filterSessionId, filterPhone, dateStart, dateEnd, filterOutcome]);
 
   // Compute stats from filtered logs (matches original calculateFilteredStats)
   const filteredStats = useMemo(() => {
@@ -1187,7 +1225,7 @@ export default function DominosOrders() {
     return `(Showing all ${allLogs.length} logs)`;
   }, [filteredLogs.length, allLogs.length, filterStatus, filterMethod, filterEndpoint, filterSessionId, filterPhone, dateStart, dateEnd]);
 
-  const hasActiveFilters = filterStatus || filterMethod || filterEndpoint || filterSessionId || filterPhone || dateStart || dateEnd;
+  const hasActiveFilters = filterStatus || filterMethod || filterEndpoint || filterSessionId || filterPhone || dateStart || dateEnd || filterOutcome;
 
   const clearAllFilters = () => {
     setFilterStatus('');
@@ -1198,6 +1236,8 @@ export default function DominosOrders() {
     setDateStart('');
     setDateEnd('');
     setActiveQuickFilter('');
+    setFilterOutcome('');
+    setFilterOutcomeLabel('');
   };
 
   const setQuickDateFilter = (period: string) => {
@@ -1493,6 +1533,23 @@ export default function DominosOrders() {
       {error && (
         <div className="p-4 rounded-md bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800">
           <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+        </div>
+      )}
+
+      {/* Outcome filter banner (from chat deep links) */}
+      {filterOutcome && (
+        <div className="flex items-center justify-between px-4 py-3 bg-teal-50 dark:bg-teal-900/20 border border-teal-200 dark:border-teal-800 rounded-lg">
+          <div className="flex items-center gap-2 text-sm text-teal-800 dark:text-teal-200">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" /></svg>
+            <span className="font-medium">Showing: {filterOutcomeLabel}</span>
+            <span className="text-teal-600 dark:text-teal-400">({filteredLogs.length} orders)</span>
+          </div>
+          <button
+            onClick={() => { setFilterOutcome(''); setFilterOutcomeLabel(''); }}
+            className="text-sm font-medium text-teal-700 dark:text-teal-300 hover:text-teal-900 dark:hover:text-teal-100 underline"
+          >
+            Clear Filter
+          </button>
         </div>
       )}
 

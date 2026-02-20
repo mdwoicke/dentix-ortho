@@ -9915,6 +9915,85 @@ function transformSessionRow(row: any): any {
 }
 
 /**
+ * GET /api/test-monitor/production-calls/session-stats
+ * Aggregated session stats computed from observation data (not cached flags).
+ * Returns { total, transfers, bookings, errors } for a date range.
+ */
+export async function getProductionSessionStats(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  let db: BetterSqlite3.Database | null = null;
+
+  try {
+    const { fromDate, toDate } = req.query;
+
+    db = getTestAgentDbWritable();
+
+    const whereClauses: string[] = ['1=1'];
+    const params: any[] = [];
+
+    if (fromDate) {
+      whereClauses.push('ps.first_trace_at >= ?');
+      params.push(fromDate as string);
+    }
+    if (toDate) {
+      const toDateValue = (toDate as string).length === 10 ? toDate + 'T23:59:59.999Z' : toDate;
+      whereClauses.push('ps.last_trace_at <= ?');
+      params.push(toDateValue);
+    }
+
+    const whereClause = whereClauses.join(' AND ');
+
+    // Total sessions
+    const totalRow = db.prepare(`
+      SELECT COUNT(*) as c FROM production_sessions ps WHERE ${whereClause}
+    `).get(...params) as any;
+
+    // Transfers: sessions with chord_handleEscalation observations
+    const transferRow = db.prepare(`
+      SELECT COUNT(DISTINCT t.session_id) as c
+      FROM production_trace_observations o
+      JOIN production_traces t ON o.trace_id = t.trace_id
+      JOIN production_sessions ps ON t.session_id = ps.session_id
+      WHERE ${whereClause} AND o.name = 'chord_handleEscalation'
+    `).get(...params) as any;
+
+    // Bookings: sessions with schedule_appointment_ortho + book_ action
+    const bookingRow = db.prepare(`
+      SELECT COUNT(DISTINCT t.session_id) as c
+      FROM production_trace_observations o
+      JOIN production_traces t ON o.trace_id = t.trace_id
+      JOIN production_sessions ps ON t.session_id = ps.session_id
+      WHERE ${whereClause}
+        AND o.name = 'schedule_appointment_ortho'
+        AND o.input LIKE '%book_%'
+    `).get(...params) as any;
+
+    // Errors: sessions with error_count > 0
+    const errorRow = db.prepare(`
+      SELECT COUNT(*) as c FROM production_sessions ps
+      WHERE ${whereClause} AND ps.error_count > 0
+    `).get(...params) as any;
+
+    res.json({
+      success: true,
+      data: {
+        total: totalRow?.c || 0,
+        transfers: transferRow?.c || 0,
+        bookings: bookingRow?.c || 0,
+        errors: errorRow?.c || 0,
+      },
+    });
+  } catch (error) {
+    next(error);
+  } finally {
+    if (db) db.close();
+  }
+}
+
+/**
  * GET /api/test-monitor/production-calls/sessions
  * List sessions (grouped conversations) with pagination
  */
@@ -9934,10 +10013,16 @@ export async function getProductionSessions(
       toDate,
       userId,
       callerPhone,
+      disposition,
     } = req.query;
 
     db = getTestAgentDbWritable();
     const service = new LangfuseTraceService(db);
+
+    const validDispositions = ['bookings', 'errors', 'transfers'];
+    const dispositionValue = disposition && validDispositions.includes(disposition as string)
+      ? (disposition as 'bookings' | 'errors' | 'transfers')
+      : undefined;
 
     const result = service.getSessions({
       configId: configId ? parseInt(configId as string) : undefined,
@@ -9947,6 +10032,7 @@ export async function getProductionSessions(
       toDate: toDate as string,
       userId: userId as string,
       callerPhone: callerPhone as string,
+      disposition: dispositionValue,
     });
 
     res.json({

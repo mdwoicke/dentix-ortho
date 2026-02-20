@@ -5,7 +5,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useLocation } from 'react-router-dom';
 import {
   getProductionSessions,
   getProductionSession,
@@ -616,7 +616,8 @@ function ConversationDetailModal({
 // ============================================================================
 
 export default function DominosCallTracing() {
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [, setSearchParams] = useSearchParams();
+  const location = useLocation();
 
   // Config state
   const [configs, setConfigs] = useState<LangfuseConfigProfile[]>([]);
@@ -629,6 +630,10 @@ export default function DominosCallTracing() {
   const [sessions, setSessions] = useState<ProductionSession[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [sessionsTotal, setSessionsTotal] = useState(0);
+
+  // Date filter from chat deep links
+  const [filterFromDate, setFilterFromDate] = useState('');
+  const [filterToDate, setFilterToDate] = useState('');
 
   // Search / import
   const [searchId, setSearchId] = useState('');
@@ -693,8 +698,10 @@ export default function DominosCallTracing() {
     try {
       const res = await getProductionSessions({
         configId: selectedConfigId,
-        limit: 50,
+        limit: filterFromDate ? 200 : 50,
         callerPhone: searchPhone || undefined,
+        fromDate: filterFromDate || undefined,
+        toDate: filterToDate || undefined,
       });
       setSessions(res.sessions);
       setSessionsTotal(res.total);
@@ -703,7 +710,7 @@ export default function DominosCallTracing() {
     } finally {
       setSessionsLoading(false);
     }
-  }, [selectedConfigId, searchPhone]);
+  }, [selectedConfigId, searchPhone, filterFromDate, filterToDate]);
 
   useEffect(() => { loadSessions(); }, [loadSessions]);
 
@@ -733,14 +740,26 @@ export default function DominosCallTracing() {
     setSelectedSessionId(sessionId);
   };
 
-  // Deep link: open session from ?sessionId= URL param
+  // Deep link: open session from ?sessionId= or apply date filters from ?fromDate=&toDate=
+  // Uses location.search (string) as dependency for reliable change detection,
+  // since URLSearchParams object identity may not update on same-route navigation.
   useEffect(() => {
-    const sessionIdParam = searchParams.get('sessionId');
+    if (!location.search) return;
+
+    const params = new URLSearchParams(location.search);
+    const sessionIdParam = params.get('sessionId');
+    const fromDateParam = params.get('fromDate');
+    const toDateParam = params.get('toDate');
+
     if (sessionIdParam) {
       openSession(sessionIdParam);
       setSearchParams({}, { replace: true });
+    } else if (fromDateParam || toDateParam) {
+      if (fromDateParam) setFilterFromDate(fromDateParam);
+      if (toDateParam) setFilterToDate(toDateParam);
+      setSearchParams({}, { replace: true });
     }
-  }, [searchParams, setSearchParams]);
+  }, [location.search, setSearchParams]);
 
   // Search by session ID
   const handleSearch = () => {
@@ -971,6 +990,27 @@ export default function DominosCallTracing() {
           </div>
         </div>
       </div>
+
+      {/* Date filter banner (from chat deep links) */}
+      {(filterFromDate || filterToDate) && (
+        <div className="flex-shrink-0 flex items-center justify-between px-6 py-3 bg-teal-50 dark:bg-teal-900/20 border-b border-teal-200 dark:border-teal-800">
+          <div className="flex items-center gap-2 text-sm text-teal-800 dark:text-teal-200">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" /></svg>
+            <span className="font-medium">
+              Filtered: {filterFromDate && filterToDate && filterFromDate === filterToDate
+                ? filterFromDate
+                : `${filterFromDate || '...'} to ${filterToDate || '...'}`}
+            </span>
+            <span className="text-teal-600 dark:text-teal-400">({sessions.length} sessions)</span>
+          </div>
+          <button
+            onClick={() => { setFilterFromDate(''); setFilterToDate(''); }}
+            className="text-sm font-medium text-teal-700 dark:text-teal-300 hover:text-teal-900 dark:hover:text-teal-100 underline"
+          >
+            Clear Filter
+          </button>
+        </div>
+      )}
 
       {/* Session Table */}
       <div className="flex-1 overflow-auto">

@@ -102,6 +102,8 @@ async function execute(query: string): Promise<SkillResult> {
 export const sessionsByPatientSkill: SkillEntry = {
   id: 'sessions-by-patient',
   label: 'Sessions by Patient',
+  category: 'call',
+  sampleQuery: 'Calls for patient Smith',
   triggers: [
     /(?:calls?|sessions?|conversations?)\s+(?:for|with|about|involving)\s+(?:patient\s+)?\w+/i,
     /find\s+(?:calls?|sessions?)\s+(?:for|about|with)\s+\w+/i,

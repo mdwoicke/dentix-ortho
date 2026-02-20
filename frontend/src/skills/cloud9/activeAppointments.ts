@@ -62,6 +62,8 @@ async function execute(_query: string): Promise<SkillResult> {
 export const activeAppointmentsSkill: SkillEntry = {
   id: 'active-appointments',
   label: 'Active Appointments',
+  category: 'cloud9',
+  sampleQuery: 'Active test appointments',
   triggers: [
     /active\s+(?:test\s+)?(?:appointments|bookings)/i,
     /uncancelled\s+(?:appointments|bookings)/i,

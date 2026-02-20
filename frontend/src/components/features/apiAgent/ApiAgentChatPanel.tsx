@@ -8,9 +8,11 @@ import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { useAppSelector } from '../../../store/hooks';
 import { selectCurrentTenant } from '../../../store/slices/tenantSlice';
 import { useApiAgentChat } from '../../../hooks/useApiAgentChat';
+import { useResizablePanel } from '../../../hooks/useResizablePanel';
+import { useSpeechRecognition } from '../../../hooks/useSpeechRecognition';
 import type { ApiSource } from '../../../hooks/useApiAgentChat';
 import ChatMessage from './ChatMessage';
-import { matchSkill, clearLastSkill } from '../../../skills/cloud9';
+import { matchSkill, clearLastSkill, setCurrentApiSource } from '../../../skills/cloud9';
 
 type PageContext = 'default' | 'call-tracing' | 'prod-tracker';
 
@@ -18,6 +20,8 @@ interface ApiAgentChatPanelProps {
   isOpen: boolean;
   onClose: () => void;
   pageContext?: PageContext;
+  /** Optional handler for internal links. Return true if handled (skips navigate). */
+  onLinkClick?: (href: string) => boolean;
 }
 
 type TenantKind = 'ortho' | 'dominos';
@@ -32,8 +36,6 @@ const SUGGESTED_QUERIES: Record<ApiSource, Record<TenantKind, string[]>> = {
       'Show trace insights',
       'Find sessions with errors',
       'Calls for patient Smith',
-      'Show tracker stats',
-      'Active test appointments',
     ],
     dominos: [
       'Show dashboard stats',
@@ -49,39 +51,29 @@ const SUGGESTED_QUERIES: Record<ApiSource, Record<TenantKind, string[]>> = {
       'Show all locations',
       'List appointment types',
       'Show providers list',
-      'Show tracker stats',
-      'How many calls today',
       'Show cancelled appointments',
       'Appointments by location',
       'Family records',
     ],
     dominos: [
-      'Show dashboard stats',
-      'List recent failed orders',
-      'Show error breakdown',
       'Store info for 4332',
       'Find coupons with wings',
-      'Service health status',
+      'Create a sample order',
+      'List recent orders',
     ],
   },
   nodered: {
     ortho: [
-      'Show recent sessions',
-      'Show trace insights',
-      'Find sessions with errors',
       'Cache health status',
       'Booking queue stats',
       'Show prompt versions',
-      'Active test appointments',
       'Show tracker stats',
+      'Active test appointments',
     ],
     dominos: [
-      'Show dashboard stats',
-      'List recent failed orders',
-      'Show error breakdown',
-      'Store info for 4332',
-      'Find coupons with wings',
-      'Service health status',
+      'Show recent monitoring results',
+      'Analyze session intent',
+      'Verify session goals',
     ],
   },
 };
@@ -113,33 +105,24 @@ const CONTEXT_SUGGESTIONS: Partial<Record<PageContext, Partial<Record<ApiSource,
       'Calls for patient Smith',
     ],
     cloud9: [
-      'How many calls today',
-      'Calls this week',
-      'Show recent sessions',
-      'Show trace insights',
-      'Find sessions with errors',
-      'Calls for patient Smith',
+      'Find patient Canales',
+      'Search for patient Smith',
+      'List appointment types',
+      'Show all locations',
     ],
     nodered: [
-      'How many calls today',
-      'Calls this week',
-      'Show recent sessions',
-      'Show trace insights',
-      'Find sessions with errors',
-      'Calls for patient Smith',
+      'Cache health status',
+      'Booking queue stats',
+      'Show prompt versions',
     ],
   },
   'prod-tracker': {
     call: [
       'Show tracker stats',
-      'Find test record Canales',
-      'Active test appointments',
-      'Show cancelled appointments',
-      'Family records',
-      'Appointments by location',
+      'Calls for patient Smith',
+      'Find sessions with errors',
     ],
     cloud9: [
-      'Show tracker stats',
       'Find test record Canales',
       'Active test appointments',
       'Show cancelled appointments',
@@ -148,16 +131,13 @@ const CONTEXT_SUGGESTIONS: Partial<Record<PageContext, Partial<Record<ApiSource,
     ],
     nodered: [
       'Show tracker stats',
-      'Find test record Canales',
-      'Active test appointments',
-      'Show cancelled appointments',
-      'Family records',
-      'Appointments by location',
+      'Show prompt versions',
+      'Cache health status',
     ],
   },
 };
 
-const ApiAgentChatPanel: React.FC<ApiAgentChatPanelProps> = ({ isOpen, onClose, pageContext }) => {
+const ApiAgentChatPanel: React.FC<ApiAgentChatPanelProps> = ({ isOpen, onClose, pageContext, onLinkClick }) => {
   const {
     messages,
     isLoading,
@@ -176,10 +156,42 @@ const ApiAgentChatPanel: React.FC<ApiAgentChatPanelProps> = ({ isOpen, onClose, 
     [currentTenant?.slug],
   );
 
+  // Keep the skill registry aware of which tab is active
+  useEffect(() => { setCurrentApiSource(apiSource); }, [apiSource]);
+
+  const { width, isDragging, onMouseDown: onResizeMouseDown } = useResizablePanel({
+    storageKey: 'api-agent-chat-width',
+    defaultWidth: 600,
+    minWidth: 360,
+  });
+
   const [input, setInput] = useState('');
   const [skillRunning, setSkillRunning] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const { isListening, isSupported: micSupported, startListening, stopListening } = useSpeechRecognition({
+    onResult: (transcript) => setInput((prev) => {
+      const base = prev.replace(/\u200B.*$/, '');
+      return base + transcript;
+    }),
+    onInterim: (transcript) => setInput((prev) => {
+      const base = prev.replace(/\u200B.*$/, '');
+      return base + '\u200B' + transcript;
+    }),
+  });
+
+  const handleMicClick = useCallback(() => {
+    if (isListening) {
+      stopListening();
+      // Clean up interim marker
+      setInput((prev) => prev.replace(/\u200B/g, ''));
+    } else {
+      // Clear interim markers before starting fresh
+      setInput((prev) => prev.replace(/\u200B/g, ''));
+      startListening();
+    }
+  }, [isListening, startListening, stopListening]);
 
   // Auto-scroll to bottom when messages change
   useEffect(() => {
@@ -223,8 +235,10 @@ const ApiAgentChatPanel: React.FC<ApiAgentChatPanelProps> = ({ isOpen, onClose, 
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim() || isLoading || skillRunning) return;
-    handleSend(input);
+    const cleaned = input.replace(/\u200B/g, '');
+    if (!cleaned.trim() || isLoading || skillRunning) return;
+    if (isListening) stopListening();
+    handleSend(cleaned);
     setInput('');
   };
 
@@ -257,15 +271,22 @@ const ApiAgentChatPanel: React.FC<ApiAgentChatPanelProps> = ({ isOpen, onClose, 
 
       {/* Panel */}
       <div
+        style={{ width: `${width}px` }}
         className={`
-          fixed right-0 top-0 h-full w-[480px] max-w-full
+          fixed right-0 top-0 h-full max-w-full
           bg-white dark:bg-gray-900 shadow-2xl
           flex flex-col z-50
-          transition-transform duration-300 ease-in-out
+          ${isDragging ? '' : 'transition-transform duration-300 ease-in-out'}
           ${isOpen ? 'translate-x-0' : 'translate-x-full'}
         `}
         onKeyDown={handleKeyDown}
       >
+        {/* Resize handle */}
+        <div
+          onMouseDown={onResizeMouseDown}
+          className="absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize z-10
+            hover:bg-indigo-400/40 active:bg-indigo-500/50 transition-colors"
+        />
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700 shrink-0">
           <div>
@@ -410,7 +431,7 @@ const ApiAgentChatPanel: React.FC<ApiAgentChatPanelProps> = ({ isOpen, onClose, 
 
           {/* Message list */}
           {messages.map((m) => (
-            <ChatMessage key={m.id} message={m} onNavigate={onClose} />
+            <ChatMessage key={m.id} message={m} onNavigate={onClose} onLinkClick={onLinkClick} />
           ))}
 
           {/* Error display */}
@@ -432,27 +453,51 @@ const ApiAgentChatPanel: React.FC<ApiAgentChatPanelProps> = ({ isOpen, onClose, 
             <input
               ref={inputRef}
               type="text"
-              value={input}
+              value={input.replace(/\u200B/g, '')}
               onChange={(e) => setInput(e.target.value)}
               placeholder={
-                tenantKind === 'dominos'
-                  ? 'Ask about Dominos data...'
-                  : apiSource === 'call'
-                    ? 'Ask about call sessions & traces...'
-                    : apiSource === 'cloud9'
-                      ? 'Ask about Cloud9 API data...'
-                      : 'Ask about Node-RED endpoints...'
+                isListening
+                  ? 'Listening...'
+                  : tenantKind === 'dominos'
+                    ? 'Ask about Dominos data...'
+                    : apiSource === 'call'
+                      ? 'Ask about call sessions & traces...'
+                      : apiSource === 'cloud9'
+                        ? 'Ask about Cloud9 API data...'
+                        : 'Ask about Node-RED endpoints...'
               }
               disabled={isLoading || skillRunning}
-              className="flex-1 px-3 py-2 text-sm rounded-lg
-                border border-gray-300 dark:border-gray-600
+              className={`flex-1 px-3 py-2 text-sm rounded-lg
+                border ${isListening ? 'border-red-400 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'}
                 bg-white dark:bg-gray-800
                 text-gray-900 dark:text-white
                 placeholder-gray-400 dark:placeholder-gray-500
                 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500
                 disabled:opacity-50 disabled:cursor-not-allowed
-                outline-none transition-colors"
+                outline-none transition-colors`}
             />
+            {micSupported && (
+              <button
+                type="button"
+                onClick={handleMicClick}
+                disabled={isLoading || skillRunning}
+                className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors shrink-0
+                  ${isListening
+                    ? 'bg-red-600 hover:bg-red-700 text-white animate-pulse'
+                    : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 border border-gray-300 dark:border-gray-600'
+                  }
+                  disabled:opacity-50 disabled:cursor-not-allowed`}
+                title={isListening ? 'Stop listening' : 'Voice input'}
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  {isListening ? (
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
+                  ) : (
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4M12 15a3 3 0 003-3V5a3 3 0 00-6 0v7a3 3 0 003 3z" />
+                  )}
+                </svg>
+              </button>
+            )}
             {isLoading || skillRunning ? (
               <button
                 type="button"

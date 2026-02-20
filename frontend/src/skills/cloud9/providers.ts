@@ -68,6 +68,8 @@ async function execute(_query: string): Promise<SkillResult> {
 export const providersSkill: SkillEntry = {
   id: 'providers',
   label: 'Providers',
+  category: 'cloud9',
+  sampleQuery: 'Show providers list',
   triggers: [
     /(?:show|list|get)\s+(?:all\s+)?providers/i,
     /(?:show|list|get)\s+(?:all\s+)?(?:chairs|doctors)/i,

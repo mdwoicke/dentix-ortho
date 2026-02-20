@@ -565,6 +565,9 @@ router.get('/production-calls', testMonitorController.getProductionTraces);
 // GET /api/test-monitor/production-calls/insights - Get comprehensive trace insights
 router.get('/production-calls/insights', testMonitorController.getTraceInsights);
 
+// GET /api/test-monitor/production-calls/session-stats - Aggregated session stats from observations
+router.get('/production-calls/session-stats', testMonitorController.getProductionSessionStats);
+
 // GET /api/test-monitor/production-calls/sessions - List sessions (grouped conversations)
 router.get('/production-calls/sessions', testMonitorController.getProductionSessions);
 

@@ -25,4 +25,8 @@ export interface SkillEntry {
   triggers: RegExp[];
   /** The function that executes the skill. */
   execute: SkillFn;
+  /** Tab category this skill belongs to, e.g. 'call', 'cloud9', 'nodered'. */
+  category?: string;
+  /** Example query shown in the "available searches" listing. */
+  sampleQuery?: string;
 }

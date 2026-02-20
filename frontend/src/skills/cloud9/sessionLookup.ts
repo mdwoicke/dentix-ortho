@@ -82,6 +82,8 @@ async function execute(query: string): Promise<SkillResult> {
 export const sessionLookupSkill: SkillEntry = {
   id: 'session-lookup',
   label: 'Session Lookup',
+  category: 'call',
+  sampleQuery: 'Show session abc123',
   triggers: [
     /(?:show|look\s+up|get|find)\s+session\s+(?:detail\s+)?[a-f0-9-]{6,}/i,
     /session\s+detail\s+[a-f0-9-]{6,}/i,

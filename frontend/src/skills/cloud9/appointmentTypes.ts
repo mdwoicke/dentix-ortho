@@ -53,6 +53,8 @@ async function execute(_query: string): Promise<SkillResult> {
 export const appointmentTypesSkill: SkillEntry = {
   id: 'appointment-types',
   label: 'Appointment Types',
+  category: 'cloud9',
+  sampleQuery: 'List appointment types',
   triggers: [
     /(?:show|list|get)\s+(?:all\s+)?appo?i?ntment\s+types/i,
     /(?:show|list|get)\s+(?:all\s+)?appt\s+types/i,

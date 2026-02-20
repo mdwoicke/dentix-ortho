@@ -76,6 +76,8 @@ async function execute(query: string): Promise<SkillResult> {
 export const trackerSearchSkill: SkillEntry = {
   id: 'tracker-search',
   label: 'Tracker Search',
+  category: 'nodered',
+  sampleQuery: 'Find test record Smith',
   triggers: [
     /(?:find|search)\s+test\s+(?:record|patient)\s+/i,
     /tracker\s+(?:search|record)\s+/i,

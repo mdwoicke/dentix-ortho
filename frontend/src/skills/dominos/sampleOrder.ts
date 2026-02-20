@@ -516,6 +516,8 @@ async function execute(query: string): Promise<SkillResult> {
 export const sampleOrderSkill: SkillEntry = {
   id: 'sample-order',
   label: 'Create Sample Order',
+  category: 'dominos-orders',
+  sampleQuery: 'Create a sample order',
   triggers: [
     /create\s+(?:a\s+)?(?:sample\s+)?(?:\w+\s+)*order/i,
     /(?:build|generate|make)\s+(?:a\s+|an\s+)?(?:\w+\s+)*order/i,

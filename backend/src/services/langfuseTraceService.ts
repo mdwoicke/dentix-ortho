@@ -1143,8 +1143,9 @@ export class LangfuseTraceService {
     toDate?: string;
     userId?: string;
     callerPhone?: string;
+    disposition?: 'bookings' | 'errors' | 'transfers';
   } = {}): { sessions: any[]; total: number } {
-    const { configId, limit = 50, offset = 0, fromDate, toDate, userId, callerPhone } = options;
+    const { configId, limit = 50, offset = 0, fromDate, toDate, userId, callerPhone, disposition } = options;
 
     let whereClauses: string[] = ['1=1'];
     const params: any[] = [];
@@ -1172,6 +1173,25 @@ export class LangfuseTraceService {
       const digits = callerPhone.replace(/\D/g, '').slice(-10);
       whereClauses.push("REPLACE(REPLACE(REPLACE(ps.user_id, '+1', ''), '-', ''), ' ', '') LIKE '%' || ? || '%'");
       params.push(digits);
+    }
+
+    // Disposition filter - uses same criteria as getProductionSessionStats
+    if (disposition === 'bookings') {
+      whereClauses.push(`ps.session_id IN (
+        SELECT DISTINCT t.session_id
+        FROM production_trace_observations o
+        JOIN production_traces t ON o.trace_id = t.trace_id
+        WHERE o.name = 'schedule_appointment_ortho' AND o.input LIKE '%book_%'
+      )`);
+    } else if (disposition === 'errors') {
+      whereClauses.push('ps.error_count > 0');
+    } else if (disposition === 'transfers') {
+      whereClauses.push(`ps.session_id IN (
+        SELECT DISTINCT t.session_id
+        FROM production_trace_observations o
+        JOIN production_traces t ON o.trace_id = t.trace_id
+        WHERE o.name = 'chord_handleEscalation'
+      )`);
     }
 
     const whereClause = whereClauses.join(' AND ');
