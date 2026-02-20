@@ -517,6 +517,8 @@ export class LangfuseTraceService {
               -- Tool response: Cloud9 API confirmed booking
               (pto.name = 'schedule_appointment_ortho' AND pto.output LIKE '%Appointment GUID Added%')
               OR (pto.name = 'schedule_appointment_ortho' AND (pto.output LIKE '%"booked":true%' OR pto.output LIKE '%"booked": true%'))
+              -- Tool response: Booking was queued for async processing (appointment created by background queue)
+              OR (pto.name = 'schedule_appointment_ortho' AND (pto.output LIKE '%"anyQueued":true%' OR pto.output LIKE '%"anyQueued": true%'))
               -- LLM output: Sibling booking confirmation in PAYLOAD (only check GENERATION, not prompts)
               -- Must check for actual GUID value (quoted string), not null
               -- Pattern: "Child1_appointmentGUID": "xxx" vs "Child1_appointmentGUID": null
@@ -1294,6 +1296,8 @@ export class LangfuseTraceService {
              -- Tool response: Cloud9 API confirmed booking
              (pto.name = 'schedule_appointment_ortho' AND pto.output LIKE '%Appointment GUID Added%')
              OR (pto.name = 'schedule_appointment_ortho' AND (pto.output LIKE '%"booked":true%' OR pto.output LIKE '%"booked": true%'))
+             -- Tool response: Booking was queued for async processing (appointment created by background queue)
+             OR (pto.name = 'schedule_appointment_ortho' AND (pto.output LIKE '%"anyQueued":true%' OR pto.output LIKE '%"anyQueued": true%'))
              -- LLM output: Sibling booking confirmation in PAYLOAD (only check GENERATION, not prompts)
              -- Must check for actual GUID value (quoted string), not null
              OR (pto.type = 'GENERATION' AND pto.output LIKE '%"Child1_appointmentGUID": "%-%-%-%-%" %')
@@ -1647,6 +1651,96 @@ export class LangfuseTraceService {
     console.log(`[LangfuseTraceService] Incremental rebuild: ${sessionsCreated} sessions, ${tracesUpdated} traces for ${userIds.length} users`);
 
     return { sessionsCreated, tracesUpdated };
+  }
+
+  /**
+   * Refresh observations for all traces in a session from Langfuse
+   * Uses INSERT OR REPLACE to pick up new/updated observations,
+   * then recomputes cached session stats (has_successful_booking, etc.)
+   */
+  async refreshSessionObservations(
+    sessionId: string,
+    configId: number
+  ): Promise<{ session: any; traces: any[]; observations: any[] } | null> {
+    const config = this.getConfig(configId);
+    if (!config) throw new Error(`Langfuse config ${configId} not found`);
+    if (!config.secretKey) throw new Error(`Langfuse config ${configId} is missing secret key`);
+
+    // Get all traces for this session
+    const traces = this.db.prepare(`
+      SELECT trace_id FROM production_traces
+      WHERE session_id = ? AND langfuse_config_id = ?
+    `).all(sessionId, configId) as { trace_id: string }[];
+
+    if (traces.length === 0) return null;
+
+    const authHeader = this.createAuthHeader(config);
+    const normalizedHost = this.normalizeHost(config.host);
+
+    console.log(`[LangfuseTraceService] Refreshing observations for session ${sessionId} (${traces.length} traces)`);
+
+    for (const { trace_id } of traces) {
+      const traceUrl = `${normalizedHost}/api/public/traces/${trace_id}`;
+
+      try {
+        const response = await fetch(traceUrl, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Basic ${authHeader}`,
+            'Accept': 'application/json',
+          },
+        });
+
+        if (!response.ok) {
+          console.warn(`[LangfuseTraceService] Failed to refresh trace ${trace_id}: ${response.status}`);
+          continue;
+        }
+
+        const traceData = await response.json() as { observations?: LangfuseObservation[] };
+        const observations = traceData.observations || [];
+
+        for (const obs of observations) {
+          this.db.prepare(`
+            INSERT OR REPLACE INTO production_trace_observations (
+              observation_id, trace_id, parent_observation_id, type, name, model,
+              input, output, metadata_json, started_at, ended_at,
+              completion_start_time, latency_ms, usage_input_tokens,
+              usage_output_tokens, usage_total_tokens, cost, level, status_message
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(
+            obs.id,
+            trace_id,
+            obs.parentObservationId || null,
+            obs.type,
+            obs.name || null,
+            obs.model || null,
+            obs.input ? JSON.stringify(obs.input) : null,
+            obs.output ? JSON.stringify(obs.output) : null,
+            obs.metadata ? JSON.stringify(obs.metadata) : null,
+            obs.startTime || null,
+            obs.endTime || null,
+            obs.completionStartTime || null,
+            obs.latency || null,
+            obs.usage?.input || null,
+            obs.usage?.output || null,
+            obs.usage?.total || null,
+            obs.calculatedTotalCost || null,
+            obs.level || 'DEFAULT',
+            obs.statusMessage || null
+          );
+        }
+      } catch (error) {
+        console.warn(`[LangfuseTraceService] Error refreshing observations for trace ${trace_id}:`, error);
+      }
+    }
+
+    // Recompute cached stats
+    this.updateSessionCachedStats(sessionId, configId);
+
+    console.log(`[LangfuseTraceService] Refreshed session ${sessionId} observations`);
+
+    // Return updated session data
+    return this.getSession(sessionId, configId);
   }
 
   // ============================================================================

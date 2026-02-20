@@ -1582,6 +1582,21 @@ export async function getProductionSession(
 }
 
 /**
+ * Refresh a single session's observations from Langfuse and recompute cached flags
+ * Used when an appointment was booked after the call ended and the session needs updating
+ */
+export async function refreshProductionSession(
+  sessionId: string,
+  configId?: number
+): Promise<ProductionSessionDetailResponse> {
+  const response = await post<TestMonitorApiResponse<ProductionSessionDetailResponse>>(
+    `/test-monitor/production-calls/sessions/${sessionId}/refresh`,
+    { configId }
+  );
+  return response.data;
+}
+
+/**
  * Rebuild session aggregates from existing traces
  */
 export async function rebuildProductionSessions(configId?: number): Promise<{ sessionsCreated: number; sessionsUpdated: number }> {

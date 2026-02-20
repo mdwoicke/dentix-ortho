@@ -10052,6 +10052,69 @@ export async function getProductionSession(
 }
 
 /**
+ * POST /api/test-monitor/production-calls/sessions/:sessionId/refresh
+ * Re-fetch observations from Langfuse for all traces in a session and recompute cached flags
+ */
+export async function refreshProductionSession(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  let db: BetterSqlite3.Database | null = null;
+
+  try {
+    const { sessionId } = req.params;
+    let configId = req.body?.configId || req.query?.configId;
+
+    db = getTestAgentDbWritable();
+    const service = new LangfuseTraceService(db);
+
+    // If configId not provided, look it up from the session record
+    if (!configId) {
+      const sessionRow = db.prepare(`
+        SELECT langfuse_config_id FROM production_sessions WHERE session_id = ?
+      `).get(sessionId) as any;
+      if (!sessionRow) {
+        res.status(404).json({ success: false, error: 'Session not found' });
+        return;
+      }
+      configId = sessionRow.langfuse_config_id;
+    }
+
+    const parsedConfigId = typeof configId === 'string' ? parseInt(configId) : configId;
+
+    const result = await service.refreshSessionObservations(sessionId, parsedConfigId);
+
+    if (!result) {
+      res.status(404).json({ success: false, error: 'Session not found or has no traces' });
+      return;
+    }
+
+    const { session, traces, observations } = result;
+
+    // Filter and transform same as getProductionSession
+    const filteredObservations = filterInternalTraces(observations);
+    const combinedTranscript = buildCombinedTranscript(traces, filteredObservations);
+    const allApiCalls = transformToApiCalls(filteredObservations);
+
+    res.json({
+      success: true,
+      data: {
+        session: transformSessionRow(session),
+        traces: traces.map(transformTraceRow),
+        transcript: combinedTranscript,
+        apiCalls: allApiCalls,
+        observations: filteredObservations.map(transformObservationRow),
+      },
+    });
+  } catch (error) {
+    next(error);
+  } finally {
+    if (db) db.close();
+  }
+}
+
+/**
  * Build a combined transcript from multiple traces
  * Each trace typically represents one user message -> assistant response cycle
  */

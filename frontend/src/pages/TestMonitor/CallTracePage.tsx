@@ -22,6 +22,7 @@ import {
   getProductionTrace,
   getProductionTraces,
   importProductionTraces,
+  refreshProductionSession,
 } from '../../services/api/testMonitorApi';
 import type { MonitoringResult } from '../../services/api/testMonitorApi';
 import { getLangfuseConfigs, getAppSettings } from '../../services/api/appSettingsApi';
@@ -479,16 +480,18 @@ interface SessionModalProps {
   timezone: string;
   langfuseProjectId?: string;
   onClose: () => void;
+  onRefresh?: (session: ProductionSession) => void;
 }
 
 type SessionModalTab = 'transcript' | 'performance' | 'flow' | 'traces';
 
-function SessionModal({ sessionId, configId, timezone, langfuseProjectId, onClose }: SessionModalProps) {
+function SessionModal({ sessionId, configId, timezone, langfuseProjectId, onClose, onRefresh }: SessionModalProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sessionDetail, setSessionDetail] = useState<ProductionSessionDetailResponse | null>(null);
   const [activeTab, setActiveTab] = useState<SessionModalTab>('transcript');
   const [copied, setCopied] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   // Copy all session data to clipboard
   const handleCopyAll = async () => {
@@ -564,6 +567,20 @@ function SessionModal({ sessionId, configId, timezone, langfuseProjectId, onClos
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
       console.error('Failed to copy:', err);
+    }
+  };
+
+  // Refresh session observations from Langfuse
+  const handleRefresh = async () => {
+    try {
+      setRefreshing(true);
+      const updated = await refreshProductionSession(sessionId, configId);
+      setSessionDetail(updated);
+      onRefresh?.(updated.session);
+    } catch (err: any) {
+      console.error('Failed to refresh session:', err);
+    } finally {
+      setRefreshing(false);
     }
   };
 
@@ -646,6 +663,18 @@ function SessionModal({ sessionId, configId, timezone, langfuseProjectId, onClos
             )}
           </div>
           <div className="flex items-center gap-2">
+            {/* Refresh Button */}
+            {sessionDetail && (
+              <button
+                onClick={handleRefresh}
+                disabled={refreshing}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg transition-colors bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/50 disabled:opacity-50"
+                title="Re-fetch observations from Langfuse and update flags"
+              >
+                {refreshing ? <Spinner size="sm" /> : <Icons.Refresh />}
+                {refreshing ? 'Refreshing...' : 'Refresh'}
+              </button>
+            )}
             {/* Copy All Button */}
             {sessionDetail && (
               <button
@@ -1940,7 +1969,7 @@ export default function CallTracePage() {
                     Tool Errors
                   </th>
                   <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                    Order
+                    Appointment
                   </th>
                   <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                     Transfer
@@ -2014,7 +2043,7 @@ export default function CallTracePage() {
                         {(session.hasSuccessfulBooking || session.hasOrder) && (
                           <span
                             className="inline-flex items-center justify-center text-green-600 dark:text-green-400"
-                            title={session.hasOrder ? "Order confirmed" : "Appointment successfully booked"}
+                            title={session.hasOrder ? "Appointment confirmed" : "Appointment successfully booked"}
                           >
                             <Icons.CalendarCheck />
                           </span>
@@ -2443,6 +2472,11 @@ export default function CallTracePage() {
           timezone={timezone}
           langfuseProjectId={langfuseProjectId}
           onClose={() => setSelectedSessionId(null)}
+          onRefresh={(updatedSession) => {
+            setSessions(prev => prev.map(s =>
+              s.sessionId === updatedSession.sessionId ? updatedSession : s
+            ));
+          }}
         />
       )}
 

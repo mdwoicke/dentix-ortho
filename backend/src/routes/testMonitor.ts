@@ -571,6 +571,9 @@ router.get('/production-calls/sessions', testMonitorController.getProductionSess
 // POST /api/test-monitor/production-calls/sessions/rebuild - Rebuild session aggregates
 router.post('/production-calls/sessions/rebuild', testMonitorController.rebuildProductionSessions);
 
+// POST /api/test-monitor/production-calls/sessions/:sessionId/refresh - Re-fetch observations and recompute flags
+router.post('/production-calls/sessions/:sessionId/refresh', testMonitorController.refreshProductionSession);
+
 // GET /api/test-monitor/production-calls/sessions/:sessionId - Get single session with all traces
 router.get('/production-calls/sessions/:sessionId', testMonitorController.getProductionSession);
 
