@@ -720,8 +720,9 @@ export class LangfuseTraceService {
     fromDate?: string;
     toDate?: string;
     sessionId?: string;
+    callerPhone?: string;
   } = {}): { traces: any[]; total: number } {
-    const { configId, limit = 50, offset = 0, fromDate, toDate, sessionId } = options;
+    const { configId, limit = 50, offset = 0, fromDate, toDate, sessionId, callerPhone } = options;
 
     let whereClauses: string[] = ['1=1'];
     const params: any[] = [];
@@ -742,6 +743,11 @@ export class LangfuseTraceService {
     if (sessionId) {
       whereClauses.push('pt.session_id = ?');
       params.push(sessionId);
+    }
+    if (callerPhone) {
+      const digits = callerPhone.replace(/\D/g, '').slice(-10);
+      whereClauses.push("pt.session_id IN (SELECT ps.session_id FROM production_sessions ps WHERE REPLACE(REPLACE(REPLACE(ps.user_id, '+1', ''), '-', ''), ' ', '') LIKE '%' || ? || '%')");
+      params.push(digits);
     }
 
     const whereClause = whereClauses.join(' AND ');
@@ -1134,8 +1140,9 @@ export class LangfuseTraceService {
     fromDate?: string;
     toDate?: string;
     userId?: string;
+    callerPhone?: string;
   } = {}): { sessions: any[]; total: number } {
-    const { configId, limit = 50, offset = 0, fromDate, toDate, userId } = options;
+    const { configId, limit = 50, offset = 0, fromDate, toDate, userId, callerPhone } = options;
 
     let whereClauses: string[] = ['1=1'];
     const params: any[] = [];
@@ -1157,6 +1164,12 @@ export class LangfuseTraceService {
     if (userId) {
       whereClauses.push('ps.user_id = ?');
       params.push(userId);
+    }
+    if (callerPhone) {
+      // Normalize to last 10 digits for matching (strip +1 prefix, dashes, spaces)
+      const digits = callerPhone.replace(/\D/g, '').slice(-10);
+      whereClauses.push("REPLACE(REPLACE(REPLACE(ps.user_id, '+1', ''), '-', ''), ' ', '') LIKE '%' || ? || '%'");
+      params.push(digits);
     }
 
     const whereClause = whereClauses.join(' AND ');

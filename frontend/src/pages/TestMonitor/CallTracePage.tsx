@@ -128,6 +128,11 @@ const Icons = {
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 14l2 2 4-4" />
     </svg>
   ),
+  Phone: () => (
+    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+    </svg>
+  ),
   PhoneForward: () => (
     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
@@ -862,6 +867,7 @@ export default function CallTracePage() {
   const [filterFromDate, setFilterFromDate] = useState(() => getDateDaysAgo(1));
   const [filterToDate, setFilterToDate] = useState('');
   const [filterSessionId, setFilterSessionId] = useState('');
+  const [filterPhone, setFilterPhone] = useState('');
   const [showFilters, setShowFilters] = useState(false);
   const [showConnectionsManager, setShowConnectionsManager] = useState(false);
 
@@ -901,7 +907,7 @@ export default function CallTracePage() {
   const [showCustomInput, setShowCustomInput] = useState<boolean>(() => isCustomInterval(getStoredAutoRefreshInterval()));
 
   // Check if any filters are active
-  const hasActiveFilters = filterFromDate || filterToDate || filterSessionId;
+  const hasActiveFilters = filterFromDate || filterToDate || filterSessionId || filterPhone;
 
   // Get current timezone info
   const currentTimezoneInfo = US_TIMEZONES.find(tz => tz.value === timezone) || US_TIMEZONES[0];
@@ -1012,6 +1018,7 @@ export default function CallTracePage() {
         offset: filteredSessionIds ? 0 : page * pageSize,
         fromDate: filterFromDate || undefined,
         toDate: filterToDate || undefined,
+        callerPhone: filterPhone || undefined,
       });
 
       // Filter by specific session IDs if set (from insights drill-down)
@@ -1030,7 +1037,7 @@ export default function CallTracePage() {
     } finally {
       setLoading(false);
     }
-  }, [selectedConfigId, page, pageSize, filterFromDate, filterToDate, filteredSessionIds]);
+  }, [selectedConfigId, page, pageSize, filterFromDate, filterToDate, filterPhone, filteredSessionIds]);
 
   // Load traces with filters
   const loadTraces = useCallback(async () => {
@@ -1046,6 +1053,7 @@ export default function CallTracePage() {
         fromDate: filterFromDate || undefined,
         toDate: filterToDate || undefined,
         sessionId: filterSessionId || undefined,
+        callerPhone: filterPhone || undefined,
       });
       setTraces(result.traces);
       setTotal(result.total);
@@ -1054,7 +1062,7 @@ export default function CallTracePage() {
     } finally {
       setLoading(false);
     }
-  }, [selectedConfigId, page, pageSize, filterFromDate, filterToDate, filterSessionId]);
+  }, [selectedConfigId, page, pageSize, filterFromDate, filterToDate, filterSessionId, filterPhone]);
 
   // Load monitoring results
   const loadMonitoringResults = useCallback(async () => {
@@ -1149,6 +1157,7 @@ export default function CallTracePage() {
     setFilterFromDate('');
     setFilterToDate('');
     setFilterSessionId('');
+    setFilterPhone('');
     setFilteredSessionIds(null);
     setActiveIssueFilter(null);
     setActiveIssueDescription(null);
@@ -1696,7 +1705,7 @@ export default function CallTracePage() {
           {/* Expandable Filter Fields */}
           {showFilters && (
             <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
                 {/* Date Range - From */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
@@ -1739,6 +1748,26 @@ export default function CallTracePage() {
                     />
                     <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
                       <Icons.Search />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Phone Number Search */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Phone Number
+                  </label>
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={filterPhone}
+                      onChange={(e) => setFilterPhone(e.target.value)}
+                      placeholder="Search by phone..."
+                      className="block w-full px-3 py-2 pl-9 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      onKeyDown={(e) => e.key === 'Enter' && applyFilters()}
+                    />
+                    <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
+                      <Icons.Phone />
                     </div>
                   </div>
                 </div>
@@ -1854,6 +1883,11 @@ export default function CallTracePage() {
             {filterSessionId && (
               <span className="px-2 py-0.5 bg-blue-100 dark:bg-blue-800 rounded text-xs font-mono">
                 Session: {filterSessionId}
+              </span>
+            )}
+            {filterPhone && (
+              <span className="px-2 py-0.5 bg-blue-100 dark:bg-blue-800 rounded text-xs font-mono">
+                Phone: {filterPhone}
               </span>
             )}
             <span className="text-blue-500 dark:text-blue-400">({currentTotal} results)</span>

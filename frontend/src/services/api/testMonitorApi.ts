@@ -1329,6 +1329,7 @@ export async function getProductionTraces(options?: {
   fromDate?: string;
   toDate?: string;
   sessionId?: string;
+  callerPhone?: string;
 }): Promise<ProductionTracesResponse> {
   const params = new URLSearchParams();
   if (options?.configId) params.append('configId', options.configId.toString());
@@ -1337,6 +1338,7 @@ export async function getProductionTraces(options?: {
   if (options?.fromDate) params.append('fromDate', options.fromDate);
   if (options?.toDate) params.append('toDate', options.toDate);
   if (options?.sessionId) params.append('sessionId', options.sessionId);
+  if (options?.callerPhone) params.append('callerPhone', options.callerPhone);
 
   const queryString = params.toString();
   const url = `/test-monitor/production-calls${queryString ? `?${queryString}` : ''}`;
@@ -1546,6 +1548,7 @@ export async function getProductionSessions(options?: {
   fromDate?: string;
   toDate?: string;
   userId?: string;
+  callerPhone?: string;
 }): Promise<ProductionSessionsResponse> {
   const params = new URLSearchParams();
   if (options?.configId) params.append('configId', options.configId.toString());
@@ -1554,6 +1557,7 @@ export async function getProductionSessions(options?: {
   if (options?.fromDate) params.append('fromDate', options.fromDate);
   if (options?.toDate) params.append('toDate', options.toDate);
   if (options?.userId) params.append('userId', options.userId);
+  if (options?.callerPhone) params.append('callerPhone', options.callerPhone);
 
   const queryString = params.toString();
   const url = `/test-monitor/production-calls/sessions${queryString ? `?${queryString}` : ''}`;

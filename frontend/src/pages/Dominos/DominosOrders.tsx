@@ -1073,6 +1073,7 @@ export default function DominosOrders() {
   const [filterStatus, setFilterStatus] = useState('');
   const [filterMethod, setFilterMethod] = useState('');
   const [filterSessionId, setFilterSessionId] = useState('');
+  const [filterPhone, setFilterPhone] = useState('');
   const [filterEndpoint, setFilterEndpoint] = useState('');
   const [dateStart, setDateStart] = useState('');
   const [dateEnd, setDateEnd] = useState('');
@@ -1116,6 +1117,11 @@ export default function DominosOrders() {
       if (filterMethod && log.method !== filterMethod) return false;
       if (filterEndpoint && !log.endpoint?.toLowerCase().includes(filterEndpoint.toLowerCase())) return false;
       if (filterSessionId && !log.session_id?.toLowerCase().includes(filterSessionId.toLowerCase())) return false;
+      if (filterPhone) {
+        const digits = filterPhone.replace(/\D/g, '').slice(-10);
+        const logPhone = (log.customer_phone || '').replace(/\D/g, '');
+        if (!logPhone.includes(digits)) return false;
+      }
 
       // Date range filter
       if (dateStart || dateEnd) {
@@ -1133,7 +1139,7 @@ export default function DominosOrders() {
 
       return true;
     });
-  }, [allLogs, filterStatus, filterMethod, filterEndpoint, filterSessionId, dateStart, dateEnd]);
+  }, [allLogs, filterStatus, filterMethod, filterEndpoint, filterSessionId, filterPhone, dateStart, dateEnd]);
 
   // Compute stats from filtered logs (matches original calculateFilteredStats)
   const filteredStats = useMemo(() => {
@@ -1166,6 +1172,7 @@ export default function DominosOrders() {
     if (filterMethod) parts.push(`Method: ${filterMethod}`);
     if (filterEndpoint) parts.push(`Endpoint: "${filterEndpoint}"`);
     if (filterSessionId) parts.push(`Session: "${filterSessionId}"`);
+    if (filterPhone) parts.push(`Phone: "${filterPhone}"`);
     if (dateStart || dateEnd) {
       const s = dateStart ? new Date(dateStart).toLocaleDateString() : '';
       const e = dateEnd ? new Date(dateEnd).toLocaleDateString() : '';
@@ -1178,15 +1185,16 @@ export default function DominosOrders() {
       return `(Showing ${filteredLogs.length} of ${allLogs.length} logs - Filters: ${parts.join(', ')})`;
     }
     return `(Showing all ${allLogs.length} logs)`;
-  }, [filteredLogs.length, allLogs.length, filterStatus, filterMethod, filterEndpoint, filterSessionId, dateStart, dateEnd]);
+  }, [filteredLogs.length, allLogs.length, filterStatus, filterMethod, filterEndpoint, filterSessionId, filterPhone, dateStart, dateEnd]);
 
-  const hasActiveFilters = filterStatus || filterMethod || filterEndpoint || filterSessionId || dateStart || dateEnd;
+  const hasActiveFilters = filterStatus || filterMethod || filterEndpoint || filterSessionId || filterPhone || dateStart || dateEnd;
 
   const clearAllFilters = () => {
     setFilterStatus('');
     setFilterMethod('');
     setFilterEndpoint('');
     setFilterSessionId('');
+    setFilterPhone('');
     setDateStart('');
     setDateEnd('');
     setActiveQuickFilter('');
@@ -1523,6 +1531,13 @@ export default function DominosOrders() {
                 placeholder="Search session ID (partial)..."
                 value={filterSessionId}
                 onChange={(e) => setFilterSessionId(e.target.value)}
+                className="px-3 py-1.5 text-sm rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+              />
+              <input
+                type="text"
+                placeholder="Phone number..."
+                value={filterPhone}
+                onChange={(e) => setFilterPhone(e.target.value)}
                 className="px-3 py-1.5 text-sm rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
               />
             </div>

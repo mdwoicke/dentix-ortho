@@ -124,6 +124,11 @@ const Icons = {
       </g>
     </svg>
   ),
+  Phone: () => (
+    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+    </svg>
+  ),
   PhoneForward: () => (
     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
@@ -627,6 +632,7 @@ export default function DominosCallTracing() {
 
   // Search / import
   const [searchId, setSearchId] = useState('');
+  const [searchPhone, setSearchPhone] = useState('');
   const [importing, setImporting] = useState(false);
   const [importMessage, setImportMessage] = useState('');
   const [importFromDate, setImportFromDate] = useState(todayISO());
@@ -685,7 +691,11 @@ export default function DominosCallTracing() {
     if (!selectedConfigId) return;
     setSessionsLoading(true);
     try {
-      const res = await getProductionSessions({ configId: selectedConfigId, limit: 50 });
+      const res = await getProductionSessions({
+        configId: selectedConfigId,
+        limit: 50,
+        callerPhone: searchPhone || undefined,
+      });
       setSessions(res.sessions);
       setSessionsTotal(res.total);
     } catch (err) {
@@ -693,7 +703,7 @@ export default function DominosCallTracing() {
     } finally {
       setSessionsLoading(false);
     }
-  }, [selectedConfigId]);
+  }, [selectedConfigId, searchPhone]);
 
   useEffect(() => { loadSessions(); }, [loadSessions]);
 
@@ -930,7 +940,20 @@ export default function DominosCallTracing() {
             )}
           </div>
 
-          <div className="flex items-center gap-1 ml-auto">
+          <div className="flex items-center gap-2 ml-auto">
+            <div className="relative">
+              <input
+                type="text"
+                placeholder="Phone number..."
+                value={searchPhone}
+                onChange={(e) => setSearchPhone(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && loadSessions()}
+                className="text-sm border border-gray-300 dark:border-gray-600 rounded-lg pl-8 pr-3 py-1.5 bg-white dark:bg-gray-700 text-gray-900 dark:text-white w-48"
+              />
+              <div className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400">
+                <Icons.Phone />
+              </div>
+            </div>
             <input
               type="text"
               placeholder="Session ID..."

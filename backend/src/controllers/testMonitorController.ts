@@ -8791,6 +8791,7 @@ export async function getProductionTraces(
       fromDate,
       toDate,
       sessionId,
+      callerPhone,
     } = req.query;
 
     db = getTestAgentDbWritable();
@@ -8803,6 +8804,7 @@ export async function getProductionTraces(
       fromDate: fromDate as string,
       toDate: toDate as string,
       sessionId: sessionId as string,
+      callerPhone: callerPhone as string,
     });
 
     res.json({
@@ -9931,6 +9933,7 @@ export async function getProductionSessions(
       fromDate,
       toDate,
       userId,
+      callerPhone,
     } = req.query;
 
     db = getTestAgentDbWritable();
@@ -9943,6 +9946,7 @@ export async function getProductionSessions(
       fromDate: fromDate as string,
       toDate: toDate as string,
       userId: userId as string,
+      callerPhone: callerPhone as string,
     });
 
     res.json({
