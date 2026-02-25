@@ -1505,7 +1505,8 @@ export async function importProductionTraces(options: {
 }): Promise<ImportResult> {
   const response = await post<TestMonitorApiResponse<ImportResult>>(
     '/test-monitor/production-calls/import',
-    options
+    options,
+    { timeout: API_CONFIG.AI_TIMEOUT } // 10 min — import fetches many pages from Langfuse
   );
   return response.data;
 }

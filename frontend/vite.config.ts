@@ -21,6 +21,7 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:3002',
         changeOrigin: true,
+        timeout: 600000, // 10 min — long-running imports need more time
       },
       // Proxy Node Red API calls to the production server
       '/FabricWorkflow': {

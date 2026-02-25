@@ -53,6 +53,15 @@ export function getToolNamesForConfig(db: BetterSqlite3.Database, configId: numb
   return TENANT_TOOL_NAMES[tenantId] || TENANT_TOOL_NAMES[1];
 }
 
+/** Returns the tenantId for a given configId (uses same cache as getToolNamesForConfig) */
+export function getTenantIdForConfig(db: BetterSqlite3.Database, configId: number): number {
+  if (!configTenantCache.has(configId)) {
+    const row = db.prepare('SELECT tenant_id FROM langfuse_configs WHERE id = ?').get(configId) as any;
+    configTenantCache.set(configId, row?.tenant_id || 1);
+  }
+  return configTenantCache.get(configId)!;
+}
+
 export function getDefaultToolNames(): ToolNames {
   return TENANT_TOOL_NAMES[1];
 }

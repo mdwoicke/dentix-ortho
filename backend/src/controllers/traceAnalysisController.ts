@@ -11,7 +11,7 @@ import path from 'path';
 import { LangfuseTraceService } from '../services/langfuseTraceService';
 import { classifyCallerIntent, CallerIntent, ConversationTurn, enhanceIntentWithObservations } from '../services/callerIntentClassifier';
 import { mapToolSequence, ToolSequenceResult } from '../services/toolSequenceMapper';
-import { getAllKnownToolNames, getToolNamesForConfig } from '../services/toolNameResolver';
+import { getAllKnownToolNames, getToolNamesForConfig, getTenantIdForConfig } from '../services/toolNameResolver';
 import {
   transformToConversationTurns,
   filterInternalTraces,
@@ -1953,13 +1953,175 @@ function buildTranscript(traces: any[], observations: any[]): ConversationTurn[]
 
 // ── Booking Investigation Endpoint ──────────────────────────────────────────
 
-const SCHEDULING_TOOLS_INV = ['chord_scheduling_v08', 'chord_scheduling_v07_dev'];
-const ALL_KNOWN_TOOLS_INV = [...SCHEDULING_TOOLS_INV, 'chord_patient_v07_stage', 'CurrentDateTime', 'chord_OGHandleEscalation', 'chord_handleEscalation'];
 const KNOWN_PLACEHOLDERS = ['123456789', '987654321', '1234567890', 'APPT123456', 'null', 'undefined', 'N/A', 'TBD'];
 
-function isPlaceholderId(id: string): boolean {
-  return KNOWN_PLACEHOLDERS.includes(id) || /^(APPT|TEST|FAKE|DEMO)\d+$/i.test(id) || id === 'null';
+function isPlaceholderId(id: string, tenantId: number): boolean {
+  if (KNOWN_PLACEHOLDERS.includes(id) || /^(APPT|TEST|FAKE|DEMO)\d+$/i.test(id) || id === 'null') return true;
+  if (tenantId === 1) {
+    // Ortho: real IDs are Cloud9 GUIDs (8-4-4-4-12 hex)
+    if (id === '00000000-0000-0000-0000-000000000000') return true;
+    if (!/^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/.test(id)) return true;
+  } else if (tenantId === 5) {
+    // Chord: real IDs are NexHealth numeric integers
+    if (!/^\d+$/.test(id)) return true;
+  }
+  return false;
 }
+
+/** Shared brace-depth JSON parser for PAYLOAD blocks */
+function extractPayloadJson(text: string): any | null {
+  const payloadStart = text.indexOf('PAYLOAD');
+  if (payloadStart === -1) return null;
+  const braceStart = text.indexOf('{', payloadStart);
+  if (braceStart === -1) return null;
+  let depth = 0; let braceEnd = -1;
+  for (let i = braceStart; i < text.length; i++) {
+    if (text[i] === '{') depth++;
+    else if (text[i] === '}') { depth--; if (depth === 0) { braceEnd = i + 1; break; } }
+  }
+  if (braceEnd === -1) return null;
+  try {
+    return JSON.parse(text.substring(braceStart, braceEnd).replace(/\\"/g, '"').replace(/\\n/g, '\n'));
+  } catch {
+    return text.substring(braceStart, Math.min(braceEnd, braceStart + 2000));
+  }
+}
+
+/** Extract PAYLOAD findings from GENERATION observations (works for both Ortho and Chord) */
+function extractPayloadFindings(generationObs: any[]): PayloadFinding[] {
+  // Regex patterns — case-insensitive for Child/child prefix to handle both tenants
+  const childApptIdRe = /[Cc]hild[12]_appointmentId\\?["']?\s*[:=]\s*\\?["']?([A-Za-z0-9_-]+)/g;
+  const childApptGuidRe = /[Cc]hild[12]_appointmentGUID\\?["']?\s*[:=]\s*\\?["']?([0-9A-Fa-f-]{8,36})/g;
+  const childPatientIdRe = /[Cc]hild[12]_patient(?:Id|GUID)\\?["']?\s*[:=]\s*\\?["']?([A-Za-z0-9-]+)/g;
+  const childNameRe = /[Cc]hild[12]_(?:First)?Name\\?["']?\s*[:=]\s*\\?["']?([^"'\\,}\n]+)/g;
+  const callerNameRe = /[Cc]aller_Name\\?["']?\s*[:=]\s*\\?["']?([^"'\\,}\n]+)/;
+  const parentPatientIdRe = /[Pp]arent_patient(?:Id|GUID)\\?["']?\s*[:=]\s*\\?["']?([A-Za-z0-9-]+)/;
+
+  const findings: PayloadFinding[] = [];
+  for (const gen of generationObs) {
+    const out = typeof gen.output === 'string' ? gen.output : JSON.stringify(gen.output || '');
+    if (!out.includes('PAYLOAD')) continue;
+
+    const apptIds: string[] = [];
+    const apptGuids: string[] = [];
+    const patientIds: string[] = [];
+    const childNames: string[] = [];
+    let m: RegExpExecArray | null;
+
+    // Regex-based extraction from raw text
+    const r1 = new RegExp(childApptIdRe.source, 'g');
+    while ((m = r1.exec(out)) !== null) apptIds.push(m[1]);
+    const r2 = new RegExp(childApptGuidRe.source, 'g');
+    while ((m = r2.exec(out)) !== null) apptGuids.push(m[1]);
+    const r3 = new RegExp(childPatientIdRe.source, 'g');
+    while ((m = r3.exec(out)) !== null) patientIds.push(m[1]);
+    const r4 = new RegExp(childNameRe.source, 'g');
+    while ((m = r4.exec(out)) !== null) childNames.push(m[1].trim());
+
+    const callerMatch = out.match(callerNameRe);
+    const parentMatch = out.match(parentPatientIdRe);
+    const payloadJson = extractPayloadJson(out);
+
+    // JSON-based fallback: extract from parsed PAYLOAD to catch any naming convention
+    if (payloadJson && typeof payloadJson === 'object') {
+      const cs = payloadJson.Call_Summary || payloadJson;
+      if (cs && typeof cs === 'object') {
+        for (const key of Object.keys(cs)) {
+          const val = cs[key];
+          if (typeof val !== 'string' || !val) continue;
+          if (/^[Cc]hild\d+_appointmentGUID$/i.test(key) && !apptGuids.includes(val)) apptGuids.push(val);
+          if (/^[Cc]hild\d+_appointmentId$/i.test(key) && !apptIds.includes(val)) apptIds.push(val);
+          if (/^[Cc]hild\d+_patient(?:Id|GUID)$/i.test(key) && !patientIds.includes(val)) patientIds.push(val);
+          if (/^[Cc]hild\d+_(?:First)?Name$/i.test(key) && !childNames.includes(val.trim())) childNames.push(val.trim());
+        }
+      }
+    }
+
+    if (apptIds.length > 0 || apptGuids.length > 0) {
+      findings.push({
+        traceId: gen.trace_id,
+        timestamp: gen.started_at || '',
+        apptIds, apptGuids, patientIds, childNames,
+        callerName: callerMatch ? callerMatch[1].trim() : null,
+        parentPatientId: parentMatch ? parentMatch[1] : null,
+        payloadJson,
+      });
+    }
+  }
+  return findings;
+}
+
+/** Check: did the LLM confirm a booking to the caller? (works for both tenants — same flat PAYLOAD format) */
+function checkConfirmedBooking(payloadFindings: PayloadFinding[], _tenantId: number): boolean {
+  return payloadFindings.some(f => {
+    const pj = f.payloadJson;
+    if (!pj || typeof pj !== 'object') return false;
+
+    // Both Ortho and Chord use the same flat PAYLOAD: Child1_Intent_Complete, Child1_Final_Disposition, etc.
+    const cs = pj.Call_Summary || pj;
+    const disposition = cs.Child1_Final_Disposition || cs.child1_Final_Disposition || '';
+    const intentComplete = cs.Child1_Intent_Complete || cs.child1_Intent_Complete || '';
+    const apptDetails = cs.Child1_Appointment_Details || cs.child1_Appointment_Details;
+    const disposition2 = cs.Child2_Final_Disposition || cs.child2_Final_Disposition || '';
+    const intentComplete2 = cs.Child2_Intent_Complete || cs.child2_Intent_Complete || '';
+
+    const hasScheduleIntent = intentComplete === 'Schedule' || intentComplete2 === 'Schedule';
+    const hasIntentComplete = disposition.includes('Intent Complete') || disposition2.includes('Intent Complete');
+    const hasApptDetails = apptDetails && typeof apptDetails === 'object' && apptDetails.date;
+
+    return (hasScheduleIntent && hasIntentComplete) || (hasScheduleIntent && hasApptDetails);
+  });
+}
+
+/** Disposition extraction from PAYLOAD (same flat format for all tenants) */
+function extractDisposition(payloadFindings: PayloadFinding[], _tenantId: number): string {
+  for (const f of payloadFindings) {
+    const pj = f.payloadJson;
+    if (!pj || typeof pj !== 'object') continue;
+    const cs = pj.Call_Summary || pj;
+    const d = cs.Call_Final_Disposition || cs.call_Final_Disposition;
+    if (d) return d;
+  }
+  return '';
+}
+
+/** Appointment description extraction from PAYLOAD (same flat format for all tenants) */
+function extractAppointmentDescription(payloadFindings: PayloadFinding[], _tenantId: number): string {
+  for (const f of payloadFindings) {
+    const pj = f.payloadJson;
+    if (!pj || typeof pj !== 'object') continue;
+    const cs = pj.Call_Summary || pj;
+    const d = cs.Child1_Appointment_Details || cs.child1_Appointment_Details;
+    if (d && typeof d === 'object') {
+      return `${d.day_of_week || ''}, ${d.date || ''} at ${d.time || ''}`.trim();
+    }
+    const apptType = cs.Child1_Appointment_Type || cs.child1_Appointment_Type;
+    if (apptType) {
+      return `a ${apptType.toLowerCase()}`;
+    }
+  }
+  return '';
+}
+
+// ── Recommended Fixes Types & Constants ─────────────────────────────────────
+
+type FixSeverity = 'Critical' | 'Warning' | 'Info';
+type ArtifactTarget = 'system_prompt' | 'scheduling_tool' | 'patient_tool' | 'nodered_flow';
+
+interface RecommendedFix {
+  severity: FixSeverity;
+  target: ArtifactTarget;
+  issue: string;
+  recommendation: string;
+  fixApplied?: string; // e.g. "v92" — version where fix was shipped
+}
+
+const ARTIFACT_META: Record<ArtifactTarget, { label: string; file: string }> = {
+  system_prompt:   { label: 'System Prompt',   file: 'docs/v1/Chord_Cloud9_SystemPrompt.md' },
+  scheduling_tool: { label: 'Scheduling Tool', file: 'docs/v1/scheduling_tool_func.js' },
+  patient_tool:    { label: 'Patient Tool',    file: 'docs/v1/patient_tool_func.js' },
+  nodered_flow:    { label: 'Node-RED Flows',  file: 'nodered/nodered_Cloud9_flows.json' },
+};
 
 interface InvestigationToolCall {
   index: number;
@@ -1985,8 +2147,39 @@ interface PayloadFinding {
   payloadJson: any;
 }
 
+interface BookingDetail {
+  childName: string;
+  childDob: string | null;
+  childAge: string | null;
+  appointmentGuid: string | null;    // Cloud9 GUID (Ortho) or NexHealth ID (Chord)
+  appointmentDate: string | null;    // e.g. "3/17/2026 9:50:00 AM" or "2026-03-17"
+  appointmentTime: string | null;    // e.g. "9:50 AM" or "2:30 PM"
+  appointmentDayOfWeek: string | null;
+  appointmentType: string | null;    // e.g. "Exam - PPO/Self" or "New Patient Cleaning and Exam"
+  appointmentMinutes: number | null;
+  locationName: string | null;
+  providerName: string | null;
+  chair: string | null;
+  status: string | null;             // "active", "cancelled", "placeholder"
+  patientGuid: string | null;
+  isNewPatient: boolean;
+  // Caller / guarantor info
+  callerName: string | null;
+  callerPhone: string | null;
+  callerEmail: string | null;
+  callerDob: string | null;
+  // Insurance
+  insuranceProvider: string | null;
+  insuranceMemberId: string | null;
+  // Extra
+  specialNeeds: string | null;
+  interactionSummary: string | null;
+  disposition: string | null;
+}
+
 interface InvestigationResult {
   sessionId: string;
+  tenantId: number;  // 1=Ortho (Cloud9), 5=Chord (NexHealth)
   classification: 'CLEAN' | 'LEGITIMATE' | 'FALSE_POSITIVE' | 'FALSE_POSITIVE_WITH_TOOL' | 'INCONCLUSIVE';
   configName: string;
   session: {
@@ -2008,6 +2201,336 @@ interface InvestigationResult {
   callerName: string | null;
   childNames: string[];
   phone: string | null;
+  bookingDetails: BookingDetail[];
+}
+
+/** Extract detailed booking information from tool outputs, PAYLOAD, and prod_test_records */
+function extractBookingDetails(
+  bookingToolCalls: InvestigationToolCall[],
+  payloadFindings: PayloadFinding[],
+  db: BetterSqlite3.Database,
+  sessionId: string,
+  tenantId: number,
+): BookingDetail[] {
+  const details: BookingDetail[] = [];
+  const seenGuids = new Set<string>();
+
+  // Get the final (termination) PAYLOAD for caller/insurance info
+  const finalPayload = payloadFindings.length > 0
+    ? payloadFindings[payloadFindings.length - 1].payloadJson
+    : null;
+  const cs = finalPayload?.Call_Summary || finalPayload || {};
+
+  // Helper: case-insensitive field access from Call_Summary
+  const csGet = (key: string): string | null => {
+    const v = cs[key] ?? cs[key.charAt(0).toLowerCase() + key.slice(1)];
+    return v && typeof v === 'string' && v !== 'Not Provided' && v !== 'null' ? v : null;
+  };
+
+  // Shared caller/insurance info from PAYLOAD
+  const callerInfo = {
+    callerName: csGet('Caller_Name') || csGet('guarantor_FirstName') ? `${csGet('guarantor_FirstName') || csGet('guarantor_firstName') || ''} ${csGet('guarantor_LastName') || csGet('guarantor_lastName') || ''}`.trim() || null : null,
+    callerPhone: csGet('Contact_Number') || csGet('ANI'),
+    callerEmail: csGet('Email'),
+    callerDob: csGet('guarantor_DOB'),
+    insuranceProvider: csGet('insurance_provider'),
+    insuranceMemberId: csGet('insurance_member_id'),
+    specialNeeds: csGet('special_needs'),
+    interactionSummary: csGet('Interaction_Summary'),
+    disposition: csGet('Call_Final_Disposition'),
+    isNewPatient: cs.new_patient === true || cs.new_patient === 'true',
+  };
+
+  // 1. Extract from book_child tool outputs (most accurate — real booking data)
+  for (const tc of bookingToolCalls) {
+    const out = tc.output;
+    if (!out?.success || !out?.children) continue;
+    const children = Array.isArray(out.children) ? out.children : [];
+    for (const child of children) {
+      if (!child.appointment?.booked) continue;
+      const guid = child.appointment?.appointmentGUID || child.appointment?.appointmentId;
+      if (guid && seenGuids.has(guid)) continue;
+      if (guid) seenGuids.add(guid);
+
+      // Parse startTime
+      let apptDate: string | null = null;
+      let apptTime: string | null = null;
+      let apptDow: string | null = null;
+      const st = child.appointment?.startTime || '';
+      if (st) {
+        // "3/17/2026 9:50:00 AM" or ISO format
+        const parts = st.split(' ');
+        apptDate = parts[0] || null;
+        apptTime = parts.slice(1).join(' ').replace(/:00 /, ' ') || null;
+      }
+
+      details.push({
+        childName: `${child.firstName || ''} ${child.lastName || out.parent?.lastName || ''}`.trim(),
+        childDob: null,
+        childAge: null,
+        appointmentGuid: guid || null,
+        appointmentDate: apptDate,
+        appointmentTime: apptTime,
+        appointmentDayOfWeek: apptDow,
+        appointmentType: null,
+        appointmentMinutes: null,
+        locationName: null,
+        providerName: null,
+        chair: null,
+        status: 'active',
+        patientGuid: child.patientGUID || child.patientId || null,
+        ...callerInfo,
+      });
+    }
+  }
+
+  // 2. Enrich from prod_test_records (has provider, location, appt type, chair, etc.)
+  try {
+    const prodRecords = db.prepare(`
+      SELECT * FROM prod_test_records
+      WHERE session_id = ?
+      ORDER BY status ASC, created_at DESC
+    `).all(sessionId) as any[]; // status ASC puts 'active' before 'cancelled'
+
+    for (const rec of prodRecords) {
+      const guid = rec.appointment_guid || rec.patient_id;
+      // Find existing detail by matching GUID, or add new if not from tool output
+      let detail = details.find(d => d.appointmentGuid === guid);
+      if (!detail && guid && !seenGuids.has(guid)) {
+        seenGuids.add(guid);
+        detail = {
+          childName: `${rec.patient_first_name || ''} ${rec.patient_last_name || ''}`.trim() || 'Unknown',
+          childDob: rec.patient_birthdate || null,
+          childAge: null,
+          appointmentGuid: guid,
+          appointmentDate: null, appointmentTime: null, appointmentDayOfWeek: null,
+          appointmentType: null, appointmentMinutes: null,
+          locationName: null, providerName: null, chair: null,
+          status: rec.status || 'active',
+          patientGuid: rec.patient_guid || null,
+          ...callerInfo,
+        };
+        details.push(detail);
+      }
+      if (detail) {
+        // Enrich with prod_test_records fields
+        if (rec.appointment_type) detail.appointmentType = rec.appointment_type;
+        if (rec.appointment_minutes) detail.appointmentMinutes = rec.appointment_minutes;
+        if (rec.location_name) detail.locationName = rec.location_name;
+        if (rec.provider_name) detail.providerName = rec.provider_name;
+        if (rec.chair) detail.chair = rec.chair;
+        if (rec.status) detail.status = rec.status;
+        if (rec.appointment_datetime) {
+          const parts = rec.appointment_datetime.split(' ');
+          detail.appointmentDate = parts[0] || detail.appointmentDate;
+          detail.appointmentTime = parts.slice(1).join(' ').replace(/:00 /, ' ') || detail.appointmentTime;
+        }
+        if (rec.patient_first_name && !detail.childName) {
+          detail.childName = `${rec.patient_first_name} ${rec.patient_last_name || ''}`.trim();
+        }
+      }
+    }
+  } catch { /* prod_test_records may not exist */ }
+
+  // 3. Enrich from PAYLOAD Call_Summary (child DOB/age, appointment details, location)
+  for (const detail of details) {
+    // Child DOB/age from PAYLOAD
+    if (!detail.childDob) detail.childDob = csGet('Child1_DOB');
+    if (!detail.childAge) detail.childAge = csGet('Child1_Age');
+
+    // Appointment type from PAYLOAD (Chord has this)
+    if (!detail.appointmentType) {
+      detail.appointmentType = csGet('Child1_Appointment_Type');
+    }
+
+    // Appointment details from PAYLOAD (Chord structured format)
+    const apptDetails = cs.Child1_Appointment_Details || cs.child1_Appointment_Details;
+    if (apptDetails && typeof apptDetails === 'object') {
+      if (!detail.appointmentDate && apptDetails.date) detail.appointmentDate = apptDetails.date;
+      if (!detail.appointmentTime && apptDetails.time) detail.appointmentTime = apptDetails.time;
+      if (!detail.appointmentDayOfWeek && apptDetails.day_of_week) detail.appointmentDayOfWeek = apptDetails.day_of_week;
+    }
+
+    // Ortho: parse offered_slot string "startTime=3/17/2026 9:50:00 AM,..."
+    if (!detail.appointmentTime) {
+      const offeredSlot = csGet('Child1_offered_slot');
+      if (offeredSlot) {
+        const stMatch = offeredSlot.match(/startTime=([^,]+)/);
+        if (stMatch) {
+          const parts = stMatch[1].split(' ');
+          if (!detail.appointmentDate) detail.appointmentDate = parts[0] || null;
+          detail.appointmentTime = parts.slice(1).join(' ').replace(/:00 /, ' ') || null;
+        }
+      }
+    }
+
+    // Location from PAYLOAD
+    if (!detail.locationName) {
+      detail.locationName = csGet('location_name') || csGet('Call_Location');
+    }
+
+    // Child last name from PAYLOAD if still missing
+    if (detail.childName && !detail.childName.includes(' ')) {
+      const ln = csGet('Child1_LastName');
+      if (ln) detail.childName = `${detail.childName} ${ln}`;
+    }
+  }
+
+  // 4. For FALSE_POSITIVE / Chord sessions with no tool bookings, build from PAYLOAD only
+  if (details.length === 0 && payloadFindings.length > 0) {
+    const apptGuid = csGet('Child1_appointmentGUID') || csGet('Child1_appointmentId');
+    const childFirst = csGet('Child1_FirstName');
+    if (apptGuid || childFirst) {
+      const apptDetails = cs.Child1_Appointment_Details || cs.child1_Appointment_Details;
+      details.push({
+        childName: `${childFirst || ''} ${csGet('Child1_LastName') || ''}`.trim() || 'Unknown',
+        childDob: csGet('Child1_DOB'),
+        childAge: csGet('Child1_Age'),
+        appointmentGuid: apptGuid,
+        appointmentDate: apptDetails?.date || null,
+        appointmentTime: apptDetails?.time || null,
+        appointmentDayOfWeek: apptDetails?.day_of_week || null,
+        appointmentType: csGet('Child1_Appointment_Type'),
+        appointmentMinutes: null,
+        locationName: csGet('location_name') || csGet('Call_Location'),
+        providerName: null,
+        chair: null,
+        status: apptGuid && !isPlaceholderId(apptGuid, tenantId) ? 'active' : 'placeholder',
+        patientGuid: csGet('Child1_patientId') || csGet('Child1_patientGUID'),
+        ...callerInfo,
+      });
+    }
+  }
+
+  return details;
+}
+
+/**
+ * Shared investigation logic used by both investigateSession and getInvestigationReport.
+ * Returns null if session not found.
+ */
+function runInvestigation(sessionId: string, db: BetterSqlite3.Database): InvestigationResult | null {
+  const session = db.prepare(`
+    SELECT session_id, langfuse_config_id, has_successful_booking, has_transfer, has_order,
+           trace_count, error_count, first_trace_at, last_trace_at, user_id
+    FROM production_sessions WHERE session_id = ?
+  `).get(sessionId) as any;
+
+  if (!session) return null;
+
+  const configId = session.langfuse_config_id;
+  const tenantId = getTenantIdForConfig(db, configId);
+  const toolNames = getToolNamesForConfig(db, configId);
+
+  const traces = db.prepare(`
+    SELECT trace_id, name, started_at FROM production_traces
+    WHERE session_id = ? ORDER BY started_at ASC
+  `).all(sessionId) as any[];
+
+  const configRow = db.prepare('SELECT name FROM langfuse_configs WHERE id = ?').get(configId) as any;
+  const configName = configRow?.name || `Config ${configId}`;
+
+  const baseSession = {
+    configId,
+    hasSuccessfulBooking: session.has_successful_booking,
+    hasTransfer: session.has_transfer,
+    hasOrder: session.has_order,
+    traceCount: session.trace_count,
+    errorCount: session.error_count,
+    firstTraceAt: session.first_trace_at,
+    lastTraceAt: session.last_trace_at,
+    userId: session.user_id,
+  };
+
+  if (traces.length === 0) {
+    return {
+      sessionId, tenantId, classification: 'CLEAN', configName,
+      session: baseSession,
+      toolCalls: [], bookingToolCallCount: 0, payloadFindings: [],
+      allExtractedIds: [], placeholderIds: [],
+      callerName: null, childNames: [], phone: null, bookingDetails: [],
+    };
+  }
+
+  const traceIds = traces.map((t: any) => t.trace_id);
+  const ph = traceIds.map(() => '?').join(',');
+
+  const allObs = db.prepare(`
+    SELECT name, type, level, input, output, status_message, started_at, trace_id
+    FROM production_trace_observations WHERE trace_id IN (${ph}) ORDER BY started_at ASC
+  `).all(...traceIds) as any[];
+
+  // Filter tool observations using tenant-specific tool names
+  const toolObs = allObs.filter((o: any) => toolNames.all.includes(o.name));
+  const toolCalls: InvestigationToolCall[] = toolObs.map((obs: any, idx: number) => {
+    let input: any = {};
+    try { input = typeof obs.input === 'string' ? JSON.parse(obs.input) : obs.input || {}; } catch {}
+    let output: any = {};
+    try { output = typeof obs.output === 'string' ? JSON.parse(obs.output) : obs.output || {}; } catch {}
+    const action = input?.action || (toolNames.dateTimeTools.includes(obs.name) ? 'getDateTime' : obs.name.includes('Escalation') || obs.name.includes('HandleEscalation') ? 'escalation' : 'unknown');
+    const level = obs.level || 'DEFAULT';
+    const isError = level === 'ERROR' || (obs.status_message || '').includes('required');
+    return { index: idx + 1, name: obs.name, action, level, isError, statusMessage: obs.status_message || null, input, output, timestamp: obs.started_at || '' };
+  });
+
+  // Booking tool calls using tenant-specific scheduling tool names
+  const bookingToolCalls = toolCalls.filter(tc =>
+    toolNames.schedulingTools.includes(tc.name) && (tc.action === 'book_child' || tc.action === 'book')
+  );
+
+  // PAYLOAD scanning — tenant-specific extraction
+  const generationObs = allObs.filter((o: any) => o.type === 'GENERATION' && o.output);
+  const payloadFindings = extractPayloadFindings(generationObs);
+
+  // Classification
+  const allExtractedIds = payloadFindings.flatMap(f => [...f.apptIds, ...f.apptGuids]);
+  const placeholderIds = allExtractedIds.filter(id => isPlaceholderId(id, tenantId));
+  const realLookingIds = allExtractedIds.filter(id => !isPlaceholderId(id, tenantId));
+  const hasBookingTool = bookingToolCalls.length > 0;
+
+  let classification: InvestigationResult['classification'];
+  if (payloadFindings.length === 0) {
+    classification = 'CLEAN';
+  } else if (hasBookingTool && realLookingIds.length > 0) {
+    classification = 'LEGITIMATE';
+  } else if (!hasBookingTool && realLookingIds.length > 0) {
+    classification = 'FALSE_POSITIVE';
+  } else if (!hasBookingTool && allExtractedIds.length > 0 && realLookingIds.length === 0) {
+    const confirmedBooking = checkConfirmedBooking(payloadFindings, tenantId);
+    classification = confirmedBooking ? 'FALSE_POSITIVE' : 'CLEAN';
+  } else if (!hasBookingTool && payloadFindings.length > 0 && allExtractedIds.length === 0) {
+    // Booking claim in PAYLOAD (e.g. Ortho callSummary.booked) but no IDs extracted
+    const confirmedBooking = checkConfirmedBooking(payloadFindings, tenantId);
+    classification = confirmedBooking ? 'FALSE_POSITIVE' : 'CLEAN';
+  } else if (hasBookingTool && placeholderIds.length > 0 && realLookingIds.length === 0) {
+    classification = 'FALSE_POSITIVE_WITH_TOOL';
+  } else {
+    classification = 'INCONCLUSIVE';
+  }
+
+  const phoneMatch = sessionId.match(/\+\d+/);
+  const callerName = payloadFindings.find(f => f.callerName)?.callerName || session.user_id || null;
+  const childNamesList = [...new Set(payloadFindings.flatMap(f => f.childNames))];
+
+  // ── Build booking details from tool outputs, PAYLOAD, and prod_test_records ──
+  const bookingDetails = extractBookingDetails(bookingToolCalls, payloadFindings, db, sessionId, tenantId);
+
+  return {
+    sessionId,
+    tenantId,
+    classification,
+    configName,
+    session: baseSession,
+    toolCalls,
+    bookingToolCallCount: bookingToolCalls.length,
+    payloadFindings,
+    allExtractedIds,
+    placeholderIds,
+    callerName,
+    childNames: childNamesList,
+    phone: phoneMatch ? phoneMatch[0] : null,
+    bookingDetails,
+  };
 }
 
 /**
@@ -2021,172 +2544,12 @@ export const investigateSession = async (req: Request, res: Response): Promise<v
   const db = getDb();
 
   try {
-    const session = db.prepare(`
-      SELECT session_id, langfuse_config_id, has_successful_booking, has_transfer, has_order,
-             trace_count, error_count, first_trace_at, last_trace_at, user_id
-      FROM production_sessions WHERE session_id = ?
-    `).get(sessionId) as any;
-
-    if (!session) {
-      db.close();
+    const result = runInvestigation(sessionId, db);
+    db.close();
+    if (!result) {
       res.status(404).json({ error: `Session "${sessionId}" not found` });
       return;
     }
-
-    const traces = db.prepare(`
-      SELECT trace_id, name, started_at FROM production_traces
-      WHERE session_id = ? ORDER BY started_at ASC
-    `).all(sessionId) as any[];
-
-    if (traces.length === 0) {
-      db.close();
-      res.json({ data: { sessionId, classification: 'CLEAN', toolCalls: [], payloadFindings: [], allExtractedIds: [], placeholderIds: [], session: { configId: session.langfuse_config_id, hasSuccessfulBooking: session.has_successful_booking, hasTransfer: session.has_transfer, hasOrder: session.has_order, traceCount: session.trace_count, errorCount: session.error_count, firstTraceAt: session.first_trace_at, lastTraceAt: session.last_trace_at, userId: session.user_id }, bookingToolCallCount: 0, callerName: null, childNames: [], phone: null } });
-      return;
-    }
-
-    const traceIds = traces.map((t: any) => t.trace_id);
-    const ph = traceIds.map(() => '?').join(',');
-
-    // Load all observations
-    const allObs = db.prepare(`
-      SELECT name, type, level, input, output, status_message, started_at, trace_id
-      FROM production_trace_observations WHERE trace_id IN (${ph}) ORDER BY started_at ASC
-    `).all(...traceIds) as any[];
-
-    // Tool calls
-    const toolObs = allObs.filter((o: any) => ALL_KNOWN_TOOLS_INV.includes(o.name));
-    const toolCalls: InvestigationToolCall[] = toolObs.map((obs: any, idx: number) => {
-      let input: any = {};
-      try { input = typeof obs.input === 'string' ? JSON.parse(obs.input) : obs.input || {}; } catch {}
-      let output: any = {};
-      try { output = typeof obs.output === 'string' ? JSON.parse(obs.output) : obs.output || {}; } catch {}
-      const action = input?.action || (obs.name === 'CurrentDateTime' ? 'getDateTime' : obs.name.includes('Escalation') || obs.name.includes('HandleEscalation') ? 'escalation' : 'unknown');
-      const level = obs.level || 'DEFAULT';
-      const isError = level === 'ERROR' || (obs.status_message || '').includes('required');
-      return { index: idx + 1, name: obs.name, action, level, isError, statusMessage: obs.status_message || null, input, output, timestamp: obs.started_at || '' };
-    });
-
-    // Booking tool calls
-    const bookingToolCalls = toolCalls.filter(tc =>
-      SCHEDULING_TOOLS_INV.includes(tc.name) && (tc.action === 'book_child' || tc.action === 'book')
-    );
-
-    // PAYLOAD scanning
-    const generationObs = allObs.filter((o: any) => o.type === 'GENERATION' && o.output);
-    const childApptIdRegex = /Child[12]_appointmentId\\?["']?\s*[:=]\s*\\?["']?([A-Za-z0-9_-]+)/g;
-    const childApptGuidRegex = /Child[12]_appointmentGUID\\?["']?\s*[:=]\s*\\?["']?([0-9A-Fa-f-]{36})/g;
-    const childPatientIdRegex = /Child[12]_patientId\\?["']?\s*[:=]\s*\\?["']?(\d+)/g;
-    const childNameRegex = /Child[12]_(?:First)?Name\\?["']?\s*[:=]\s*\\?["']?([^"'\\,}\n]+)/g;
-    const callerNameRegex = /Caller_Name\\?["']?\s*[:=]\s*\\?["']?([^"'\\,}\n]+)/;
-    const parentPatientIdRegex = /Parent_patientId\\?["']?\s*[:=]\s*\\?["']?(\d+)/;
-
-    const payloadFindings: PayloadFinding[] = [];
-    for (const gen of generationObs) {
-      const out = typeof gen.output === 'string' ? gen.output : JSON.stringify(gen.output || '');
-      if (!out.includes('PAYLOAD')) continue;
-
-      const apptIds: string[] = [];
-      const apptGuids: string[] = [];
-      const patientIds: string[] = [];
-      const childNames: string[] = [];
-      let m: RegExpExecArray | null;
-
-      const r1 = new RegExp(childApptIdRegex.source, 'g');
-      while ((m = r1.exec(out)) !== null) apptIds.push(m[1]);
-      const r2 = new RegExp(childApptGuidRegex.source, 'g');
-      while ((m = r2.exec(out)) !== null) apptGuids.push(m[1]);
-      const r3 = new RegExp(childPatientIdRegex.source, 'g');
-      while ((m = r3.exec(out)) !== null) patientIds.push(m[1]);
-      const r4 = new RegExp(childNameRegex.source, 'g');
-      while ((m = r4.exec(out)) !== null) childNames.push(m[1].trim());
-
-      const callerMatch = out.match(callerNameRegex);
-      const parentMatch = out.match(parentPatientIdRegex);
-
-      // Extract PAYLOAD JSON
-      let payloadJson: any = null;
-      const payloadStart = out.indexOf('PAYLOAD');
-      if (payloadStart !== -1) {
-        const braceStart = out.indexOf('{', payloadStart);
-        if (braceStart !== -1) {
-          let depth = 0; let braceEnd = -1;
-          for (let i = braceStart; i < out.length; i++) {
-            if (out[i] === '{') depth++;
-            else if (out[i] === '}') { depth--; if (depth === 0) { braceEnd = i + 1; break; } }
-          }
-          if (braceEnd !== -1) {
-            try { payloadJson = JSON.parse(out.substring(braceStart, braceEnd).replace(/\\"/g, '"').replace(/\\n/g, '\n')); }
-            catch { payloadJson = out.substring(braceStart, Math.min(braceEnd, braceStart + 2000)); }
-          }
-        }
-      }
-
-      if (apptIds.length > 0 || apptGuids.length > 0) {
-        payloadFindings.push({
-          traceId: gen.trace_id,
-          timestamp: gen.started_at || '',
-          apptIds, apptGuids, patientIds, childNames,
-          callerName: callerMatch ? callerMatch[1].trim() : null,
-          parentPatientId: parentMatch ? parentMatch[1] : null,
-          payloadJson,
-        });
-      }
-    }
-
-    // Classification
-    const allExtractedIds = payloadFindings.flatMap(f => [...f.apptIds, ...f.apptGuids]);
-    const placeholderIds = allExtractedIds.filter(isPlaceholderId);
-    const realLookingIds = allExtractedIds.filter(id => !isPlaceholderId(id));
-    const hasBookingTool = bookingToolCalls.length > 0;
-
-    let classification: InvestigationResult['classification'];
-    if (payloadFindings.length === 0) {
-      classification = 'CLEAN';
-    } else if (hasBookingTool && realLookingIds.length > 0) {
-      classification = 'LEGITIMATE';
-    } else if (!hasBookingTool && realLookingIds.length > 0) {
-      // Non-placeholder IDs exist but no booking tool was called = hallucinated
-      classification = 'FALSE_POSITIVE';
-    } else if (!hasBookingTool && allExtractedIds.length > 0 && realLookingIds.length === 0) {
-      // Only placeholder IDs (null, N/A, TBD, etc.) with no booking tool = empty PAYLOAD template
-      classification = 'CLEAN';
-    } else if (hasBookingTool && placeholderIds.length > 0 && realLookingIds.length === 0) {
-      classification = 'FALSE_POSITIVE_WITH_TOOL';
-    } else {
-      classification = 'INCONCLUSIVE';
-    }
-
-    const phoneMatch = sessionId.match(/\+\d+/);
-    const callerName = payloadFindings.find(f => f.callerName)?.callerName || session.user_id || null;
-    const childNamesList = [...new Set(payloadFindings.flatMap(f => f.childNames))];
-    const configRow = db.prepare('SELECT name FROM langfuse_configs WHERE id = ?').get(session.langfuse_config_id) as any;
-
-    const result: InvestigationResult = {
-      sessionId,
-      classification,
-      configName: configRow?.name || `Config ${session.langfuse_config_id}`,
-      session: {
-        configId: session.langfuse_config_id,
-        hasSuccessfulBooking: session.has_successful_booking,
-        hasTransfer: session.has_transfer,
-        hasOrder: session.has_order,
-        traceCount: session.trace_count,
-        errorCount: session.error_count,
-        firstTraceAt: session.first_trace_at,
-        lastTraceAt: session.last_trace_at,
-        userId: session.user_id,
-      },
-      toolCalls,
-      bookingToolCallCount: bookingToolCalls.length,
-      payloadFindings,
-      allExtractedIds,
-      placeholderIds,
-      callerName,
-      childNames: childNamesList,
-      phone: phoneMatch ? phoneMatch[0] : null,
-    };
-
-    db.close();
     res.json({ data: result });
   } catch (err: any) {
     db.close();
@@ -2226,7 +2589,7 @@ function getToolCallDetail(tc: InvestigationToolCall): string {
     if (detail.length > 50) detail = detail.substring(0, 47) + '...';
     return detail;
   }
-  if (tc.name === 'CurrentDateTime') {
+  if (tc.name === 'CurrentDateTime' || tc.name === 'current_date_time') {
     return tc.output?.iso8601 || tc.output?.currentDateTime || `${tc.output?.date}T${tc.output?.time || ''}Z` || 'time returned';
   }
   if (tc.action === 'lookup') {
@@ -2257,6 +2620,207 @@ function getToolCallDetail(tc: InvestigationToolCall): string {
     return id ? `patient created (ID: ${id})` : 'patient created';
   }
   return JSON.stringify(tc.output).substring(0, 60);
+}
+
+function detectRecommendedFixes(r: InvestigationResult): RecommendedFix[] {
+  const fixes: RecommendedFix[] = [];
+  const errorToolCalls = r.toolCalls.filter(tc => tc.isError);
+  const isOrtho = r.tenantId === 1;
+
+  // Early exit: CLEAN with no errors → no fixes needed
+  if (r.classification === 'CLEAN' && errorToolCalls.length === 0) return fixes;
+
+  // Rule 1: Hallucinated booking — LLM confirmed booking without calling book_child
+  if (r.classification === 'FALSE_POSITIVE' && r.bookingToolCallCount === 0) {
+    const toolRef = isOrtho ? 'book_child action within schedule_appointment_ortho' : 'book_child tool';
+    fixes.push({
+      severity: 'Critical',
+      target: 'system_prompt',
+      issue: `LLM confirmed a booking to the caller without calling the ${toolRef}`,
+      recommendation: 'Add an FSM guardrail: "You MUST call book_child and receive a success response before confirming any appointment to the caller. Never fabricate appointment IDs or confirmation details."',
+    });
+    // Rule 1b: Node-RED server-side fix
+    if (isOrtho) {
+      fixes.push({
+        severity: 'Critical',
+        target: 'nodered_flow',
+        issue: 'No server-side mechanism to verify that a booking actually happened before the call ends',
+        recommendation: 'Add booking receipt system: `/chord/ortho-prd/bookConsultation` should return a server-generated `_booking_receipt` hash. Add `/chord/ortho-prd/verifyBooking` endpoint so the telephony platform can verify bookings exist in the registry before accepting PAYLOAD claims of callSummary.booked=true.',
+      });
+    } else {
+      fixes.push({
+        severity: 'Critical',
+        target: 'nodered_flow',
+        issue: 'No server-side mechanism to verify that a booking actually happened before the call ends',
+        recommendation: 'Add booking receipt system: createChildAppt returns a server-generated `_booking_receipt` hash. Add `/chord/verifyBooking` endpoint so the telephony platform can verify bookings exist in the registry before accepting PAYLOAD claims of Intent_Complete=Schedule.',
+        fixApplied: 'NexHealth v2 — createChildAppt-NA now returns `_booking_confirmed` flag + `_booking_receipt` hash. New `/chord/verifyBooking` endpoint checks the flow-context booking registry. LLM cannot forge receipts.',
+      });
+    }
+  }
+
+  // Rule 2: Placeholder IDs in PAYLOAD
+  if (r.placeholderIds.length > 0) {
+    const idFieldName = isOrtho ? 'appointmentGUID' : 'appointmentId';
+    fixes.push({
+      severity: 'Critical',
+      target: 'system_prompt',
+      issue: `Placeholder appointment IDs found in PAYLOAD: ${r.placeholderIds.map(id => `\`${id}\``).join(', ')}`,
+      recommendation: `Add instruction: "Never use placeholder values like APPT123456, TBD, or N/A for ${idFieldName}. If a booking was not completed, set the ${idFieldName} field to empty string."`,
+    });
+    const idFormat = isOrtho ? 'Cloud9 GUID (8-4-4-4-12 hex)' : 'NexHealth numeric integer';
+    fixes.push({
+      severity: 'Warning',
+      target: 'scheduling_tool',
+      issue: 'No validation rejects placeholder appointment IDs in PAYLOAD output',
+      recommendation: `Add output validation in the PAYLOAD construction to reject IDs not matching expected format (${idFormat}).`,
+      fixApplied: isOrtho ? undefined : 'v92 — book_child response now validates each child has a real Cloud9 GUID (8-4-4-4-12 hex). Unverified bookings are flagged with `_booking_verified: false` and `llm_guidance.CRITICAL` blocks confirmation.',
+    });
+  }
+
+  // Rule 3: PII masking error — phone lookup with masked number
+  const piiMaskErrors = errorToolCalls.filter(tc =>
+    tc.action === 'lookup' && tc.input?.phoneNumber && /^\*+$/.test(String(tc.input.phoneNumber))
+  );
+  if (piiMaskErrors.length > 0) {
+    fixes.push({
+      severity: 'Warning',
+      target: 'patient_tool',
+      issue: 'Patient lookup called with PII-masked phone number (e.g., "***") causing tool error',
+      recommendation: 'Add input validation: if phoneNumber matches /^\\*+$/, return a helpful error message instead of calling the API. Suggest the LLM ask the caller to spell their name instead.',
+      fixApplied: 'v14 — lookup.validate() now rejects phoneNumber matching /^[*Xx]+$/ with structured `llm_guidance` directing the LLM to search by name instead.',
+    });
+    fixes.push({
+      severity: 'Info',
+      target: 'system_prompt',
+      issue: 'LLM attempted phone lookup with masked PII',
+      recommendation: 'Add instruction: "If the caller\'s phone number appears masked (***), do NOT attempt a phone lookup. Instead, ask the caller for their name to search by name."',
+    });
+  }
+
+  // Rule 4: Duplicate datetime tool calls (handles both CurrentDateTime and current_date_time)
+  const dateTimeCalls = r.toolCalls.filter(tc => tc.name === 'CurrentDateTime' || tc.name === 'current_date_time');
+  if (dateTimeCalls.length > 1) {
+    const dtName = dateTimeCalls[0].name;
+    fixes.push({
+      severity: 'Info',
+      target: 'system_prompt',
+      issue: `${dtName} called ${dateTimeCalls.length} times in a single session`,
+      recommendation: `Add instruction: "Call ${dtName} once at the start of the conversation. Cache the result and reuse it — do not call it again unless the conversation spans a day boundary."`,
+    });
+  }
+
+  // Rule 5: Booking without prior slots call
+  const hasBookAction = r.toolCalls.some(tc => tc.action === 'book_child' || tc.action === 'book');
+  const hasSlotsCall = r.toolCalls.some(tc => tc.action === 'slots' || tc.action === 'grouped_slots');
+  if (hasBookAction && !hasSlotsCall) {
+    fixes.push({
+      severity: 'Critical',
+      target: 'system_prompt',
+      issue: 'Booking tool was called without first querying available slots',
+      recommendation: 'Add prerequisite chain: "Before calling book_child, you MUST first call grouped_slots to verify availability. Never book a slot that was not returned by the scheduling tool."',
+    });
+  }
+
+  // Rule 6: General tool errors (not already caught by Rule 3)
+  const uncaughtErrors = errorToolCalls.filter(tc => !piiMaskErrors.includes(tc));
+  for (const tc of uncaughtErrors) {
+    let target: ArtifactTarget = 'system_prompt';
+    if (tc.name.includes('schedul') || tc.name.includes('scheduling')) target = 'scheduling_tool';
+    else if (tc.name.includes('patient')) target = 'patient_tool';
+    else if (tc.name.includes('Escalation') || tc.name.includes('HandleEscalation')) target = 'nodered_flow';
+
+    const detail = tc.statusMessage || 'unknown error';
+    const shortDetail = detail.length > 80 ? detail.substring(0, 77) + '...' : detail;
+    fixes.push({
+      severity: 'Warning',
+      target,
+      issue: `Tool error on ${tc.name}→${tc.action}: ${shortDetail}`,
+      recommendation: `Investigate why ${tc.action} action returned an error and add input validation or error handling to prevent it.`,
+    });
+  }
+
+  // Rule 7: FALSE_POSITIVE_WITH_TOOL classification
+  if (r.classification === 'FALSE_POSITIVE_WITH_TOOL') {
+    const idFormat = isOrtho ? 'Cloud9 GUID' : 'NexHealth numeric ID';
+    fixes.push({
+      severity: 'Critical',
+      target: 'scheduling_tool',
+      issue: `Booking tool was called but returned placeholder IDs instead of real ${idFormat}s`,
+      recommendation: `Add response validation: if the booking API returns a non-${idFormat} or a known placeholder pattern, treat it as a failure and do NOT confirm the booking to the caller.`,
+      fixApplied: isOrtho ? undefined : 'v92 — book_child response now validates appointmentGUID format. Non-GUID responses are flagged `_booking_verified: false` with `llm_guidance.CRITICAL` blocking confirmation.',
+    });
+    // Rule 7b: Node-RED server-side fix for tool-level false positives
+    const endpoint = isOrtho ? '/chord/ortho-prd/bookConsultation' : 'createChildAppt';
+    const expectedFormat = isOrtho ? 'GUID for Cloud9 (8-4-4-4-12 hex)' : 'numeric for NexHealth';
+    fixes.push({
+      severity: 'Critical',
+      target: 'nodered_flow',
+      issue: `${endpoint} endpoint returned success without validating the appointment ID format from the API`,
+      recommendation: `Add server-side appointment ID format validation in ${endpoint} response handler. Validate the API-returned ID matches expected format (${expectedFormat}) before returning success.`,
+      fixApplied: isOrtho ? undefined : 'NexHealth v2 — createChildAppt-NA now validates NexHealth IDs are numeric (`/^\\d+$/`). Invalid IDs throw an error instead of returning a false success response.',
+    });
+  }
+
+  // Rule 8: Any FALSE_POSITIVE — suggest booking registry verification
+  if (r.classification === 'FALSE_POSITIVE' || r.classification === 'FALSE_POSITIVE_WITH_TOOL') {
+    const endpoint = isOrtho ? '/chord/ortho-prd/verifyBooking' : '/chord/verifyBooking';
+    fixes.push({
+      severity: 'Warning',
+      target: 'nodered_flow',
+      issue: 'No booking registry to cross-reference PAYLOAD booking claims against actual API bookings',
+      recommendation: `Maintain a server-side booking registry (flow context or Redis) keyed by session/phone. Expose a \`${endpoint}\` endpoint so the telephony platform can verify that PAYLOAD booking claims match real server-confirmed bookings before disconnecting the call.`,
+      fixApplied: isOrtho ? undefined : 'NexHealth v2 — `booking_registry` stored in flow context. New `/chord/verifyBooking` endpoint supports verification by receipt hash, sessionKey+appointmentId, or session audit listing.',
+    });
+  }
+
+  return fixes;
+}
+
+function formatRecommendedFixesMarkdown(fixes: RecommendedFix[]): string {
+  if (fixes.length === 0) return '';
+
+  const lines: string[] = [];
+  const severityOrder: Record<FixSeverity, number> = { Critical: 0, Warning: 1, Info: 2 };
+
+  // Group by target
+  const grouped = new Map<ArtifactTarget, RecommendedFix[]>();
+  for (const fix of fixes) {
+    if (!grouped.has(fix.target)) grouped.set(fix.target, []);
+    grouped.get(fix.target)!.push(fix);
+  }
+  // Sort each group: Critical first
+  for (const [, group] of grouped) {
+    group.sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);
+  }
+
+  const artifactCount = grouped.size;
+  const appliedCount = fixes.filter(f => f.fixApplied).length;
+
+  lines.push('---');
+  lines.push('');
+  lines.push('## Recommended Fixes');
+  lines.push('');
+  lines.push(`> **${fixes.length} issue(s) detected** across ${artifactCount} artifact(s).${appliedCount > 0 ? ` **${appliedCount} already fixed** in tool updates.` : ''}`);
+  lines.push('');
+
+  let globalIdx = 0;
+  for (const [target, group] of grouped) {
+    const meta = ARTIFACT_META[target];
+    lines.push(`### ${meta.label}`);
+    lines.push(`\`${meta.file}\``);
+    lines.push('');
+    lines.push('| # | Severity | Issue | Recommendation | Status |');
+    lines.push('|---|----------|-------|----------------|--------|');
+    for (const fix of group) {
+      globalIdx++;
+      const sevLabel = fix.severity === 'Critical' ? '**Critical**' : fix.severity;
+      const status = fix.fixApplied ? `✅ ${fix.fixApplied}` : '⬚ Open';
+      lines.push(`| ${globalIdx} | ${sevLabel} | ${fix.issue} | ${fix.recommendation} | ${status} |`);
+    }
+    lines.push('');
+  }
+
+  return lines.join('\n');
 }
 
 function formatInvestigationMarkdown(r: InvestigationResult): string {
@@ -2315,6 +2879,80 @@ function formatInvestigationMarkdown(r: InvestigationResult): string {
   lines.push(metaLines.join('  \n'));
   lines.push('');
 
+  // ── Booking Details Card (if bookings exist) ──
+  if (r.bookingDetails.length > 0) {
+    const activeBookings = r.bookingDetails.filter(b => b.status === 'active');
+    const displayBookings = activeBookings.length > 0 ? activeBookings : r.bookingDetails;
+
+    lines.push('---');
+    lines.push('');
+
+    for (const b of displayBookings) {
+      const isPlaceholder = b.status === 'placeholder';
+      const cardTitle = isPlaceholder ? 'Claimed Appointment (Not Verified)' : 'Booked Appointment';
+      lines.push(`## ${cardTitle}`);
+      lines.push('');
+
+      // Row 1: Patient info
+      const patientRow: string[] = [];
+      if (b.childName) patientRow.push(`**Patient:** ${b.childName}`);
+      if (b.childDob) patientRow.push(`**DOB:** ${b.childDob}`);
+      if (b.childAge) patientRow.push(`**Age:** ${b.childAge}`);
+      if (b.isNewPatient) patientRow.push('**New Patient**');
+      if (patientRow.length > 0) lines.push(`${patientRow.join(' | ')}`);
+
+      lines.push('');
+      lines.push('| | |');
+      lines.push('|:---|:---|');
+
+      // Appointment details table
+      if (b.appointmentDate || b.appointmentTime) {
+        const dateStr = [b.appointmentDayOfWeek, b.appointmentDate].filter(Boolean).join(', ');
+        const timeStr = b.appointmentTime || '';
+        const dtDisplay = timeStr ? `${dateStr} at ${timeStr}` : dateStr;
+        lines.push(`| **Date & Time** | ${dtDisplay} |`);
+      }
+      if (b.appointmentType) lines.push(`| **Appointment Type** | ${b.appointmentType} |`);
+      if (b.appointmentMinutes) lines.push(`| **Duration** | ${b.appointmentMinutes} min |`);
+      if (b.locationName) lines.push(`| **Location** | ${b.locationName} |`);
+      if (b.providerName) lines.push(`| **Provider** | ${b.providerName} |`);
+      if (b.chair) lines.push(`| **Chair** | ${b.chair} |`);
+      if (b.appointmentGuid) lines.push(`| **Appointment ID** | \`${b.appointmentGuid}\` |`);
+      if (b.patientGuid) lines.push(`| **Patient ID** | \`${b.patientGuid}\` |`);
+      if (!isPlaceholder) lines.push(`| **Status** | ${b.status === 'active' ? 'Confirmed' : b.status || 'Unknown'} |`);
+
+      // Caller info
+      lines.push('');
+      const callerRows: string[] = [];
+      if (b.callerName) callerRows.push(`| **Caller** | ${b.callerName} |`);
+      if (b.callerPhone) {
+        // Format phone: "2674814583" → "(267) 481-4583", "+12674814583" → "(267) 481-4583"
+        const digits = b.callerPhone.replace(/\D/g, '').replace(/^1/, '');
+        const formatted = digits.length === 10
+          ? `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`
+          : b.callerPhone;
+        callerRows.push(`| **Phone** | ${formatted} |`);
+      }
+      if (b.callerEmail) callerRows.push(`| **Email** | ${b.callerEmail} |`);
+      if (b.callerDob) callerRows.push(`| **Guarantor DOB** | ${b.callerDob} |`);
+      if (b.insuranceProvider) callerRows.push(`| **Insurance** | ${b.insuranceProvider}${b.insuranceMemberId ? ` (Member: ${b.insuranceMemberId})` : ''} |`);
+      if (b.specialNeeds) callerRows.push(`| **Special Needs** | ${b.specialNeeds} |`);
+
+      if (callerRows.length > 0) {
+        lines.push('| | |');
+        lines.push('|:---|:---|');
+        lines.push(...callerRows);
+      }
+
+      if (b.interactionSummary) {
+        lines.push('');
+        lines.push(`> ${b.interactionSummary}`);
+      }
+
+      lines.push('');
+    }
+  }
+
   // ── Summary — dynamic based on classification and actual data ──
   lines.push('---');
   lines.push('');
@@ -2323,21 +2961,13 @@ function formatInvestigationMarkdown(r: InvestigationResult): string {
   if (r.classification === 'FALSE_POSITIVE') {
     const ids = [...new Set(r.allExtractedIds)].map(id => `\`${id}\``).join(', ');
     const childName = r.childNames[0] || 'the patient';
-    let apptDetails = '';
-    for (const f of r.payloadFindings) {
-      const pj = f.payloadJson;
-      if (pj?.Child1_Appointment_Details) {
-        const d = pj.Child1_Appointment_Details;
-        apptDetails = `${d.day_of_week || ''}, ${d.date || ''} at ${d.time || ''}`.trim();
-      }
-      if (pj?.Child1_Appointment_Type && !apptDetails.includes(pj.Child1_Appointment_Type)) {
-        apptDetails = `a ${pj.Child1_Appointment_Type.toLowerCase()} for ${childName} on ${apptDetails}`;
-      }
-    }
+    const apptDetails = extractAppointmentDescription(r.payloadFindings, r.tenantId);
+    const apptDesc = apptDetails ? `for ${childName} on ${apptDetails}` : childName;
     // Describe what actually happened dynamically
     const actualTools = r.toolCalls.map(tc => tc.action !== tc.name ? tc.action : tc.name);
     const toolSummary = actualTools.length > 0 ? `The LLM called ${actualTools.length} tool(s) (${[...new Set(actualTools)].join(', ')}) but **never called a booking action** (book/book_child).` : 'The LLM made no tool calls at all.';
-    lines.push(`**This booking never happened.** ${toolSummary} Instead, the LLM fabricated appointment ID ${ids} for ${apptDetails || childName} in the PAYLOAD output. The PAYLOAD extraction fallback trusted this hallucinated text.`);
+    const idLabel = ids || 'booking data';
+    lines.push(`**This booking never happened.** ${toolSummary} Instead, the LLM fabricated ${idLabel} ${apptDesc} in the PAYLOAD output. The PAYLOAD extraction fallback trusted this hallucinated text.`);
   } else if (r.classification === 'LEGITIMATE') {
     const ids = [...new Set(r.allExtractedIds)].map(id => `\`${id}\``).join(', ');
     const bookActions = r.toolCalls.filter(tc => tc.action === 'book_child' || tc.action === 'book');
@@ -2349,13 +2979,7 @@ function formatInvestigationMarkdown(r: InvestigationResult): string {
     if (bookResults.length > 0) lines.push(`\nBooking results: ${bookResults.join('; ')}`);
   } else if (r.classification === 'CLEAN') {
     const actualTools = r.toolCalls.map(tc => tc.action !== tc.name ? tc.action : tc.name);
-    // Extract disposition from PAYLOAD
-    let cleanDisposition = '';
-    for (const f of r.payloadFindings) {
-      const pj = f.payloadJson;
-      cleanDisposition = pj?.Call_Final_Disposition || pj?.Call_Summary?.Call_Final_Disposition || '';
-      if (cleanDisposition) break;
-    }
+    const cleanDisposition = extractDisposition(r.payloadFindings, r.tenantId);
     const hasEscalationSummary = r.toolCalls.some(tc => tc.action === 'escalation');
 
     let summaryParts: string[] = [];
@@ -2400,12 +3024,12 @@ function formatInvestigationMarkdown(r: InvestigationResult): string {
   for (const tc of r.toolCalls) {
     const level = tc.isError ? '**ERROR**' : tc.level;
     const detail = getToolCallDetail(tc);
-    const actionDisplay = (tc.action === tc.name || tc.name === 'CurrentDateTime') ? '—' : `\`${tc.action}\``;
+    const actionDisplay = (tc.action === tc.name || tc.name === 'CurrentDateTime' || tc.name === 'current_date_time') ? '—' : `\`${tc.action}\``;
     lines.push(`| ${tc.index} | \`${tc.name}\` | ${actionDisplay} | ${level} | ${detail} |`);
   }
   lines.push('');
   if (r.bookingToolCallCount === 0 && r.toolCalls.length > 0) {
-    const schedulingCalls = r.toolCalls.filter(tc => tc.name.includes('scheduling'));
+    const schedulingCalls = r.toolCalls.filter(tc => tc.name.includes('schedul'));
     if (schedulingCalls.length > 0) {
       const schedulingActions = schedulingCalls.map(tc => `\`${tc.action}\``).join(', ');
       lines.push(`Scheduling tool was called with action(s) ${schedulingActions}, but no \`book\` or \`book_child\` action was found.`);
@@ -2444,7 +3068,8 @@ function formatInvestigationMarkdown(r: InvestigationResult): string {
       'PAYLOAD Extraction Results';
     lines.push(`### Step 3: ${step3Title}`);
     lines.push('');
-    lines.push(`Found ${r.payloadFindings.length} GENERATION observation(s) with appointment IDs:`);
+    const payloadDesc = r.allExtractedIds.length > 0 ? 'with appointment IDs' : 'with booking data';
+    lines.push(`Found ${r.payloadFindings.length} GENERATION observation(s) ${payloadDesc}:`);
     lines.push('');
 
     for (let i = 0; i < r.payloadFindings.length; i++) {
@@ -2489,6 +3114,7 @@ function formatInvestigationMarkdown(r: InvestigationResult): string {
     lines.push('');
     lines.push('| Extracted ID | Format | Placeholder? | Assessment |');
     lines.push('|-------------|--------|-------------|------------|');
+    const expectedFormat = r.tenantId === 1 ? 'Cloud9 UUID' : 'NexHealth integer';
     for (const id of uniqueIds) {
       const isUUID = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i.test(id);
       const isInt = /^\d+$/.test(id);
@@ -2496,7 +3122,7 @@ function formatInvestigationMarkdown(r: InvestigationResult): string {
       const format = isUUID ? 'Cloud9 UUID' : isInt ? 'NexHealth integer' : 'Other';
       let assessment = '';
       if (isFake) {
-        assessment = 'Known placeholder pattern — hallucinated';
+        assessment = `Known placeholder — not a valid ${expectedFormat}`;
       } else if (r.classification === 'FALSE_POSITIVE') {
         assessment = 'No booking tool call found — likely fabricated';
       } else if (r.classification === 'LEGITIMATE') {
@@ -2540,13 +3166,8 @@ function formatInvestigationMarkdown(r: InvestigationResult): string {
 
   // Dynamic ending based on classification and outcome
   const hasEscalationTool = r.toolCalls.some(tc => tc.action === 'escalation');
-  // Extract disposition from PAYLOAD for diagram note
-  let diagramDisposition = '';
-  for (const f of r.payloadFindings) {
-    const pj = f.payloadJson;
-    const d = pj?.Call_Final_Disposition || pj?.Call_Summary?.Call_Final_Disposition;
-    if (d) { diagramDisposition = d; break; }
-  }
+  // Extract disposition from PAYLOAD for diagram note (tenant-aware)
+  const diagramDisposition = extractDisposition(r.payloadFindings, r.tenantId);
 
   if (r.classification === 'FALSE_POSITIVE') {
     const ids = [...new Set(r.allExtractedIds)].slice(0, 2).join(', ');
@@ -2587,29 +3208,17 @@ function formatInvestigationMarkdown(r: InvestigationResult): string {
 
   if (r.classification === 'FALSE_POSITIVE') {
     const childName = r.childNames[0] || 'the patient';
-    let apptDesc = '';
-    for (const f of r.payloadFindings) {
-      const pj = f.payloadJson;
-      if (pj?.Child1_Appointment_Details) {
-        const d = pj.Child1_Appointment_Details;
-        apptDesc = `${d.date || ''} at ${d.time || ''}`.trim();
-      }
-    }
-    // Extract disposition from PAYLOAD if available
-    const payloadDisposition = (() => {
-      for (const f of r.payloadFindings) {
-        const pj = f.payloadJson;
-        if (pj?.Call_Final_Disposition) return pj.Call_Final_Disposition;
-        if (pj?.Call_Summary?.Call_Final_Disposition) return pj.Call_Summary.Call_Final_Disposition;
-      }
-      return null;
-    })();
+    const apptDesc = extractAppointmentDescription(r.payloadFindings, r.tenantId);
+    const payloadDisposition = extractDisposition(r.payloadFindings, r.tenantId) || null;
     const hasEscalation = r.toolCalls.some(tc => tc.action === 'escalation');
+    const fabricatedIds = [...new Set(r.allExtractedIds)].map(id => `\`${id}\``).join(', ');
 
     lines.push(`| **Classification** | FALSE POSITIVE — Hallucinated booking |`);
     lines.push(`| **Patient** | ${childName} |`);
     lines.push(`| **Claimed appointment** | ${apptDesc || 'Details fabricated in PAYLOAD'} |`);
-    lines.push(`| **Fabricated ID(s)** | ${[...new Set(r.allExtractedIds)].map(id => `\`${id}\``).join(', ')} |`);
+    if (fabricatedIds) {
+      lines.push(`| **Fabricated ID(s)** | ${fabricatedIds} |`);
+    }
     lines.push(`| **Booking tool called?** | No — ${r.toolCalls.length} tool call(s) made, none were booking actions |`);
     if (r.session.hasTransfer || hasEscalation) {
       lines.push(`| **Transfer** | Call was transferred/escalated to a live agent |`);
@@ -2628,15 +3237,7 @@ function formatInvestigationMarkdown(r: InvestigationResult): string {
     }
     lines.push(`| **Actual outcome** | Appointment was successfully created |`);
   } else if (r.classification === 'CLEAN') {
-    // Extract disposition from PAYLOAD
-    const disposition = (() => {
-      for (const f of r.payloadFindings) {
-        const pj = f.payloadJson;
-        if (pj?.Call_Final_Disposition) return pj.Call_Final_Disposition;
-        if (pj?.Call_Summary?.Call_Final_Disposition) return pj.Call_Summary.Call_Final_Disposition;
-      }
-      return null;
-    })();
+    const disposition = extractDisposition(r.payloadFindings, r.tenantId) || null;
     const hasEscalationClean = r.toolCalls.some(tc => tc.action === 'escalation');
 
     lines.push(`| **Classification** | CLEAN — No booking issues |`);
@@ -2663,6 +3264,14 @@ function formatInvestigationMarkdown(r: InvestigationResult): string {
     lines.push(`| **Actual outcome** | Could not determine — manual review needed |`);
   }
   lines.push('');
+
+  // ── Recommended Fixes (artifact-targeted) ──
+  const fixes = detectRecommendedFixes(r);
+  const fixesMd = formatRecommendedFixesMarkdown(fixes);
+  if (fixesMd) {
+    lines.push(fixesMd);
+    lines.push('');
+  }
 
   // ── Appendix: Full Tool Call Details (collapsible) ──
   if (r.toolCalls.length > 0) {
@@ -2714,192 +3323,12 @@ export const getInvestigationReport = async (req: Request, res: Response): Promi
   const db = getDb();
 
   try {
-    const session = db.prepare(`
-      SELECT session_id, langfuse_config_id, has_successful_booking, has_transfer, has_order,
-             trace_count, error_count, first_trace_at, last_trace_at, user_id
-      FROM production_sessions WHERE session_id = ?
-    `).get(sessionId) as any;
-
-    if (!session) {
-      db.close();
+    const result = runInvestigation(sessionId, db);
+    db.close();
+    if (!result) {
       res.status(404).json({ error: `Session "${sessionId}" not found` });
       return;
     }
-
-    const traces = db.prepare(`
-      SELECT trace_id, name, started_at FROM production_traces
-      WHERE session_id = ? ORDER BY started_at ASC
-    `).all(sessionId) as any[];
-
-    const configRow0 = db.prepare('SELECT name FROM langfuse_configs WHERE id = ?').get(session.langfuse_config_id) as any;
-
-    if (traces.length === 0) {
-      const emptyResult: InvestigationResult = {
-        sessionId,
-        classification: 'CLEAN',
-        configName: configRow0?.name || `Config ${session.langfuse_config_id}`,
-        session: {
-          configId: session.langfuse_config_id,
-          hasSuccessfulBooking: session.has_successful_booking,
-          hasTransfer: session.has_transfer,
-          hasOrder: session.has_order,
-          traceCount: session.trace_count,
-          errorCount: session.error_count,
-          firstTraceAt: session.first_trace_at,
-          lastTraceAt: session.last_trace_at,
-          userId: session.user_id,
-        },
-        toolCalls: [],
-        bookingToolCallCount: 0,
-        payloadFindings: [],
-        allExtractedIds: [],
-        placeholderIds: [],
-        callerName: null,
-        childNames: [],
-        phone: null,
-      };
-      db.close();
-      res.json({ data: { markdown: formatInvestigationMarkdown(emptyResult), classification: 'CLEAN', sessionId } });
-      return;
-    }
-
-    const traceIds = traces.map((t: any) => t.trace_id);
-    const ph = traceIds.map(() => '?').join(',');
-
-    const allObs = db.prepare(`
-      SELECT name, type, level, input, output, status_message, started_at, trace_id
-      FROM production_trace_observations WHERE trace_id IN (${ph}) ORDER BY started_at ASC
-    `).all(...traceIds) as any[];
-
-    const toolObs = allObs.filter((o: any) => ALL_KNOWN_TOOLS_INV.includes(o.name));
-    const toolCalls: InvestigationToolCall[] = toolObs.map((obs: any, idx: number) => {
-      let input: any = {};
-      try { input = typeof obs.input === 'string' ? JSON.parse(obs.input) : obs.input || {}; } catch {}
-      let output: any = {};
-      try { output = typeof obs.output === 'string' ? JSON.parse(obs.output) : obs.output || {}; } catch {}
-      const action = input?.action || (obs.name === 'CurrentDateTime' ? 'getDateTime' : obs.name.includes('Escalation') || obs.name.includes('HandleEscalation') ? 'escalation' : 'unknown');
-      const level = obs.level || 'DEFAULT';
-      const isError = level === 'ERROR' || (obs.status_message || '').includes('required');
-      return { index: idx + 1, name: obs.name, action, level, isError, statusMessage: obs.status_message || null, input, output, timestamp: obs.started_at || '' };
-    });
-
-    const bookingToolCalls = toolCalls.filter(tc =>
-      SCHEDULING_TOOLS_INV.includes(tc.name) && (tc.action === 'book_child' || tc.action === 'book')
-    );
-
-    const generationObs = allObs.filter((o: any) => o.type === 'GENERATION' && o.output);
-    const childApptIdRegex = /Child[12]_appointmentId\\?["']?\s*[:=]\s*\\?["']?([A-Za-z0-9_-]+)/g;
-    const childApptGuidRegex = /Child[12]_appointmentGUID\\?["']?\s*[:=]\s*\\?["']?([0-9A-Fa-f-]{36})/g;
-    const childPatientIdRegex = /Child[12]_patientId\\?["']?\s*[:=]\s*\\?["']?(\d+)/g;
-    const childNameRegex = /Child[12]_(?:First)?Name\\?["']?\s*[:=]\s*\\?["']?([^"'\\,}\n]+)/g;
-    const callerNameRegex = /Caller_Name\\?["']?\s*[:=]\s*\\?["']?([^"'\\,}\n]+)/;
-    const parentPatientIdRegex = /Parent_patientId\\?["']?\s*[:=]\s*\\?["']?(\d+)/;
-
-    const payloadFindings: PayloadFinding[] = [];
-    for (const gen of generationObs) {
-      const out = typeof gen.output === 'string' ? gen.output : JSON.stringify(gen.output || '');
-      if (!out.includes('PAYLOAD')) continue;
-
-      const apptIds: string[] = [];
-      const apptGuids: string[] = [];
-      const patientIds: string[] = [];
-      const childNames: string[] = [];
-      let m: RegExpExecArray | null;
-
-      const r1 = new RegExp(childApptIdRegex.source, 'g');
-      while ((m = r1.exec(out)) !== null) apptIds.push(m[1]);
-      const r2 = new RegExp(childApptGuidRegex.source, 'g');
-      while ((m = r2.exec(out)) !== null) apptGuids.push(m[1]);
-      const r3 = new RegExp(childPatientIdRegex.source, 'g');
-      while ((m = r3.exec(out)) !== null) patientIds.push(m[1]);
-      const r4 = new RegExp(childNameRegex.source, 'g');
-      while ((m = r4.exec(out)) !== null) childNames.push(m[1].trim());
-
-      const callerMatch = out.match(callerNameRegex);
-      const parentMatch = out.match(parentPatientIdRegex);
-
-      let payloadJson: any = null;
-      const payloadStart = out.indexOf('PAYLOAD');
-      if (payloadStart !== -1) {
-        const braceStart = out.indexOf('{', payloadStart);
-        if (braceStart !== -1) {
-          let depth = 0; let braceEnd = -1;
-          for (let i = braceStart; i < out.length; i++) {
-            if (out[i] === '{') depth++;
-            else if (out[i] === '}') { depth--; if (depth === 0) { braceEnd = i + 1; break; } }
-          }
-          if (braceEnd !== -1) {
-            try { payloadJson = JSON.parse(out.substring(braceStart, braceEnd).replace(/\\"/g, '"').replace(/\\n/g, '\n')); }
-            catch { payloadJson = out.substring(braceStart, Math.min(braceEnd, braceStart + 2000)); }
-          }
-        }
-      }
-
-      if (apptIds.length > 0 || apptGuids.length > 0) {
-        payloadFindings.push({
-          traceId: gen.trace_id,
-          timestamp: gen.started_at || '',
-          apptIds, apptGuids, patientIds, childNames,
-          callerName: callerMatch ? callerMatch[1].trim() : null,
-          parentPatientId: parentMatch ? parentMatch[1] : null,
-          payloadJson,
-        });
-      }
-    }
-
-    const allExtractedIds = payloadFindings.flatMap(f => [...f.apptIds, ...f.apptGuids]);
-    const placeholderIds = allExtractedIds.filter(isPlaceholderId);
-    const realLookingIds = allExtractedIds.filter(id => !isPlaceholderId(id));
-    const hasBookingTool = bookingToolCalls.length > 0;
-
-    let classification: InvestigationResult['classification'];
-    if (payloadFindings.length === 0) {
-      classification = 'CLEAN';
-    } else if (hasBookingTool && realLookingIds.length > 0) {
-      classification = 'LEGITIMATE';
-    } else if (!hasBookingTool && realLookingIds.length > 0) {
-      // Non-placeholder IDs exist but no booking tool was called = hallucinated
-      classification = 'FALSE_POSITIVE';
-    } else if (!hasBookingTool && allExtractedIds.length > 0 && realLookingIds.length === 0) {
-      // Only placeholder IDs (null, N/A, TBD, etc.) with no booking tool = empty PAYLOAD template
-      classification = 'CLEAN';
-    } else if (hasBookingTool && placeholderIds.length > 0 && realLookingIds.length === 0) {
-      classification = 'FALSE_POSITIVE_WITH_TOOL';
-    } else {
-      classification = 'INCONCLUSIVE';
-    }
-
-    const phoneMatch = sessionId.match(/\+\d+/);
-    const callerName = payloadFindings.find(f => f.callerName)?.callerName || session.user_id || null;
-    const childNamesList = [...new Set(payloadFindings.flatMap(f => f.childNames))];
-    const configRow = db.prepare('SELECT name FROM langfuse_configs WHERE id = ?').get(session.langfuse_config_id) as any;
-
-    const result: InvestigationResult = {
-      sessionId,
-      classification,
-      configName: configRow?.name || `Config ${session.langfuse_config_id}`,
-      session: {
-        configId: session.langfuse_config_id,
-        hasSuccessfulBooking: session.has_successful_booking,
-        hasTransfer: session.has_transfer,
-        hasOrder: session.has_order,
-        traceCount: session.trace_count,
-        errorCount: session.error_count,
-        firstTraceAt: session.first_trace_at,
-        lastTraceAt: session.last_trace_at,
-        userId: session.user_id,
-      },
-      toolCalls,
-      bookingToolCallCount: bookingToolCalls.length,
-      payloadFindings,
-      allExtractedIds,
-      placeholderIds,
-      callerName,
-      childNames: childNamesList,
-      phone: phoneMatch ? phoneMatch[0] : null,
-    };
-
-    db.close();
     res.json({
       data: {
         markdown: formatInvestigationMarkdown(result),
