@@ -5,10 +5,20 @@
 
 import axios from 'axios';
 import { API_CONFIG } from '../../utils/constants';
+import { getCurrentTenantId } from './client';
 
 const api = axios.create({
   baseURL: `${API_CONFIG.BASE_URL}/skills-runner`,
   timeout: API_CONFIG.TIMEOUT
+});
+
+// Add tenant header interceptor (matches client.ts pattern)
+api.interceptors.request.use((config) => {
+  const tenantId = getCurrentTenantId();
+  if (tenantId) {
+    config.headers['X-Tenant-Id'] = String(tenantId);
+  }
+  return config;
 });
 
 // Types

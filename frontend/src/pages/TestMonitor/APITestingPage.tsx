@@ -10,8 +10,8 @@ import ApiAgentChatPanel from '../../components/features/apiAgent/ApiAgentChatPa
 
 // Types
 type TestStatus = 'pending' | 'running' | 'success' | 'error';
-type ApiMode = 'nodeRed' | 'cloud9';
-type EndpointCategory = 'patient' | 'scheduling' | 'reference' | 'write';
+type ApiMode = 'nodeRed' | 'cloud9' | 'fabricWorkflow';
+type EndpointCategory = 'patient' | 'scheduling' | 'reference' | 'write' | 'listManagement';
 
 interface TestResult {
   status: TestStatus;
@@ -1132,6 +1132,200 @@ const GenericSuccessFormatter = ({ data }: { data: unknown }) => {
   );
 };
 
+const ListManagementFormatter = ({ data }: { data: unknown }) => {
+  const result = data as { data?: Record<string, unknown>[]; count?: number; source?: string; fetchedAt?: string };
+  const records = result?.data || [];
+  const source = result?.source || 'unknown';
+
+  const [search, setSearch] = useState('');
+  const [sortCol, setSortCol] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [cellDetail, setCellDetail] = useState<{ col: string; value: string; raw: unknown; row: number } | null>(null);
+
+  if (!records.length) return <div className="text-gray-500 italic">No records found</div>;
+
+  const allKeys = [...new Set(records.flatMap(r => Object.keys(r)))];
+
+  // Pretty-format for display in modal — expands JSON objects and JSON strings
+  const fmtPretty = (v: unknown): string => {
+    if (v === null || v === undefined) return '';
+    if (typeof v === 'object') return JSON.stringify(v, null, 2);
+    const s = String(v);
+    // Try to parse JSON strings (e.g. stringified arrays/objects)
+    if ((s.startsWith('{') || s.startsWith('[')) && s.length > 2) {
+      try { return JSON.stringify(JSON.parse(s), null, 2); } catch { /* not JSON */ }
+    }
+    return s;
+  };
+
+  const fmtCompact = (v: unknown): string => {
+    if (v === null || v === undefined) return '';
+    if (typeof v === 'object') return JSON.stringify(v);
+    return String(v);
+  };
+
+  // Detect if a value looks like JSON/JS data
+  const isStructured = (v: unknown): boolean => {
+    if (typeof v === 'object' && v !== null) return true;
+    if (typeof v !== 'string') return false;
+    const s = v.trim();
+    return (s.startsWith('{') || s.startsWith('[')) && s.length > 2;
+  };
+
+  const lower = search.toLowerCase();
+  const filtered = lower
+    ? records.filter(rec => allKeys.some(k => fmtCompact(rec[k]).toLowerCase().includes(lower)))
+    : records;
+
+  const sorted = sortCol
+    ? [...filtered].sort((a, b) => {
+        const cmp = fmtCompact(a[sortCol]).localeCompare(fmtCompact(b[sortCol]), undefined, { numeric: true, sensitivity: 'base' });
+        return sortDir === 'asc' ? cmp : -cmp;
+      })
+    : filtered;
+
+  const handleSort = (col: string) => {
+    if (sortCol === col) {
+      setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortCol(col);
+      setSortDir('asc');
+    }
+  };
+
+  return (
+    <div>
+      {/* Header bar */}
+      <div className="flex items-center gap-3 mb-3 flex-wrap">
+        <span className="text-sm font-medium text-gray-900 dark:text-white">{sorted.length} record{sorted.length !== 1 ? 's' : ''}</span>
+        {search && sorted.length !== records.length && (
+          <span className="text-xs text-blue-500">({records.length} total)</span>
+        )}
+        <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
+          source === 'api'
+            ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+            : 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400'
+        }`}>
+          {source === 'api' ? 'API' : 'CSV'}
+        </span>
+        <span className="text-xs text-gray-400">{allKeys.length} columns</span>
+        <div className="ml-auto relative">
+          <svg className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          </svg>
+          <input
+            type="text"
+            placeholder="Search all columns..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="pl-7 pr-2 py-1 text-xs rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 w-48"
+          />
+        </div>
+      </div>
+
+      {/* Table */}
+      <div className="overflow-x-auto border border-gray-200 dark:border-gray-700 rounded">
+        <table className="min-w-full text-xs">
+          <thead className="sticky top-0 z-10 bg-gray-50 dark:bg-gray-700 border-b border-gray-200 dark:border-gray-600">
+            <tr>
+              {allKeys.map(col => (
+                <th
+                  key={col}
+                  onClick={() => handleSort(col)}
+                  className="px-2 py-1.5 text-left font-medium text-gray-500 dark:text-gray-400 whitespace-nowrap cursor-pointer select-none hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors"
+                >
+                  <div className="flex items-center gap-1">
+                    <span>{col}</span>
+                    {sortCol === col && (
+                      <span className="text-xs">{sortDir === 'asc' ? '▲' : '▼'}</span>
+                    )}
+                  </div>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+            {sorted.map((rec, i) => (
+              <tr key={i} className={`${i % 2 === 0 ? 'bg-white dark:bg-gray-800' : 'bg-gray-50/50 dark:bg-gray-800/50'} hover:bg-blue-50/50 dark:hover:bg-blue-900/10`}>
+                {allKeys.map(col => {
+                  const val = fmtCompact(rec[col]);
+                  return (
+                    <td
+                      key={col}
+                      onClick={() => setCellDetail({ col, value: fmtPretty(rec[col]), raw: rec[col], row: i + 1 })}
+                      className="px-2 py-1 whitespace-nowrap text-gray-700 dark:text-gray-300 max-w-[200px] truncate cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 hover:underline"
+                    >
+                      {val}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* No results for search */}
+      {search && sorted.length === 0 && (
+        <div className="text-center py-4 text-xs text-gray-400">
+          No records match "{search}" —{' '}
+          <button onClick={() => setSearch('')} className="text-blue-500 hover:underline">clear search</button>
+        </div>
+      )}
+
+      {/* Cell Detail Modal */}
+      {cellDetail && (() => {
+        const structured = isStructured(cellDetail.raw);
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setCellDetail(null)}>
+            <div
+              className={`bg-white dark:bg-gray-800 rounded-lg shadow-xl flex flex-col ${structured ? 'w-full max-w-5xl max-h-[90vh]' : 'w-full max-w-2xl max-h-[80vh]'}`}
+              onClick={e => e.stopPropagation()}
+            >
+              {/* Modal Header */}
+              <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200 dark:border-gray-700 shrink-0">
+                <div className="flex items-center gap-3">
+                  <h3 className="text-sm font-semibold text-gray-900 dark:text-white">{cellDetail.col}</h3>
+                  <span className="text-xs text-gray-400">Row {cellDetail.row}</span>
+                  {structured && (
+                    <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">JSON</span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => { navigator.clipboard.writeText(cellDetail.value).catch(() => {}); }}
+                    className="px-3 py-1.5 text-xs rounded border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300"
+                  >
+                    Copy
+                  </button>
+                  <button
+                    onClick={() => setCellDetail(null)}
+                    className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+              {/* Modal Body */}
+              <div className="flex-1 overflow-auto p-5">
+                {cellDetail.value ? (
+                  <pre className={`whitespace-pre-wrap break-words font-mono bg-gray-50 dark:bg-gray-900 rounded-lg p-4 ${structured ? 'text-[13px] leading-relaxed' : 'text-sm'} text-gray-800 dark:text-gray-200`}>
+                    {cellDetail.value}
+                  </pre>
+                ) : (
+                  <div className="text-gray-400 italic text-sm p-4">empty</div>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+    </div>
+  );
+};
+
 // XML Helper Functions for Cloud9 API
 function escapeXml(str: string | null | undefined): string {
   if (str === null || str === undefined) return '';
@@ -1604,6 +1798,19 @@ const ENDPOINTS: EndpointConfig[] = [
   }
 ];
 
+// Fabric Workflow / List Management Endpoints (separate mode)
+const FABRIC_WORKFLOW_ENDPOINTS: EndpointConfig[] = [
+  {
+    id: 'listManagement',
+    name: 'Get List Management Records',
+    endpoint: '/api/fabric-workflow/records',
+    category: 'listManagement',
+    description: 'Fetch office configuration records from Fabric Workflow API (or CSV fallback)',
+    sampleData: {},
+    formatResult: (data) => <ListManagementFormatter data={data} />
+  }
+];
+
 // Generic Popout Modal for both Node Red and Cloud9
 function ResultPopoutModal({
   isOpen,
@@ -1733,7 +1940,7 @@ function TestCard({
       <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
         <div>
           <h3 className="font-medium text-gray-900 dark:text-white">{config.name}</h3>
-          <div className="text-xs text-gray-500 font-mono">POST {config.endpoint}</div>
+          <div className="text-xs text-gray-500 font-mono">{config.category === 'listManagement' ? 'GET' : 'POST'} {config.endpoint}</div>
         </div>
         <div className="flex items-center gap-2">
           {result.duration && (
@@ -1787,7 +1994,7 @@ function TestCard({
 
       {/* Results Section */}
       {result.status !== 'pending' && (
-        <div className="p-4 border-b border-gray-200 dark:border-gray-700 flex-1 overflow-auto max-h-64">
+        <div className={`p-4 border-b border-gray-200 dark:border-gray-700 flex-1 overflow-auto ${config.category === 'listManagement' ? '' : 'max-h-64'}`}>
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-medium text-gray-500">Results</span>
             <div className="flex items-center gap-2">
@@ -1823,7 +2030,7 @@ function TestCard({
         isOpen={showPopout}
         onClose={() => setShowPopout(false)}
         title={config.name}
-        subtitle={`POST ${config.endpoint}`}
+        subtitle={`${config.category === 'listManagement' ? 'GET' : 'POST'} ${config.endpoint}`}
         result={result}
         formatResult={config.formatResult}
       />
@@ -2050,6 +2257,11 @@ export function APITestingPage() {
     Object.fromEntries(CLOUD9_ENDPOINTS.map(e => [e.id, e.sampleParams]))
   );
 
+  // Fabric Workflow State
+  const [fabricResults, setFabricResults] = useState<Record<string, TestResult>>(
+    Object.fromEntries(FABRIC_WORKFLOW_ENDPOINTS.map(e => [e.id, { status: 'pending' as TestStatus }]))
+  );
+
   // Node Red Test Runner
   const runNodeRedTest = useCallback(async (endpoint: EndpointConfig) => {
     setNodeRedResults(prev => ({ ...prev, [endpoint.id]: { status: 'running' } }));
@@ -2178,6 +2390,65 @@ export function APITestingPage() {
     }
   }, [runCloud9Test]);
 
+  // Fabric Workflow Test Runner
+  const runFabricTest = useCallback(async (endpoint: EndpointConfig) => {
+    setFabricResults(prev => ({ ...prev, [endpoint.id]: { status: 'running' } }));
+    const startTime = Date.now();
+
+    try {
+      const response = await fetch(endpoint.endpoint, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' }
+      });
+
+      const duration = Date.now() - startTime;
+      const text = await response.text();
+
+      if (!text) {
+        setFabricResults(prev => ({
+          ...prev,
+          [endpoint.id]: { status: 'error', error: `Empty response (HTTP ${response.status})`, duration }
+        }));
+        return;
+      }
+
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        setFabricResults(prev => ({
+          ...prev,
+          [endpoint.id]: { status: 'error', error: `Invalid JSON response: ${text.substring(0, 100)}...`, duration }
+        }));
+        return;
+      }
+
+      if (!response.ok || data.error) {
+        setFabricResults(prev => ({
+          ...prev,
+          [endpoint.id]: { status: 'error', error: data.error || `HTTP ${response.status}`, duration }
+        }));
+      } else {
+        setFabricResults(prev => ({
+          ...prev,
+          [endpoint.id]: { status: 'success', data, duration }
+        }));
+      }
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      setFabricResults(prev => ({
+        ...prev,
+        [endpoint.id]: { status: 'error', error: (error as Error).message, duration }
+      }));
+    }
+  }, []);
+
+  const runAllFabricTests = useCallback(async () => {
+    for (const endpoint of FABRIC_WORKFLOW_ENDPOINTS) {
+      await runFabricTest(endpoint);
+    }
+  }, [runFabricTest]);
+
   // Input change handlers
   const handleNodeRedInputChange = useCallback((endpointId: string, data: Record<string, unknown>) => {
     setNodeRedInputData(prev => ({ ...prev, [endpointId]: data }));
@@ -2188,8 +2459,8 @@ export function APITestingPage() {
   }, []);
 
   // Stats calculation
-  const currentResults = apiMode === 'nodeRed' ? nodeRedResults : cloud9Results;
-  const currentEndpoints = apiMode === 'nodeRed' ? ENDPOINTS : CLOUD9_ENDPOINTS;
+  const currentResults = apiMode === 'nodeRed' ? nodeRedResults : apiMode === 'cloud9' ? cloud9Results : fabricResults;
+  const currentEndpoints = apiMode === 'nodeRed' ? ENDPOINTS : apiMode === 'cloud9' ? CLOUD9_ENDPOINTS : FABRIC_WORKFLOW_ENDPOINTS;
 
   const stats = {
     total: currentEndpoints.length,
@@ -2202,7 +2473,6 @@ export function APITestingPage() {
   // Endpoint groupings for Node Red
   const nodeRedPatientEndpoints = ENDPOINTS.filter(e => e.category === 'patient');
   const nodeRedSchedulingEndpoints = ENDPOINTS.filter(e => e.category === 'scheduling');
-
   // Endpoint groupings for Cloud9
   const cloud9PatientEndpoints = CLOUD9_ENDPOINTS.filter(e => e.category === 'patient');
   const cloud9SchedulingEndpoints = CLOUD9_ENDPOINTS.filter(e => e.category === 'scheduling');
@@ -2213,7 +2483,7 @@ export function APITestingPage() {
     <div className="h-full overflow-auto p-6">
       <PageHeader
         title="API Testing"
-        subtitle={apiMode === 'nodeRed' ? 'Test Node Red middleware endpoints' : 'Test Cloud9 API directly'}
+        subtitle={apiMode === 'nodeRed' ? 'Test Node Red middleware endpoints' : apiMode === 'cloud9' ? 'Test Cloud9 API directly' : 'Test Fabric Workflow / List Management API'}
       />
 
       {/* API Mode Toggle */}
@@ -2240,6 +2510,16 @@ export function APITestingPage() {
               }`}
             >
               Cloud9 API
+            </button>
+            <button
+              onClick={() => setApiMode('fabricWorkflow')}
+              className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
+                apiMode === 'fabricWorkflow'
+                  ? 'bg-white dark:bg-gray-800 text-teal-600 shadow-sm'
+                  : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
+              }`}
+            >
+              List Management
             </button>
           </div>
         </div>
@@ -2281,13 +2561,15 @@ export function APITestingPage() {
         <div className="text-center mt-2 text-xs text-gray-400">
           {apiMode === 'nodeRed' ? (
             <span>Endpoint: {NODRED_API_CONFIG.baseUrl}</span>
-          ) : (
+          ) : apiMode === 'cloud9' ? (
             <span>
               Endpoint: {cloud9Config.displayUrl}
               <span className={`ml-1 ${cloud9Environment === 'production' ? 'text-orange-500' : 'text-blue-500'}`}>
                 ({cloud9Environment === 'production' ? 'Production' : 'Sandbox'})
               </span>
             </span>
+          ) : (
+            <span>Endpoint: /api/fabric-workflow/records <span className="ml-1 text-teal-500">(Backend Proxy)</span></span>
           )}
         </div>
       </div>
@@ -2313,7 +2595,7 @@ export function APITestingPage() {
                 Scheduling Tests
               </Button>
             </>
-          ) : (
+          ) : apiMode === 'cloud9' ? (
             <>
               <Button onClick={() => runAllCloud9Tests()} variant="primary" size="sm">
                 Run All Tests
@@ -2331,6 +2613,10 @@ export function APITestingPage() {
                 Write Ops
               </Button>
             </>
+          ) : (
+            <Button onClick={() => runAllFabricTests()} variant="primary" size="sm">
+              Run Test
+            </Button>
           )}
         </div>
       </div>
@@ -2359,7 +2645,7 @@ export function APITestingPage() {
           </div>
 
           {/* Scheduling Operations */}
-          <div>
+          <div className="mb-8">
             <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
               <span className="w-3 h-3 rounded-full bg-purple-500"></span>
               Scheduling Operations
@@ -2377,7 +2663,30 @@ export function APITestingPage() {
               ))}
             </div>
           </div>
+
         </>
+      )}
+
+      {/* Fabric Workflow / List Management */}
+      {apiMode === 'fabricWorkflow' && (
+        <div>
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+            <span className="w-3 h-3 rounded-full bg-teal-500"></span>
+            List Management Records
+            <span className="text-sm font-normal text-gray-500">(Fabric Workflow API)</span>
+          </h2>
+          <div className="grid grid-cols-1 gap-4">
+            {FABRIC_WORKFLOW_ENDPOINTS.map(endpoint => (
+              <TestCard
+                key={endpoint.id}
+                config={endpoint}
+                result={fabricResults[endpoint.id]}
+                onRun={() => runFabricTest(endpoint)}
+                onInputChange={() => {}}
+              />
+            ))}
+          </div>
+        </div>
       )}
 
       {/* Cloud9 Direct API Endpoints */}

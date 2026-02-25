@@ -5,6 +5,7 @@
 
 import BetterSqlite3 from 'better-sqlite3';
 import path from 'path';
+import { getToolNamesForConfig, sqlInList } from './toolNameResolver';
 import {
   AlertErrorDetail,
   AlertResolution,
@@ -336,12 +337,14 @@ export class AlertEngine {
   private metricEvaluators: Record<string, (fromDate: string, toDate: string, configId: number) => MetricResult | Promise<MetricResult>> = {
     // Count of API errors (502/500)
     api_errors: (fromDate, toDate, configId) => {
+      const tools = getToolNamesForConfig(this.db, configId);
+      const toolInList = sqlInList(tools.all);
       const rows = this.db.prepare(`
         SELECT DISTINCT t.session_id, t.trace_id
         FROM production_trace_observations o
         JOIN production_traces t ON o.trace_id = t.trace_id
         WHERE (o.output LIKE '%502%' OR o.output LIKE '%500%')
-          AND o.name = 'schedule_appointment_ortho'
+          AND o.name IN (${toolInList})
           AND t.started_at >= ? AND t.started_at <= ?
           AND t.langfuse_config_id = ?
       `).all(fromDate, toDate, configId) as any[];
@@ -354,11 +357,12 @@ export class AlertEngine {
 
     // Average tool latency in ms
     avg_latency: (fromDate, toDate, configId) => {
+      const tools = getToolNamesForConfig(this.db, configId);
       const row = this.db.prepare(`
         SELECT AVG(o.latency_ms) as avg_latency
         FROM production_trace_observations o
         JOIN production_traces t ON o.trace_id = t.trace_id
-        WHERE o.name IN ('chord_ortho_patient', 'schedule_appointment_ortho')
+        WHERE o.name IN (${sqlInList([...tools.patientTools, ...tools.schedulingTools])})
           AND o.latency_ms IS NOT NULL
           AND t.started_at >= ? AND t.started_at <= ?
           AND t.langfuse_config_id = ?
@@ -369,11 +373,12 @@ export class AlertEngine {
 
     // Slot fetch failure rate (percentage)
     slot_failures: (fromDate, toDate, configId) => {
+      const tools = getToolNamesForConfig(this.db, configId);
       const total = (this.db.prepare(`
         SELECT COUNT(*) as cnt
         FROM production_trace_observations o
         JOIN production_traces t ON o.trace_id = t.trace_id
-        WHERE o.name = 'schedule_appointment_ortho'
+        WHERE o.name IN (${sqlInList(tools.schedulingTools)})
           AND o.input LIKE '%"action":"slots"%'
           AND t.started_at >= ? AND t.started_at <= ?
           AND t.langfuse_config_id = ?
@@ -383,7 +388,7 @@ export class AlertEngine {
         SELECT t.trace_id
         FROM production_trace_observations o
         JOIN production_traces t ON o.trace_id = t.trace_id
-        WHERE o.name = 'schedule_appointment_ortho'
+        WHERE o.name IN (${sqlInList(tools.schedulingTools)})
           AND o.output LIKE '%"success":false%'
           AND t.started_at >= ? AND t.started_at <= ?
           AND t.langfuse_config_id = ?
@@ -425,11 +430,12 @@ export class AlertEngine {
 
     // Empty patient GUID errors count
     empty_guid_errors: (fromDate, toDate, configId) => {
+      const tools = getToolNamesForConfig(this.db, configId);
       const rows = this.db.prepare(`
         SELECT DISTINCT t.session_id, t.trace_id
         FROM production_trace_observations o
         JOIN production_traces t ON o.trace_id = t.trace_id
-        WHERE o.name = 'schedule_appointment_ortho'
+        WHERE o.name IN (${sqlInList(tools.schedulingTools)})
           AND o.input LIKE '%"patientGUID":""%'
           AND t.started_at >= ? AND t.started_at <= ?
           AND t.langfuse_config_id = ?
@@ -443,11 +449,12 @@ export class AlertEngine {
 
     // Escalation count
     escalation_count: (fromDate, toDate, configId) => {
+      const tools = getToolNamesForConfig(this.db, configId);
       const rows = this.db.prepare(`
         SELECT DISTINCT t.session_id, t.trace_id
         FROM production_trace_observations o
         JOIN production_traces t ON o.trace_id = t.trace_id
-        WHERE o.name = 'chord_handleEscalation'
+        WHERE o.name IN (${sqlInList(tools.escalationTools)})
           AND t.started_at >= ? AND t.started_at <= ?
           AND t.langfuse_config_id = ?
       `).all(fromDate, toDate, configId) as any[];
@@ -479,7 +486,11 @@ export class AlertEngine {
         SELECT COUNT(*) as cnt
         FROM production_trace_observations o
         JOIN production_traces t ON o.trace_id = t.trace_id
-        WHERE o.output LIKE '%Patient Added%'
+        WHERE (
+          o.output LIKE '%Patient Added%'
+          OR o.output LIKE '%"patientId":%'
+          OR o.output LIKE '%"patient_id":%'
+        )
           AND t.started_at >= ? AND t.started_at <= ?
           AND t.langfuse_config_id = ?
       `).get(fromDate, toDate, configId) as any)?.cnt || 0;
@@ -488,7 +499,11 @@ export class AlertEngine {
         SELECT COUNT(*) as cnt
         FROM production_trace_observations o
         JOIN production_traces t ON o.trace_id = t.trace_id
-        WHERE o.output LIKE '%Appointment GUID Added%'
+        WHERE (
+          o.output LIKE '%Appointment GUID Added%'
+          OR (o.output LIKE '%"appointmentId":%' AND o.output NOT LIKE '%"appointmentId":null%' AND o.output NOT LIKE '%"appointmentId": null%')
+          OR (o.output LIKE '%"patient_id":%' AND o.output LIKE '%"provider_id":%' AND o.output LIKE '%"start_time":%')
+        )
           AND t.started_at >= ? AND t.started_at <= ?
           AND t.langfuse_config_id = ?
       `).get(fromDate, toDate, configId) as any)?.cnt || 0;
@@ -529,11 +544,12 @@ export class AlertEngine {
       }
 
       // Query for NEW empty GUID issues since last alert - include input/output for details
+      const tools = getToolNamesForConfig(this.db, configId);
       const rows = this.db.prepare(`
         SELECT DISTINCT t.session_id, t.trace_id, o.input, o.output, o.started_at, o.name
         FROM production_trace_observations o
         JOIN production_traces t ON o.trace_id = t.trace_id
-        WHERE o.name = 'schedule_appointment_ortho'
+        WHERE o.name IN (${sqlInList(tools.schedulingTools)})
           AND o.input LIKE '%"patientGUID":""%'
           AND t.started_at > ? AND t.started_at <= ?
           AND t.langfuse_config_id = ?
@@ -589,12 +605,14 @@ export class AlertEngine {
         }
       }
 
+      const gwTools = getToolNamesForConfig(this.db, configId);
+      const gwToolInList = sqlInList(gwTools.all);
       const rows = this.db.prepare(`
         SELECT DISTINCT t.session_id, t.trace_id, o.input, o.output, o.started_at, o.name
         FROM production_trace_observations o
         JOIN production_traces t ON o.trace_id = t.trace_id
         WHERE (o.output LIKE '%502%' OR o.output LIKE '%500%' OR o.output LIKE '%Bad Gateway%')
-          AND o.name IN ('schedule_appointment_ortho', 'chord_ortho_patient')
+          AND o.name IN (${gwToolInList})
           AND t.started_at > ? AND t.started_at <= ?
           AND t.langfuse_config_id = ?
         ORDER BY o.started_at DESC
@@ -636,6 +654,8 @@ export class AlertEngine {
 
     // Langfuse: API Failure (Cloud9 API returned success:false - distinct from gateway errors)
     langfuse_api_failure: function(this: AlertEngine, fromDate, toDate, configId) {
+      const apiTools = getToolNamesForConfig(this.db, configId);
+      const apiToolInList = sqlInList([...apiTools.schedulingTools, ...apiTools.patientTools]);
       const alertRow = this.db.prepare(
         `SELECT id FROM heartbeat_alerts WHERE metric_type = 'langfuse_api_failure' LIMIT 1`
       ).get() as any;
@@ -658,7 +678,7 @@ export class AlertEngine {
         SELECT DISTINCT t.session_id, t.trace_id, o.input, o.output, o.started_at, o.name
         FROM production_trace_observations o
         JOIN production_traces t ON o.trace_id = t.trace_id
-        WHERE o.name IN ('schedule_appointment_ortho', 'chord_ortho_patient')
+        WHERE o.name IN (${apiToolInList})
           AND o.output LIKE '%"success":false%'
           AND o.input NOT LIKE '%"action":"slots"%'
           AND t.started_at > ? AND t.started_at <= ?
@@ -787,11 +807,12 @@ export class AlertEngine {
         }
       }
 
+      const slotTools = getToolNamesForConfig(this.db, configId);
       const rows = this.db.prepare(`
         SELECT DISTINCT t.session_id, t.trace_id, o.input, o.output, o.started_at
         FROM production_trace_observations o
         JOIN production_traces t ON o.trace_id = t.trace_id
-        WHERE o.name = 'schedule_appointment_ortho'
+        WHERE o.name IN (${sqlInList(slotTools.schedulingTools)})
           AND o.input LIKE '%"action":"slots"%'
           AND o.output LIKE '%"success":false%'
           AND t.started_at > ? AND t.started_at <= ?
@@ -834,6 +855,7 @@ export class AlertEngine {
 
     // Langfuse: Escalations (human escalation requests)
     langfuse_escalations: function(this: AlertEngine, fromDate, toDate, configId) {
+      const escTools = getToolNamesForConfig(this.db, configId);
       const alertRow = this.db.prepare(
         `SELECT id FROM heartbeat_alerts WHERE metric_type = 'langfuse_escalations' LIMIT 1`
       ).get() as any;
@@ -855,7 +877,7 @@ export class AlertEngine {
         SELECT DISTINCT t.session_id, t.trace_id, o.input, o.output, o.started_at
         FROM production_trace_observations o
         JOIN production_traces t ON o.trace_id = t.trace_id
-        WHERE o.name = 'chord_handleEscalation'
+        WHERE o.name IN (${sqlInList(escTools.escalationTools)})
           AND t.started_at > ? AND t.started_at <= ?
           AND t.langfuse_config_id = ?
         ORDER BY o.started_at DESC

@@ -26,7 +26,7 @@ export function LoginPage() {
   const isLoading = useAppSelector(selectAuthLoading);
   const error = useAppSelector(selectAuthError);
 
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState('mwoicke@intelepeer.ai');
   const [password, setPassword] = useState('');
 
   // Redirect if already authenticated

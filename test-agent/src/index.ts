@@ -17,6 +17,7 @@ import { FlowiseClient } from './core/flowise-client';
 import { GoalTestRunner } from './tests/goal-test-runner';
 import { IntentDetector } from './services/intent-detector';
 import { goalHappyPathScenarios } from './tests/scenarios/goal-happy-path';
+import { chordGoalHappyPathScenarios } from './tests/scenarios/chord-goal-happy-path';
 import type { GoalOrientedTestCase } from './tests/types/goal-test';
 import type { TestResult } from './storage/database';
 import type { TestSuiteResult } from './core/agent';
@@ -173,7 +174,7 @@ async function runGoalTests(
   const dbScenarios = loadGoalTestsFromDatabase();
   const dbScenarioIds = new Set(dbScenarios.map(s => s.id));
   // Filter out TypeScript scenarios that have database overrides
-  const tsOnlyScenarios = goalHappyPathScenarios.filter(s => !dbScenarioIds.has(s.id));
+  const tsOnlyScenarios = [...goalHappyPathScenarios, ...chordGoalHappyPathScenarios].filter(s => !dbScenarioIds.has(s.id));
   // Database scenarios come first (take precedence), then TS-only scenarios
   const allGoalScenarios: GoalOrientedTestCase[] = [...dbScenarios, ...tsOnlyScenarios];
   console.log(`[GoalTest] Loaded ${dbScenarios.length} DB scenarios + ${tsOnlyScenarios.length} TS-only scenarios (DB takes precedence)`);
@@ -618,7 +619,7 @@ program
       // Load goal tests for summary (database takes precedence, deduplicate)
       const dbGoalTests = loadGoalTestsFromDatabase();
       const dbGoalTestIds = new Set(dbGoalTests.map(s => s.id));
-      const tsOnlyGoalTests = goalHappyPathScenarios.filter(s => !dbGoalTestIds.has(s.id));
+      const tsOnlyGoalTests = [...goalHappyPathScenarios, ...chordGoalHappyPathScenarios].filter(s => !dbGoalTestIds.has(s.id));
       const allGoalTests = [...dbGoalTests, ...tsOnlyGoalTests];
       const goalTestCount = allGoalTests.length;
 
@@ -979,7 +980,7 @@ program
       // Load goal tests (database takes precedence over TypeScript)
       const dbGoalTests = loadGoalTestsFromDatabase();
       const dbGoalTestIds = new Set(dbGoalTests.map(s => s.id));
-      const tsOnlyGoalTests = goalHappyPathScenarios.filter(s => !dbGoalTestIds.has(s.id));
+      const tsOnlyGoalTests = [...goalHappyPathScenarios, ...chordGoalHappyPathScenarios].filter(s => !dbGoalTestIds.has(s.id));
       const allGoalTests = [...dbGoalTests, ...tsOnlyGoalTests];
 
       // Determine what to show
@@ -1601,7 +1602,7 @@ program
       // Get goal test scenarios (database takes precedence over TypeScript)
       const dbScenarios = loadGoalTestsFromDatabase();
       const dbScenarioIds = new Set(dbScenarios.map(s => s.id));
-      const tsOnlyScenarios = goalHappyPathScenarios.filter(s => !dbScenarioIds.has(s.id));
+      const tsOnlyScenarios = [...goalHappyPathScenarios, ...chordGoalHappyPathScenarios].filter(s => !dbScenarioIds.has(s.id));
       const allGoalScenarios = [...dbScenarios, ...tsOnlyScenarios];
 
       // Get variant IDs for control and treatment

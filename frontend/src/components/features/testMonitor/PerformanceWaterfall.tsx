@@ -274,7 +274,7 @@ export function PerformanceWaterfall({
     // Sort by start time
     entries.sort((a, b) => a.startMs - b.startMs);
 
-    const totalDurationMs = testDurationMs || lastTurnEnd;
+    const totalDurationMs = Math.max(testDurationMs || 0, lastTurnEnd);
 
     return { entries, totalDurationMs };
   }, [transcript, apiCalls, testStartTime, testDurationMs, bottleneckThresholdMs]);

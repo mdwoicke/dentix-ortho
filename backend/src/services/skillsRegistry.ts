@@ -1,11 +1,13 @@
 /**
  * Skills Registry Service
- * Manages skill definitions and command building for Skills Runner
+ * Manages skill definitions and command building for Skills Runner.
+ * Database-backed with tenant isolation; falls back to skills.json.
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 import { getSSHTarget } from '../config/ssh';
+import { getDatabase } from '../config/database';
 
 export interface SkillInput {
   name: string;
@@ -27,6 +29,7 @@ export interface Skill {
   command: string;
   category: string;
   inputs: SkillInput[];
+  skillType?: string | null;
 }
 
 export interface SkillsConfig {
@@ -35,27 +38,79 @@ export interface SkillsConfig {
 
 const CONFIG_PATH = path.join(__dirname, '../../config/skills.json');
 
-/**
- * Load skills from config file
- */
-export function loadSkills(): SkillsConfig {
+// ---------------------------------------------------------------------------
+// Database helpers
+// ---------------------------------------------------------------------------
+
+/** Check if the tenant_skills table exists (migration 008 applied) */
+function hasTenantSkillsTable(): boolean {
+  try {
+    const db = getDatabase();
+    const row = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='tenant_skills'"
+    ).get();
+    return !!row;
+  } catch {
+    return false;
+  }
+}
+
+interface TenantSkillRow {
+  id: number;
+  tenant_id: number;
+  skill_id: string;
+  name: string;
+  description: string | null;
+  command: string;
+  category: string;
+  inputs: string;
+  skill_type: string | null;
+  is_active: number;
+  sort_order: number;
+}
+
+/** Map a database row to a Skill object */
+function rowToSkill(row: TenantSkillRow): Skill {
+  let inputs: SkillInput[] = [];
+  try {
+    inputs = JSON.parse(row.inputs);
+  } catch { /* empty */ }
+
+  return {
+    id: row.skill_id,
+    name: row.name,
+    description: row.description || undefined,
+    command: row.command,
+    category: row.category,
+    inputs,
+    skillType: row.skill_type || undefined,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// JSON file fallback (pre-migration)
+// ---------------------------------------------------------------------------
+
+function loadSkillsFromFile(): SkillsConfig {
   try {
     if (!fs.existsSync(CONFIG_PATH)) {
       return { skills: [] };
     }
-
     const configContent = fs.readFileSync(CONFIG_PATH, 'utf-8');
-    return JSON.parse(configContent) as SkillsConfig;
+    const parsed = JSON.parse(configContent);
+    // Normalize skillType from the raw JSON
+    const skills = (parsed.skills || []).map((s: any) => ({
+      ...s,
+      skillType: s.skillType || undefined,
+    }));
+    return { skills };
   } catch (error) {
     console.error('Error loading skills config:', error);
     return { skills: [] };
   }
 }
 
-/**
- * Save skills to config file
- */
-export function saveSkills(config: SkillsConfig): void {
+function saveSkillsToFile(config: SkillsConfig): void {
   try {
     const configDir = path.dirname(CONFIG_PATH);
     if (!fs.existsSync(configDir)) {
@@ -68,25 +123,43 @@ export function saveSkills(config: SkillsConfig): void {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
 /**
- * Get all skills
+ * Get all skills for a tenant. Falls back to JSON file if DB not available.
  */
-export function getSkills(): Skill[] {
-  return loadSkills().skills;
+export function getSkills(tenantId?: number): Skill[] {
+  if (tenantId && hasTenantSkillsTable()) {
+    const db = getDatabase();
+    const rows = db.prepare(
+      'SELECT * FROM tenant_skills WHERE tenant_id = ? AND is_active = 1 ORDER BY sort_order, id'
+    ).all(tenantId) as TenantSkillRow[];
+    return rows.map(rowToSkill);
+  }
+  return loadSkillsFromFile().skills;
 }
 
 /**
- * Get a specific skill by ID
+ * Get a specific skill by ID, scoped to tenant.
  */
-export function getSkill(skillId: string): Skill | undefined {
-  return loadSkills().skills.find(s => s.id === skillId);
+export function getSkill(skillId: string, tenantId?: number): Skill | undefined {
+  if (tenantId && hasTenantSkillsTable()) {
+    const db = getDatabase();
+    const row = db.prepare(
+      'SELECT * FROM tenant_skills WHERE tenant_id = ? AND skill_id = ? AND is_active = 1'
+    ).get(tenantId, skillId) as TenantSkillRow | undefined;
+    return row ? rowToSkill(row) : undefined;
+  }
+  return loadSkillsFromFile().skills.find(s => s.id === skillId);
 }
 
 /**
- * Get skills grouped by category
+ * Get skills grouped by category, scoped to tenant.
  */
-export function getSkillsByCategory(): Record<string, Skill[]> {
-  const skills = getSkills();
+export function getSkillsByCategory(tenantId?: number): Record<string, Skill[]> {
+  const skills = getSkills(tenantId);
   return skills.reduce((acc, skill) => {
     const category = skill.category || 'uncategorized';
     if (!acc[category]) {
@@ -196,10 +269,31 @@ export function validateInputs(
 }
 
 /**
- * Add a new skill
+ * Add or update a skill, scoped to tenant.
  */
-export function addSkill(skill: Skill): void {
-  const config = loadSkills();
+export function addSkill(skill: Skill, tenantId?: number): void {
+  if (tenantId && hasTenantSkillsTable()) {
+    const db = getDatabase();
+    db.prepare(`
+      INSERT OR REPLACE INTO tenant_skills
+        (tenant_id, skill_id, name, description, command, category, inputs, skill_type, updated_at)
+      VALUES
+        (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `).run(
+      tenantId,
+      skill.id,
+      skill.name,
+      skill.description || null,
+      skill.command,
+      skill.category || 'custom',
+      JSON.stringify(skill.inputs || []),
+      skill.skillType || null,
+    );
+    return;
+  }
+
+  // Fallback: update JSON file
+  const config = loadSkillsFromFile();
   const existingIndex = config.skills.findIndex(s => s.id === skill.id);
 
   if (existingIndex >= 0) {
@@ -208,19 +302,28 @@ export function addSkill(skill: Skill): void {
     config.skills.push(skill);
   }
 
-  saveSkills(config);
+  saveSkillsToFile(config);
 }
 
 /**
- * Delete a skill
+ * Delete a skill, scoped to tenant.
  */
-export function deleteSkill(skillId: string): boolean {
-  const config = loadSkills();
+export function deleteSkill(skillId: string, tenantId?: number): boolean {
+  if (tenantId && hasTenantSkillsTable()) {
+    const db = getDatabase();
+    const result = db.prepare(
+      'DELETE FROM tenant_skills WHERE tenant_id = ? AND skill_id = ?'
+    ).run(tenantId, skillId);
+    return result.changes > 0;
+  }
+
+  // Fallback: update JSON file
+  const config = loadSkillsFromFile();
   const initialLength = config.skills.length;
   config.skills = config.skills.filter(s => s.id !== skillId);
 
   if (config.skills.length < initialLength) {
-    saveSkills(config);
+    saveSkillsToFile(config);
     return true;
   }
   return false;

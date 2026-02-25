@@ -26,6 +26,7 @@ import { DiagnosticOrchestrator, DiagnosticRequest, ToolIOSummary } from '../ser
 import { ExpertAgentService, ExpertAgentType } from '../services/expertAgentService';
 import { classifyCallerIntent } from '../services/callerIntentClassifier';
 import { mapToolSequence, StepStatus } from '../services/toolSequenceMapper';
+import { getToolNamesForConfig, getAllKnownToolNames, sqlInList } from '../services/toolNameResolver';
 
 // Path to test-agent database (main database with all test run data)
 const TEST_AGENT_DB_PATH = path.resolve(__dirname, '../../../test-agent/data/test-results.db');
@@ -33,12 +34,17 @@ const TEST_AGENT_DB_PATH = path.resolve(__dirname, '../../../test-agent/data/tes
 // Prompt context type for sandbox support
 type PromptContext = 'production' | 'sandbox_a' | 'sandbox_b';
 
-// File key display names
+// File key display names (Ortho + Chord)
 const FILE_KEY_DISPLAY_NAMES: Record<string, string> = {
   'system_prompt': 'System Prompt',
   'scheduling_tool': 'Scheduling Tool',
   'patient_tool': 'Patient Tool',
   'nodered_flow': 'Node Red Flows',
+  'chord_system_prompt': 'Chord System Prompt',
+  'chord_patient_tool': 'Chord Patient Tool',
+  'chord_scheduling_tool': 'Chord Scheduling Tool',
+  'chord_escalation_tool': 'Chord Escalation Tool',
+  'chord_nodered_flow': 'Chord Node Red Flows',
 };
 
 // ConversationTurn type for trace diagnosis
@@ -283,6 +289,85 @@ function getTestAgentDbWritable(): BetterSqlite3.Database {
 
   // Migrate config tables to add tenant_id (for existing databases)
   ensureTenantIdColumnsExist(db);
+
+  // Migration: Add tenant_id to sandbox tables
+  const sandboxCols = db.prepare(`PRAGMA table_info(ab_sandboxes)`).all() as any[];
+  if (!sandboxCols.some((c: any) => c.name === 'tenant_id')) {
+    console.log('[Migration] Adding tenant_id to sandbox tables...');
+    db.pragma('foreign_keys = OFF');
+    db.exec('BEGIN TRANSACTION');
+    try {
+      // Recreate ab_sandboxes with tenant_id + updated UNIQUE constraint
+      db.exec(`
+        ALTER TABLE ab_sandboxes RENAME TO ab_sandboxes_old;
+        CREATE TABLE ab_sandboxes (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          sandbox_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          description TEXT,
+          flowise_endpoint TEXT,
+          flowise_api_key TEXT,
+          langfuse_host TEXT,
+          langfuse_public_key TEXT,
+          langfuse_secret_key TEXT,
+          is_active INTEGER DEFAULT 1,
+          tenant_id INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(sandbox_id, tenant_id)
+        );
+        INSERT INTO ab_sandboxes (id, sandbox_id, name, description, flowise_endpoint, flowise_api_key,
+          langfuse_host, langfuse_public_key, langfuse_secret_key, is_active, tenant_id, created_at, updated_at)
+        SELECT id, sandbox_id, name, description, flowise_endpoint, flowise_api_key,
+          langfuse_host, langfuse_public_key, langfuse_secret_key, is_active, 1, created_at, updated_at
+        FROM ab_sandboxes_old;
+        DROP TABLE ab_sandboxes_old;
+
+        -- Recreate ab_sandbox_files with tenant_id + updated UNIQUE constraint
+        ALTER TABLE ab_sandbox_files RENAME TO ab_sandbox_files_old;
+        CREATE TABLE ab_sandbox_files (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          sandbox_id TEXT NOT NULL,
+          file_key TEXT NOT NULL,
+          file_type TEXT NOT NULL,
+          display_name TEXT NOT NULL,
+          content TEXT NOT NULL,
+          version INTEGER DEFAULT 1,
+          base_version INTEGER,
+          change_description TEXT,
+          tenant_id INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(sandbox_id, file_key, tenant_id)
+        );
+        INSERT INTO ab_sandbox_files (id, sandbox_id, file_key, file_type, display_name, content, version,
+          base_version, change_description, tenant_id, created_at, updated_at)
+        SELECT id, sandbox_id, file_key, file_type, display_name, content, version,
+          base_version, change_description, 1, created_at, updated_at
+        FROM ab_sandbox_files_old;
+        DROP TABLE ab_sandbox_files_old;
+
+        -- Simple ALTER for history table (no unique constraint to change)
+        ALTER TABLE ab_sandbox_file_history ADD COLUMN tenant_id INTEGER NOT NULL DEFAULT 1;
+      `);
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+    db.pragma('foreign_keys = ON');
+
+    // Recreate indexes
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_sandbox_files_sandbox ON ab_sandbox_files(sandbox_id);
+      CREATE INDEX IF NOT EXISTS idx_sandbox_files_tenant ON ab_sandbox_files(tenant_id);
+      CREATE INDEX IF NOT EXISTS idx_sandbox_history_sandbox ON ab_sandbox_file_history(sandbox_id);
+      CREATE INDEX IF NOT EXISTS idx_sandbox_history_file ON ab_sandbox_file_history(file_key);
+      CREATE INDEX IF NOT EXISTS idx_sandbox_history_tenant ON ab_sandbox_file_history(tenant_id);
+      CREATE INDEX IF NOT EXISTS idx_sandboxes_tenant ON ab_sandboxes(tenant_id);
+    `);
+    console.log('[Migration] Sandbox tables migrated with tenant_id');
+  }
 
   return db;
 }
@@ -1395,32 +1480,38 @@ export async function getPromptFiles(req: Request, res: Response, next: NextFunc
     const context = (req.query.context as PromptContext) || 'production';
 
     if (context === 'production') {
-      const files = promptService.getPromptFiles();
+      const tenantId = getTenantIdFromRequest(req);
+      const files = promptService.getPromptFiles(tenantId);
       res.json({ success: true, data: files });
       return;
     }
 
     // Sandbox context - get from ab_sandbox_files
+    const tenantId = getTenantIdFromRequest(req);
     const db = new BetterSqlite3(TEST_AGENT_DB_PATH);
     const sandboxFiles = db.prepare(`
       SELECT file_key, display_name, content, version, updated_at
       FROM ab_sandbox_files
-      WHERE sandbox_id = ?
-    `).all(context) as any[];
+      WHERE sandbox_id = ? AND tenant_id = ?
+    `).all(context, tenantId) as any[];
     db.close();
 
+    // Use tenant-specific file keys
+    const tenantMappings = promptService.getPromptFileMappings(tenantId);
+    const tenantFileKeys = Object.keys(tenantMappings);
+
     // Map to same format as production files (PromptFile type)
-    const files = ['system_prompt', 'scheduling_tool', 'patient_tool', 'nodered_flow'].map(fileKey => {
+    const files = tenantFileKeys.map(fileKey => {
       const sandboxFile = sandboxFiles.find((f: any) => f.file_key === fileKey);
       const getFileType = (key: string) => {
-        if (key === 'system_prompt') return 'markdown';
-        if (key === 'nodered_flow') return 'json';
+        if (key.includes('system_prompt') || key.endsWith('_prompt')) return 'markdown';
+        if (key.includes('nodered_flow')) return 'json';
         return 'javascript';
       };
       return {
         fileKey,
         filePath: `sandbox://${context}/${fileKey}`, // Virtual path for sandbox files
-        displayName: FILE_KEY_DISPLAY_NAMES[fileKey] || fileKey,
+        displayName: tenantMappings[fileKey]?.displayName || FILE_KEY_DISPLAY_NAMES[fileKey] || fileKey,
         version: sandboxFile?.version || 0,
         lastFixId: null, // Sandbox files don't track fix IDs
         updatedAt: sandboxFile?.updated_at || new Date().toISOString(),
@@ -1446,7 +1537,8 @@ export async function getPromptContent(req: Request, res: Response, next: NextFu
     const context = (req.query.context as PromptContext) || 'production';
 
     if (context === 'production') {
-      const result = promptService.getPromptContent(fileKey);
+      const tenantId = getTenantIdFromRequest(req);
+      const result = promptService.getPromptContent(fileKey, tenantId);
       if (!result) {
         res.status(404).json({ success: false, error: 'Prompt file not found' });
         return;
@@ -1456,12 +1548,13 @@ export async function getPromptContent(req: Request, res: Response, next: NextFu
     }
 
     // Sandbox context
+    const tenantId = getTenantIdFromRequest(req);
     const db = new BetterSqlite3(TEST_AGENT_DB_PATH);
     const sandboxFile = db.prepare(`
       SELECT file_key, content, version, change_description, updated_at
       FROM ab_sandbox_files
-      WHERE sandbox_id = ? AND file_key = ?
-    `).get(context, fileKey) as any;
+      WHERE sandbox_id = ? AND file_key = ? AND tenant_id = ?
+    `).get(context, fileKey, tenantId) as any;
     db.close();
 
     if (!sandboxFile) {
@@ -1500,20 +1593,22 @@ export async function getPromptHistory(req: Request, res: Response, next: NextFu
     const context = (req.query.context as PromptContext) || 'production';
 
     if (context === 'production') {
-      const history = promptService.getPromptHistory(fileKey, limit);
+      const tenantId = getTenantIdFromRequest(req);
+      const history = promptService.getPromptHistory(fileKey, limit, tenantId);
       res.json({ success: true, data: history });
       return;
     }
 
     // Sandbox context - get from ab_sandbox_file_history
+    const tenantId = getTenantIdFromRequest(req);
     const db = new BetterSqlite3(TEST_AGENT_DB_PATH);
     const history = db.prepare(`
       SELECT version, content, change_description, created_at
       FROM ab_sandbox_file_history
-      WHERE sandbox_id = ? AND file_key = ?
+      WHERE sandbox_id = ? AND file_key = ? AND tenant_id = ?
       ORDER BY version DESC
       LIMIT ?
-    `).all(context, fileKey, limit) as any[];
+    `).all(context, fileKey, tenantId, limit) as any[];
     db.close();
 
     const formattedHistory = history.map((h: any) => ({
@@ -1544,7 +1639,8 @@ export async function applyFixToPrompt(req: Request, res: Response, next: NextFu
       return;
     }
 
-    const result = promptService.applyFix(fileKey, fixId);
+    const tenantId = getTenantIdFromRequest(req);
+    const result = promptService.applyFix(fileKey, fixId, tenantId);
 
     res.json({
       success: true,
@@ -1572,7 +1668,8 @@ export async function getPromptVersionContent(req: Request, res: Response, next:
       return;
     }
 
-    const content = promptService.getVersionContent(fileKey, versionNum);
+    const tenantId = getTenantIdFromRequest(req);
+    const content = promptService.getVersionContent(fileKey, versionNum, tenantId);
 
     if (!content) {
       res.status(404).json({ success: false, error: 'Version not found' });
@@ -1604,7 +1701,8 @@ export async function savePromptVersion(req: Request, res: Response, next: NextF
       return;
     }
 
-    const result = promptService.saveNewVersion(fileKey, content, changeDescription);
+    const tenantId = getTenantIdFromRequest(req);
+    const result = promptService.saveNewVersion(fileKey, content, changeDescription, tenantId);
 
     res.json({
       success: true,
@@ -1638,7 +1736,8 @@ export async function applyBatchFixes(req: Request, res: Response, next: NextFun
       return;
     }
 
-    const result = promptService.applyBatchFixes(fixIds);
+    const tenantId = getTenantIdFromRequest(req);
+    const result = promptService.applyBatchFixes(fixIds, tenantId);
 
     res.json({
       success: true,
@@ -1662,7 +1761,8 @@ export async function applyBatchFixes(req: Request, res: Response, next: NextFun
 export async function syncPromptToDisk(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { fileKey } = req.params;
-    const success = promptService.syncToDisk(fileKey);
+    const tenantId = getTenantIdFromRequest(req);
+    const success = promptService.syncToDisk(fileKey, tenantId);
 
     if (!success) {
       res.status(404).json({ success: false, error: 'Prompt file not found' });
@@ -1682,7 +1782,8 @@ export async function syncPromptToDisk(req: Request, res: Response, next: NextFu
 export async function resetPromptFromDisk(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { fileKey } = req.params;
-    const result = promptService.resetFromDisk(fileKey);
+    const tenantId = getTenantIdFromRequest(req);
+    const result = promptService.resetFromDisk(fileKey, tenantId);
 
     res.json({
       success: true,
@@ -1714,20 +1815,22 @@ export async function getDeployedVersions(req: Request, res: Response, next: Nex
     const context = (req.query.context as PromptContext) || 'production';
 
     if (context === 'production') {
-      const deployedVersions = promptService.getDeployedVersions();
+      const tenantId = getTenantIdFromRequest(req);
+      const deployedVersions = promptService.getDeployedVersions(tenantId);
       res.json({ success: true, data: deployedVersions });
       return;
     }
 
     // Sandbox context - get versions from ab_sandbox_files table
+    const tenantId = getTenantIdFromRequest(req);
     const sandboxId = context; // 'sandbox_a' or 'sandbox_b'
     const db = getTestAgentDb();
     const stmt = db.prepare(`
       SELECT file_key, version
       FROM ab_sandbox_files
-      WHERE sandbox_id = ?
+      WHERE sandbox_id = ? AND tenant_id = ?
     `);
-    const rows = stmt.all(sandboxId) as Array<{ file_key: string; version: number }>;
+    const rows = stmt.all(sandboxId, tenantId) as Array<{ file_key: string; version: number }>;
 
     const deployedVersions: Record<string, number> = {};
     for (const row of rows) {
@@ -1754,7 +1857,8 @@ export async function markPromptAsDeployed(req: Request, res: Response, next: Ne
       return;
     }
 
-    const result = promptService.markAsDeployed(fileKey, version, 'user', notes);
+    const tenantId = getTenantIdFromRequest(req);
+    const result = promptService.markAsDeployed(fileKey, version, 'user', notes, tenantId);
     res.json({ success: true, data: result });
   } catch (error) {
     next(error);
@@ -1770,7 +1874,8 @@ export async function getDeploymentHistory(req: Request, res: Response, next: Ne
     const { fileKey } = req.params;
     const limit = parseInt(req.query.limit as string) || 10;
 
-    const history = promptService.getDeploymentHistory(fileKey, limit);
+    const tenantId = getTenantIdFromRequest(req);
+    const history = promptService.getDeploymentHistory(fileKey, limit, tenantId);
     res.json({ success: true, data: history });
   } catch (error) {
     next(error);
@@ -1795,7 +1900,8 @@ export async function rollbackPromptVersion(req: Request, res: Response, next: N
       return;
     }
 
-    const result = promptService.rollbackToVersion(fileKey, targetVersion);
+    const tenantId = getTenantIdFromRequest(req);
+    const result = promptService.rollbackToVersion(fileKey, targetVersion, tenantId);
     res.json({
       success: true,
       data: {
@@ -1872,7 +1978,8 @@ export async function rollbackFix(req: Request, res: Response, next: NextFunctio
     db.close();
 
     // Perform the rollback using promptService
-    const result = promptService.rollbackToVersion(versionEntry.file_key, previousVersion.version);
+    const tenantId = getTenantIdFromRequest(req);
+    const result = promptService.rollbackToVersion(versionEntry.file_key, previousVersion.version, tenantId);
 
     // Update fix status to rejected
     const db2 = getTestAgentDbWritable();
@@ -2102,7 +2209,8 @@ export async function getPromptVersionDiff(req: Request, res: Response, next: Ne
       return;
     }
 
-    const diff = promptService.getVersionDiff(fileKey, version1, version2);
+    const tenantId = getTenantIdFromRequest(req);
+    const diff = promptService.getVersionDiff(fileKey, version1, version2, tenantId);
     res.json({ success: true, data: diff });
   } catch (error) {
     next(error);
@@ -2125,7 +2233,8 @@ export async function copyToSandbox(req: Request, res: Response, next: NextFunct
     }
 
     // Get production content
-    const productionContent = promptService.getPromptContent(fileKey);
+    const tenantId = getTenantIdFromRequest(req);
+    const productionContent = promptService.getPromptContent(fileKey, tenantId);
     if (!productionContent) {
       res.status(404).json({ success: false, error: `Production file not found: ${fileKey}` });
       return;
@@ -2137,32 +2246,34 @@ export async function copyToSandbox(req: Request, res: Response, next: NextFunct
     // Check if file already exists in sandbox
     const existing = db.prepare(`
       SELECT id, version FROM ab_sandbox_files
-      WHERE sandbox_id = ? AND file_key = ?
-    `).get(sandboxId, fileKey) as { id: number; version: number } | undefined;
+      WHERE sandbox_id = ? AND file_key = ? AND tenant_id = ?
+    `).get(sandboxId, fileKey, tenantId) as { id: number; version: number } | undefined;
 
     const now = new Date().toISOString();
-    const fileType = fileKey === 'system_prompt' ? 'markdown' : 'javascript';
-    const displayName = FILE_KEY_DISPLAY_NAMES[fileKey] || fileKey;
+    const fileType = fileKey.includes('system_prompt') || fileKey.endsWith('_prompt') ? 'markdown' : 'javascript';
+    const tenantMappings = promptService.getPromptFileMappings(tenantId);
+    const displayName = tenantMappings[fileKey]?.displayName || FILE_KEY_DISPLAY_NAMES[fileKey] || fileKey;
 
     if (existing) {
       // Update existing file
       db.prepare(`
         UPDATE ab_sandbox_files
         SET content = ?, version = ?, change_description = ?, updated_at = ?
-        WHERE sandbox_id = ? AND file_key = ?
+        WHERE sandbox_id = ? AND file_key = ? AND tenant_id = ?
       `).run(
         productionContent.content,
         existing.version + 1,
         `Copied from production v${productionContent.version}`,
         now,
         sandboxId,
-        fileKey
+        fileKey,
+        tenantId
       );
     } else {
       // Insert new file
       db.prepare(`
-        INSERT INTO ab_sandbox_files (sandbox_id, file_key, file_type, display_name, content, version, change_description, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO ab_sandbox_files (sandbox_id, file_key, file_type, display_name, content, version, change_description, tenant_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         sandboxId,
         fileKey,
@@ -2171,6 +2282,7 @@ export async function copyToSandbox(req: Request, res: Response, next: NextFunct
         productionContent.content,
         1,
         `Copied from production v${productionContent.version}`,
+        tenantId,
         now,
         now
       );
@@ -2780,8 +2892,8 @@ export async function startExecution(req: Request, res: Response, next: NextFunc
             const sandbox = db.prepare(`
               SELECT name, flowise_endpoint, flowise_api_key,
                      langfuse_host, langfuse_public_key, langfuse_secret_key
-              FROM ab_sandboxes WHERE sandbox_id = ?
-            `).get(sandboxId) as {
+              FROM ab_sandboxes WHERE sandbox_id = ? AND tenant_id = ?
+            `).get(sandboxId, tenantId) as {
               name: string;
               flowise_endpoint: string | null;
               flowise_api_key: string | null;
@@ -3471,12 +3583,13 @@ export async function getAggregateErrorClusters(req: Request, res: Response, nex
  */
 export async function getTestCases(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
+    const tenantId = getTenantIdFromRequest(req);
     const category = req.query.category as string | undefined;
     const includeArchived = req.query.includeArchived === 'true';
 
-    const testCases = testCaseService.getTestCases({ category, includeArchived });
-    const stats = testCaseService.getTestCaseStats();
-    const tags = testCaseService.getAllTags();
+    const testCases = testCaseService.getTestCases({ category, includeArchived }, tenantId);
+    const stats = testCaseService.getTestCaseStats(tenantId);
+    const tags = testCaseService.getAllTags(tenantId);
 
     res.json({
       success: true,
@@ -3497,9 +3610,10 @@ export async function getTestCases(req: Request, res: Response, next: NextFuncti
  */
 export async function getTestCase(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
+    const tenantId = getTenantIdFromRequest(req);
     const { caseId } = req.params;
 
-    const testCase = testCaseService.getTestCase(caseId);
+    const testCase = testCaseService.getTestCase(caseId, tenantId);
 
     if (!testCase) {
       res.status(404).json({ success: false, error: 'Test case not found' });
@@ -3518,6 +3632,7 @@ export async function getTestCase(req: Request, res: Response, next: NextFunctio
  */
 export async function createTestCase(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
+    const tenantId = getTenantIdFromRequest(req);
     const { caseId, name, description, category, tags, steps, expectations } = req.body;
 
     // Validate required fields
@@ -3527,10 +3642,10 @@ export async function createTestCase(req: Request, res: Response, next: NextFunc
     }
 
     // Generate case ID if not provided
-    const finalCaseId = caseId || testCaseService.generateNextCaseId(category);
+    const finalCaseId = caseId || testCaseService.generateNextCaseId(category, tenantId);
 
     // Check if case ID already exists
-    if (testCaseService.testCaseExists(finalCaseId)) {
+    if (testCaseService.testCaseExists(finalCaseId, tenantId)) {
       res.status(409).json({ success: false, error: `Test case ${finalCaseId} already exists` });
       return;
     }
@@ -3565,7 +3680,7 @@ export async function createTestCase(req: Request, res: Response, next: NextFunc
       steps: steps || [],
       expectations: expectations || [],
       isArchived: false,
-    });
+    }, tenantId);
 
     res.status(201).json({ success: true, data: testCase });
   } catch (error) {
@@ -3579,11 +3694,12 @@ export async function createTestCase(req: Request, res: Response, next: NextFunc
  */
 export async function updateTestCase(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
+    const tenantId = getTenantIdFromRequest(req);
     const { caseId } = req.params;
     const { name, description, category, tags, steps, expectations, isArchived } = req.body;
 
     // Check if test case exists
-    if (!testCaseService.testCaseExists(caseId)) {
+    if (!testCaseService.testCaseExists(caseId, tenantId)) {
       res.status(404).json({ success: false, error: 'Test case not found' });
       return;
     }
@@ -3617,7 +3733,7 @@ export async function updateTestCase(req: Request, res: Response, next: NextFunc
       steps,
       expectations,
       isArchived,
-    });
+    }, tenantId);
 
     if (!testCase) {
       res.status(404).json({ success: false, error: 'Test case not found' });
@@ -3636,14 +3752,15 @@ export async function updateTestCase(req: Request, res: Response, next: NextFunc
  */
 export async function deleteTestCase(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
+    const tenantId = getTenantIdFromRequest(req);
     const { caseId } = req.params;
     const permanent = req.query.permanent === 'true';
 
     let success: boolean;
     if (permanent) {
-      success = testCaseService.deleteTestCase(caseId);
+      success = testCaseService.deleteTestCase(caseId, tenantId);
     } else {
-      success = testCaseService.archiveTestCase(caseId);
+      success = testCaseService.archiveTestCase(caseId, tenantId);
     }
 
     if (!success) {
@@ -3666,26 +3783,27 @@ export async function deleteTestCase(req: Request, res: Response, next: NextFunc
  */
 export async function cloneTestCase(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
+    const tenantId = getTenantIdFromRequest(req);
     const { caseId } = req.params;
     const { newCaseId } = req.body;
 
     // Get the source test case to determine category
-    const sourceCase = testCaseService.getTestCase(caseId);
+    const sourceCase = testCaseService.getTestCase(caseId, tenantId);
     if (!sourceCase) {
       res.status(404).json({ success: false, error: 'Source test case not found' });
       return;
     }
 
     // Generate new case ID if not provided
-    const finalNewCaseId = newCaseId || testCaseService.generateNextCaseId(sourceCase.category);
+    const finalNewCaseId = newCaseId || testCaseService.generateNextCaseId(sourceCase.category, tenantId);
 
     // Check if new case ID already exists
-    if (testCaseService.testCaseExists(finalNewCaseId)) {
+    if (testCaseService.testCaseExists(finalNewCaseId, tenantId)) {
       res.status(409).json({ success: false, error: `Test case ${finalNewCaseId} already exists` });
       return;
     }
 
-    const clonedCase = testCaseService.cloneTestCase(caseId, finalNewCaseId);
+    const clonedCase = testCaseService.cloneTestCase(caseId, finalNewCaseId, tenantId);
 
     if (!clonedCase) {
       res.status(404).json({ success: false, error: 'Failed to clone test case' });
@@ -3722,9 +3840,10 @@ export async function validateTestCase(req: Request, res: Response, next: NextFu
  * POST /api/test-monitor/test-cases/sync
  * Sync test cases from database to TypeScript files
  */
-export async function syncTestCases(_req: Request, res: Response, next: NextFunction): Promise<void> {
+export async function syncTestCases(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const result = testCaseService.syncToTypeScript();
+    const tenantId = getTenantIdFromRequest(req);
+    const result = testCaseService.syncToTypeScript(tenantId);
 
     if (result.success) {
       res.json({
@@ -3773,12 +3892,13 @@ export async function getTestCasePresets(_req: Request, res: Response, next: Nex
  */
 export async function getGoalTestCases(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
+    const tenantId = getTenantIdFromRequest(req);
     const category = req.query.category as string | undefined;
     const includeArchived = req.query.includeArchived === 'true';
 
-    const testCases = goalTestService.getGoalTestCases({ category, includeArchived });
-    const stats = goalTestService.getGoalTestCaseStats();
-    const tags = goalTestService.getAllTags();
+    const testCases = goalTestService.getGoalTestCases({ category, includeArchived }, tenantId);
+    const stats = goalTestService.getGoalTestCaseStats(tenantId);
+    const tags = goalTestService.getAllTags(tenantId);
 
     res.json({
       success: true,
@@ -3799,9 +3919,10 @@ export async function getGoalTestCases(req: Request, res: Response, next: NextFu
  */
 export async function getGoalTestCase(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
+    const tenantId = getTenantIdFromRequest(req);
     const { caseId } = req.params;
 
-    const testCase = goalTestService.getGoalTestCase(caseId);
+    const testCase = goalTestService.getGoalTestCase(caseId, tenantId);
 
     if (!testCase) {
       res.status(404).json({ success: false, error: 'Goal test case not found' });
@@ -3820,6 +3941,7 @@ export async function getGoalTestCase(req: Request, res: Response, next: NextFun
  */
 export async function createGoalTestCase(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
+    const tenantId = getTenantIdFromRequest(req);
     const {
       caseId, name, description, category, tags,
       persona, goals, constraints, responseConfig, initialMessage
@@ -3832,10 +3954,10 @@ export async function createGoalTestCase(req: Request, res: Response, next: Next
     }
 
     // Generate case ID if not provided
-    const finalCaseId = caseId || goalTestService.generateNextCaseId(category);
+    const finalCaseId = caseId || goalTestService.generateNextCaseId(category, tenantId);
 
     // Check if case ID already exists
-    if (goalTestService.goalTestCaseExists(finalCaseId)) {
+    if (goalTestService.goalTestCaseExists(finalCaseId, tenantId)) {
       res.status(409).json({ success: false, error: `Goal test case ${finalCaseId} already exists` });
       return;
     }
@@ -3876,7 +3998,7 @@ export async function createGoalTestCase(req: Request, res: Response, next: Next
       responseConfig: responseConfig || goalTestService.DEFAULT_RESPONSE_CONFIG,
       initialMessage: initialMessage || 'Hi, I need to schedule an appointment',
       isArchived: false,
-    });
+    }, tenantId);
 
     res.status(201).json({ success: true, data: testCase });
   } catch (error) {
@@ -3890,6 +4012,7 @@ export async function createGoalTestCase(req: Request, res: Response, next: Next
  */
 export async function updateGoalTestCase(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
+    const tenantId = getTenantIdFromRequest(req);
     const { caseId } = req.params;
     const {
       name, description, category, tags,
@@ -3897,7 +4020,7 @@ export async function updateGoalTestCase(req: Request, res: Response, next: Next
     } = req.body;
 
     // Check if test case exists
-    if (!goalTestService.goalTestCaseExists(caseId)) {
+    if (!goalTestService.goalTestCaseExists(caseId, tenantId)) {
       res.status(404).json({ success: false, error: 'Goal test case not found' });
       return;
     }
@@ -3937,7 +4060,7 @@ export async function updateGoalTestCase(req: Request, res: Response, next: Next
       responseConfig,
       initialMessage,
       isArchived,
-    });
+    }, tenantId);
 
     if (!testCase) {
       res.status(404).json({ success: false, error: 'Goal test case not found' });
@@ -3956,14 +4079,15 @@ export async function updateGoalTestCase(req: Request, res: Response, next: Next
  */
 export async function deleteGoalTestCase(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
+    const tenantId = getTenantIdFromRequest(req);
     const { caseId } = req.params;
     const permanent = req.query.permanent === 'true';
 
     let success: boolean;
     if (permanent) {
-      success = goalTestService.deleteGoalTestCase(caseId);
+      success = goalTestService.deleteGoalTestCase(caseId, tenantId);
     } else {
-      success = goalTestService.archiveGoalTestCase(caseId);
+      success = goalTestService.archiveGoalTestCase(caseId, tenantId);
     }
 
     if (!success) {
@@ -3986,26 +4110,27 @@ export async function deleteGoalTestCase(req: Request, res: Response, next: Next
  */
 export async function cloneGoalTestCase(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
+    const tenantId = getTenantIdFromRequest(req);
     const { caseId } = req.params;
     const { newCaseId } = req.body;
 
     // Get the source test case to determine category
-    const sourceCase = goalTestService.getGoalTestCase(caseId);
+    const sourceCase = goalTestService.getGoalTestCase(caseId, tenantId);
     if (!sourceCase) {
       res.status(404).json({ success: false, error: 'Source goal test case not found' });
       return;
     }
 
     // Generate new case ID if not provided
-    const finalNewCaseId = newCaseId || goalTestService.generateNextCaseId(sourceCase.category);
+    const finalNewCaseId = newCaseId || goalTestService.generateNextCaseId(sourceCase.category, tenantId);
 
     // Check if new case ID already exists
-    if (goalTestService.goalTestCaseExists(finalNewCaseId)) {
+    if (goalTestService.goalTestCaseExists(finalNewCaseId, tenantId)) {
       res.status(409).json({ success: false, error: `Goal test case ${finalNewCaseId} already exists` });
       return;
     }
 
-    const clonedCase = goalTestService.cloneGoalTestCase(caseId, finalNewCaseId);
+    const clonedCase = goalTestService.cloneGoalTestCase(caseId, finalNewCaseId, tenantId);
 
     if (!clonedCase) {
       res.status(404).json({ success: false, error: 'Failed to clone goal test case' });
@@ -4042,9 +4167,10 @@ export async function validateGoalTestCase(req: Request, res: Response, next: Ne
  * POST /api/test-monitor/goal-tests/sync
  * Sync goal test cases from database to TypeScript files
  */
-export async function syncGoalTestCases(_req: Request, res: Response, next: NextFunction): Promise<void> {
+export async function syncGoalTestCases(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const result = goalTestService.syncToTypeScript();
+    const tenantId = getTenantIdFromRequest(req);
+    const result = goalTestService.syncToTypeScript(tenantId);
 
     if (result.success) {
       res.json({
@@ -4587,32 +4713,33 @@ function normalCDF(x: number): number {
  * Get all sandboxes
  */
 export async function getSandboxes(
-  _req: Request,
+  req: Request,
   res: Response,
   next: NextFunction
 ): Promise<void> {
   let db: BetterSqlite3.Database | null = null;
 
   try {
+    const tenantId = getTenantIdFromRequest(req);
     db = new BetterSqlite3(TEST_AGENT_DB_PATH);
 
-    // Initialize sandboxes if not exist
+    // Initialize sandboxes if not exist for this tenant
     const now = new Date().toISOString();
-    const existingA = db.prepare('SELECT 1 FROM ab_sandboxes WHERE sandbox_id = ?').get('sandbox_a');
-    const existingB = db.prepare('SELECT 1 FROM ab_sandboxes WHERE sandbox_id = ?').get('sandbox_b');
+    const existingA = db.prepare('SELECT 1 FROM ab_sandboxes WHERE sandbox_id = ? AND tenant_id = ?').get('sandbox_a', tenantId);
+    const existingB = db.prepare('SELECT 1 FROM ab_sandboxes WHERE sandbox_id = ? AND tenant_id = ?').get('sandbox_b', tenantId);
 
     if (!existingA) {
       db.prepare(`
-        INSERT INTO ab_sandboxes (sandbox_id, name, description, is_active, created_at, updated_at)
-        VALUES (?, ?, ?, 1, ?, ?)
-      `).run('sandbox_a', 'Sandbox A', 'First sandbox for A/B testing', now, now);
+        INSERT INTO ab_sandboxes (sandbox_id, name, description, is_active, tenant_id, created_at, updated_at)
+        VALUES (?, ?, ?, 1, ?, ?, ?)
+      `).run('sandbox_a', 'Sandbox A', 'First sandbox for A/B testing', tenantId, now, now);
     }
 
     if (!existingB) {
       db.prepare(`
-        INSERT INTO ab_sandboxes (sandbox_id, name, description, is_active, created_at, updated_at)
-        VALUES (?, ?, ?, 1, ?, ?)
-      `).run('sandbox_b', 'Sandbox B', 'Second sandbox for A/B testing', now, now);
+        INSERT INTO ab_sandboxes (sandbox_id, name, description, is_active, tenant_id, created_at, updated_at)
+        VALUES (?, ?, ?, 1, ?, ?, ?)
+      `).run('sandbox_b', 'Sandbox B', 'Second sandbox for A/B testing', tenantId, now, now);
     }
 
     const sandboxes = db.prepare(`
@@ -4620,16 +4747,17 @@ export async function getSandboxes(
              langfuse_host, langfuse_public_key, langfuse_secret_key,
              is_active, created_at, updated_at
       FROM ab_sandboxes
+      WHERE tenant_id = ?
       ORDER BY sandbox_id
-    `).all() as any[];
+    `).all(tenantId) as any[];
 
     // Get file counts for each sandbox
     const sandboxesWithFiles = sandboxes.map(sandbox => {
       const files = db!.prepare(`
         SELECT file_key, version, updated_at
         FROM ab_sandbox_files
-        WHERE sandbox_id = ?
-      `).all(sandbox.sandbox_id) as any[];
+        WHERE sandbox_id = ? AND tenant_id = ?
+      `).all(sandbox.sandbox_id, tenantId) as any[];
 
       return {
         sandboxId: sandbox.sandbox_id,
@@ -4674,6 +4802,7 @@ export async function getSandbox(
   let db: BetterSqlite3.Database | null = null;
 
   try {
+    const tenantId = getTenantIdFromRequest(req);
     const { sandboxId } = req.params;
     db = new BetterSqlite3(TEST_AGENT_DB_PATH);
 
@@ -4682,8 +4811,8 @@ export async function getSandbox(
              langfuse_host, langfuse_public_key, langfuse_secret_key,
              is_active, created_at, updated_at
       FROM ab_sandboxes
-      WHERE sandbox_id = ?
-    `).get(sandboxId) as any;
+      WHERE sandbox_id = ? AND tenant_id = ?
+    `).get(sandboxId, tenantId) as any;
 
     if (!sandbox) {
       res.status(404).json({
@@ -4696,9 +4825,9 @@ export async function getSandbox(
     const files = db.prepare(`
       SELECT id, sandbox_id, file_key, file_type, display_name, content, version, base_version, change_description, created_at, updated_at
       FROM ab_sandbox_files
-      WHERE sandbox_id = ?
+      WHERE sandbox_id = ? AND tenant_id = ?
       ORDER BY file_key
-    `).all(sandboxId) as any[];
+    `).all(sandboxId, tenantId) as any[];
 
     res.json({
       success: true,
@@ -4786,10 +4915,11 @@ export async function updateSandbox(
       params.push(isActive ? 1 : 0);
     }
 
-    params.push(sandboxId);
+    const tenantId = getTenantIdFromRequest(req);
+    params.push(sandboxId, tenantId);
 
     const result = db.prepare(`
-      UPDATE ab_sandboxes SET ${setClauses.join(', ')} WHERE sandbox_id = ?
+      UPDATE ab_sandboxes SET ${setClauses.join(', ')} WHERE sandbox_id = ? AND tenant_id = ?
     `).run(...params);
 
     if (result.changes === 0) {
@@ -4805,8 +4935,8 @@ export async function updateSandbox(
       SELECT id, sandbox_id, name, description, flowise_endpoint, flowise_api_key,
              langfuse_host, langfuse_public_key, langfuse_secret_key,
              is_active, created_at, updated_at
-      FROM ab_sandboxes WHERE sandbox_id = ?
-    `).get(sandboxId) as any;
+      FROM ab_sandboxes WHERE sandbox_id = ? AND tenant_id = ?
+    `).get(sandboxId, tenantId) as any;
 
     res.json({
       success: true,
@@ -4990,15 +5120,16 @@ export async function getSandboxFiles(
   let db: BetterSqlite3.Database | null = null;
 
   try {
+    const tenantId = getTenantIdFromRequest(req);
     const { sandboxId } = req.params;
     db = new BetterSqlite3(TEST_AGENT_DB_PATH);
 
     const files = db.prepare(`
       SELECT id, sandbox_id, file_key, file_type, display_name, content, version, base_version, change_description, created_at, updated_at
       FROM ab_sandbox_files
-      WHERE sandbox_id = ?
+      WHERE sandbox_id = ? AND tenant_id = ?
       ORDER BY file_key
-    `).all(sandboxId) as any[];
+    `).all(sandboxId, tenantId) as any[];
 
     res.json({
       success: true,
@@ -5032,14 +5163,15 @@ export async function getSandboxFile(
   let db: BetterSqlite3.Database | null = null;
 
   try {
+    const tenantId = getTenantIdFromRequest(req);
     const { sandboxId, fileKey } = req.params;
     db = new BetterSqlite3(TEST_AGENT_DB_PATH);
 
     const file = db.prepare(`
       SELECT id, sandbox_id, file_key, file_type, display_name, content, version, base_version, change_description, created_at, updated_at
       FROM ab_sandbox_files
-      WHERE sandbox_id = ? AND file_key = ?
-    `).get(sandboxId, fileKey) as any;
+      WHERE sandbox_id = ? AND file_key = ? AND tenant_id = ?
+    `).get(sandboxId, fileKey, tenantId) as any;
 
     if (!file) {
       res.status(404).json({
@@ -5081,6 +5213,7 @@ export async function getSandboxFileHistory(
   let db: BetterSqlite3.Database | null = null;
 
   try {
+    const tenantId = getTenantIdFromRequest(req);
     const { sandboxId, fileKey } = req.params;
     const limit = parseInt(req.query.limit as string) || 20;
     db = new BetterSqlite3(TEST_AGENT_DB_PATH);
@@ -5088,10 +5221,10 @@ export async function getSandboxFileHistory(
     const history = db.prepare(`
       SELECT id, sandbox_id, file_key, version, content, change_description, created_at
       FROM ab_sandbox_file_history
-      WHERE sandbox_id = ? AND file_key = ?
+      WHERE sandbox_id = ? AND file_key = ? AND tenant_id = ?
       ORDER BY version DESC
       LIMIT ?
-    `).all(sandboxId, fileKey, limit) as any[];
+    `).all(sandboxId, fileKey, tenantId, limit) as any[];
 
     res.json({
       success: true,
@@ -5119,6 +5252,7 @@ export async function saveSandboxFile(
   let db: BetterSqlite3.Database | null = null;
 
   try {
+    const tenantId = getTenantIdFromRequest(req);
     const { sandboxId, fileKey } = req.params;
     const { content, changeDescription } = req.body;
 
@@ -5137,43 +5271,39 @@ export async function saveSandboxFile(
     const existing = db.prepare(`
       SELECT id, version, content, change_description
       FROM ab_sandbox_files
-      WHERE sandbox_id = ? AND file_key = ?
-    `).get(sandboxId, fileKey) as any;
+      WHERE sandbox_id = ? AND file_key = ? AND tenant_id = ?
+    `).get(sandboxId, fileKey, tenantId) as any;
 
     let newVersion: number;
 
     if (existing) {
       // Save current version to history
       db.prepare(`
-        INSERT INTO ab_sandbox_file_history (sandbox_id, file_key, version, content, change_description, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `).run(sandboxId, fileKey, existing.version, existing.content, existing.change_description, now);
+        INSERT INTO ab_sandbox_file_history (sandbox_id, file_key, version, content, change_description, tenant_id, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(sandboxId, fileKey, existing.version, existing.content, existing.change_description, tenantId, now);
 
       // Update with new content
       newVersion = existing.version + 1;
       db.prepare(`
         UPDATE ab_sandbox_files
         SET content = ?, version = ?, change_description = ?, updated_at = ?
-        WHERE sandbox_id = ? AND file_key = ?
-      `).run(content, newVersion, changeDescription || null, now, sandboxId, fileKey);
+        WHERE sandbox_id = ? AND file_key = ? AND tenant_id = ?
+      `).run(content, newVersion, changeDescription || null, now, sandboxId, fileKey, tenantId);
     } else {
       // Insert new file
       newVersion = 1;
 
-      // Determine file type and display name
-      const fileConfig: Record<string, { displayName: string; fileType: string }> = {
-        system_prompt: { displayName: 'System Prompt', fileType: 'markdown' },
-        patient_tool: { displayName: 'Patient Tool', fileType: 'json' },
-        scheduling_tool: { displayName: 'Scheduling Tool', fileType: 'json' },
-        nodered_flow: { displayName: 'Node Red Flows', fileType: 'json' },
-      };
-
-      const config = fileConfig[fileKey] || { displayName: fileKey, fileType: 'text' };
+      // Determine file type and display name from tenant mappings
+      const tenantMappings = promptService.getPromptFileMappings(tenantId);
+      const mappingEntry = tenantMappings[fileKey];
+      const displayName = mappingEntry?.displayName || FILE_KEY_DISPLAY_NAMES[fileKey] || fileKey;
+      const fileType = fileKey.includes('system_prompt') || fileKey.endsWith('_prompt') ? 'markdown' : 'json';
 
       db.prepare(`
-        INSERT INTO ab_sandbox_files (sandbox_id, file_key, file_type, display_name, content, version, change_description, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(sandboxId, fileKey, config.fileType, config.displayName, content, newVersion, changeDescription || null, now, now);
+        INSERT INTO ab_sandbox_files (sandbox_id, file_key, file_type, display_name, content, version, change_description, tenant_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(sandboxId, fileKey, fileType, displayName, content, newVersion, changeDescription || null, tenantId, now, now);
     }
 
     res.json({
@@ -5201,13 +5331,14 @@ export async function copySandboxFileFromProduction(
   let db: BetterSqlite3.Database | null = null;
 
   try {
+    const tenantId = getTenantIdFromRequest(req);
     const { sandboxId, fileKey } = req.params;
     db = new BetterSqlite3(TEST_AGENT_DB_PATH);
 
-    // Get production content
+    // Get production content (tenant-aware)
     const production = db.prepare(`
-      SELECT content, version FROM prompt_working_copies WHERE file_key = ?
-    `).get(fileKey) as any;
+      SELECT content, version FROM prompt_working_copies WHERE file_key = ? AND tenant_id = ?
+    `).get(fileKey, tenantId) as any;
 
     if (!production) {
       res.status(404).json({
@@ -5223,48 +5354,44 @@ export async function copySandboxFileFromProduction(
     const existing = db.prepare(`
       SELECT id, version, content, change_description
       FROM ab_sandbox_files
-      WHERE sandbox_id = ? AND file_key = ?
-    `).get(sandboxId, fileKey) as any;
+      WHERE sandbox_id = ? AND file_key = ? AND tenant_id = ?
+    `).get(sandboxId, fileKey, tenantId) as any;
 
     let newVersion: number;
 
     if (existing) {
       // Save current version to history
       db.prepare(`
-        INSERT INTO ab_sandbox_file_history (sandbox_id, file_key, version, content, change_description, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `).run(sandboxId, fileKey, existing.version, existing.content, existing.change_description, now);
+        INSERT INTO ab_sandbox_file_history (sandbox_id, file_key, version, content, change_description, tenant_id, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(sandboxId, fileKey, existing.version, existing.content, existing.change_description, tenantId, now);
 
       newVersion = existing.version + 1;
       db.prepare(`
         UPDATE ab_sandbox_files
         SET content = ?, version = ?, base_version = ?, change_description = ?, updated_at = ?
-        WHERE sandbox_id = ? AND file_key = ?
-      `).run(production.content, newVersion, production.version, `Copied from production v${production.version}`, now, sandboxId, fileKey);
+        WHERE sandbox_id = ? AND file_key = ? AND tenant_id = ?
+      `).run(production.content, newVersion, production.version, `Copied from production v${production.version}`, now, sandboxId, fileKey, tenantId);
     } else {
       newVersion = 1;
 
-      const fileConfig: Record<string, { displayName: string; fileType: string }> = {
-        system_prompt: { displayName: 'System Prompt', fileType: 'markdown' },
-        patient_tool: { displayName: 'Patient Tool', fileType: 'json' },
-        scheduling_tool: { displayName: 'Scheduling Tool', fileType: 'json' },
-        nodered_flow: { displayName: 'Node Red Flows', fileType: 'json' },
-      };
-
-      const config = fileConfig[fileKey] || { displayName: fileKey, fileType: 'text' };
+      const tenantMappings = promptService.getPromptFileMappings(tenantId);
+      const mappingEntry = tenantMappings[fileKey];
+      const displayName = mappingEntry?.displayName || FILE_KEY_DISPLAY_NAMES[fileKey] || fileKey;
+      const fileType = fileKey.includes('system_prompt') || fileKey.endsWith('_prompt') ? 'markdown' : 'json';
 
       db.prepare(`
-        INSERT INTO ab_sandbox_files (sandbox_id, file_key, file_type, display_name, content, version, base_version, change_description, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(sandboxId, fileKey, config.fileType, config.displayName, production.content, newVersion, production.version, `Copied from production v${production.version}`, now, now);
+        INSERT INTO ab_sandbox_files (sandbox_id, file_key, file_type, display_name, content, version, base_version, change_description, tenant_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(sandboxId, fileKey, fileType, displayName, production.content, newVersion, production.version, `Copied from production v${production.version}`, tenantId, now, now);
     }
 
     // Fetch the newly created/updated file to return full data
     const file = db.prepare(`
       SELECT id, sandbox_id, file_key, file_type, display_name, content, version, base_version, change_description, created_at, updated_at
       FROM ab_sandbox_files
-      WHERE sandbox_id = ? AND file_key = ?
-    `).get(sandboxId, fileKey) as any;
+      WHERE sandbox_id = ? AND file_key = ? AND tenant_id = ?
+    `).get(sandboxId, fileKey, tenantId) as any;
 
     res.json({
       success: true,
@@ -5301,6 +5428,7 @@ export async function rollbackSandboxFile(
   let db: BetterSqlite3.Database | null = null;
 
   try {
+    const tenantId = getTenantIdFromRequest(req);
     const { sandboxId, fileKey } = req.params;
     const { version } = req.body;
 
@@ -5318,8 +5446,8 @@ export async function rollbackSandboxFile(
     // Get the version from history
     const historyRow = db.prepare(`
       SELECT content, change_description FROM ab_sandbox_file_history
-      WHERE sandbox_id = ? AND file_key = ? AND version = ?
-    `).get(sandboxId, fileKey, version) as any;
+      WHERE sandbox_id = ? AND file_key = ? AND version = ? AND tenant_id = ?
+    `).get(sandboxId, fileKey, version, tenantId) as any;
 
     if (!historyRow) {
       res.status(404).json({
@@ -5333,8 +5461,8 @@ export async function rollbackSandboxFile(
     const current = db.prepare(`
       SELECT id, version, content, change_description
       FROM ab_sandbox_files
-      WHERE sandbox_id = ? AND file_key = ?
-    `).get(sandboxId, fileKey) as any;
+      WHERE sandbox_id = ? AND file_key = ? AND tenant_id = ?
+    `).get(sandboxId, fileKey, tenantId) as any;
 
     if (!current) {
       res.status(404).json({
@@ -5346,17 +5474,17 @@ export async function rollbackSandboxFile(
 
     // Save current to history
     db.prepare(`
-      INSERT INTO ab_sandbox_file_history (sandbox_id, file_key, version, content, change_description, created_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(sandboxId, fileKey, current.version, current.content, current.change_description, now);
+      INSERT INTO ab_sandbox_file_history (sandbox_id, file_key, version, content, change_description, tenant_id, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(sandboxId, fileKey, current.version, current.content, current.change_description, tenantId, now);
 
     // Update with rolled back content
     const newVersion = current.version + 1;
     db.prepare(`
       UPDATE ab_sandbox_files
       SET content = ?, version = ?, change_description = ?, updated_at = ?
-      WHERE sandbox_id = ? AND file_key = ?
-    `).run(historyRow.content, newVersion, `Rolled back to version ${version}`, now, sandboxId, fileKey);
+      WHERE sandbox_id = ? AND file_key = ? AND tenant_id = ?
+    `).run(historyRow.content, newVersion, `Rolled back to version ${version}`, now, sandboxId, fileKey, tenantId);
 
     res.json({
       success: true,
@@ -5384,12 +5512,13 @@ export async function resetSandbox(
   let db: BetterSqlite3.Database | null = null;
 
   try {
+    const tenantId = getTenantIdFromRequest(req);
     const { sandboxId } = req.params;
     db = new BetterSqlite3(TEST_AGENT_DB_PATH);
 
-    // Clear all sandbox files and history
-    db.prepare('DELETE FROM ab_sandbox_file_history WHERE sandbox_id = ?').run(sandboxId);
-    db.prepare('DELETE FROM ab_sandbox_files WHERE sandbox_id = ?').run(sandboxId);
+    // Clear all sandbox files and history for this tenant
+    db.prepare('DELETE FROM ab_sandbox_file_history WHERE sandbox_id = ? AND tenant_id = ?').run(sandboxId, tenantId);
+    db.prepare('DELETE FROM ab_sandbox_files WHERE sandbox_id = ? AND tenant_id = ?').run(sandboxId, tenantId);
 
     res.json({
       success: true,
@@ -5413,18 +5542,21 @@ export async function copySandboxAllFromProduction(
   let db: BetterSqlite3.Database | null = null;
 
   try {
+    const tenantId = getTenantIdFromRequest(req);
     const { sandboxId } = req.params;
     db = new BetterSqlite3(TEST_AGENT_DB_PATH);
 
-    const fileKeys = ['system_prompt', 'patient_tool', 'scheduling_tool', 'nodered_flow'];
+    // Use tenant-specific file keys
+    const tenantMappings = promptService.getPromptFileMappings(tenantId);
+    const fileKeys = Object.keys(tenantMappings);
     const results: any[] = [];
     const now = new Date().toISOString();
 
     for (const fileKey of fileKeys) {
-      // Get production content
+      // Get production content (tenant-aware)
       const production = db.prepare(`
-        SELECT content, version FROM prompt_working_copies WHERE file_key = ?
-      `).get(fileKey) as any;
+        SELECT content, version FROM prompt_working_copies WHERE file_key = ? AND tenant_id = ?
+      `).get(fileKey, tenantId) as any;
 
       if (!production) {
         results.push({ fileKey, success: false, error: 'Production file not found' });
@@ -5435,40 +5567,35 @@ export async function copySandboxAllFromProduction(
       const existing = db.prepare(`
         SELECT id, version, content, change_description
         FROM ab_sandbox_files
-        WHERE sandbox_id = ? AND file_key = ?
-      `).get(sandboxId, fileKey) as any;
+        WHERE sandbox_id = ? AND file_key = ? AND tenant_id = ?
+      `).get(sandboxId, fileKey, tenantId) as any;
 
       let newVersion: number;
 
       if (existing) {
         // Save current version to history
         db.prepare(`
-          INSERT INTO ab_sandbox_file_history (sandbox_id, file_key, version, content, change_description, created_at)
-          VALUES (?, ?, ?, ?, ?, ?)
-        `).run(sandboxId, fileKey, existing.version, existing.content, existing.change_description, now);
+          INSERT INTO ab_sandbox_file_history (sandbox_id, file_key, version, content, change_description, tenant_id, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).run(sandboxId, fileKey, existing.version, existing.content, existing.change_description, tenantId, now);
 
         newVersion = existing.version + 1;
         db.prepare(`
           UPDATE ab_sandbox_files
           SET content = ?, version = ?, base_version = ?, change_description = ?, updated_at = ?
-          WHERE sandbox_id = ? AND file_key = ?
-        `).run(production.content, newVersion, production.version, `Copied from production v${production.version}`, now, sandboxId, fileKey);
+          WHERE sandbox_id = ? AND file_key = ? AND tenant_id = ?
+        `).run(production.content, newVersion, production.version, `Copied from production v${production.version}`, now, sandboxId, fileKey, tenantId);
       } else {
         newVersion = 1;
 
-        const fileConfig: Record<string, { displayName: string; fileType: string }> = {
-          system_prompt: { displayName: 'System Prompt', fileType: 'markdown' },
-          patient_tool: { displayName: 'Patient Tool', fileType: 'json' },
-          scheduling_tool: { displayName: 'Scheduling Tool', fileType: 'json' },
-          nodered_flow: { displayName: 'Node Red Flows', fileType: 'json' },
-        };
-
-        const config = fileConfig[fileKey] || { displayName: fileKey, fileType: 'text' };
+        const mappingEntry = tenantMappings[fileKey];
+        const displayName = mappingEntry?.displayName || FILE_KEY_DISPLAY_NAMES[fileKey] || fileKey;
+        const fileType = fileKey.includes('system_prompt') || fileKey.endsWith('_prompt') ? 'markdown' : 'json';
 
         db.prepare(`
-          INSERT INTO ab_sandbox_files (sandbox_id, file_key, file_type, display_name, content, version, base_version, change_description, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(sandboxId, fileKey, config.fileType, config.displayName, production.content, newVersion, production.version, `Copied from production v${production.version}`, now, now);
+          INSERT INTO ab_sandbox_files (sandbox_id, file_key, file_type, display_name, content, version, base_version, change_description, tenant_id, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(sandboxId, fileKey, fileType, displayName, production.content, newVersion, production.version, `Copied from production v${production.version}`, tenantId, now, now);
       }
 
       results.push({
@@ -5923,8 +6050,10 @@ export async function getQualityScore(
     let actualVersion: number;
     let content: string;
 
+    const tenantId = getTenantIdFromRequest(req);
+
     if (version) {
-      const versionContent = promptService.getVersionContent(fileKey, version);
+      const versionContent = promptService.getVersionContent(fileKey, version, tenantId);
       if (!versionContent) {
         res.status(404).json({
           success: false,
@@ -5935,7 +6064,7 @@ export async function getQualityScore(
       content = versionContent;
       actualVersion = version;
     } else {
-      const promptFile = promptService.getPromptContent(fileKey);
+      const promptFile = promptService.getPromptContent(fileKey, tenantId);
       if (!promptFile) {
         res.status(404).json({
           success: false,
@@ -7482,15 +7611,16 @@ export async function getLangfuseConfigs(
       sandboxId: null as string | null,
     }));
 
-    // Only append sandbox-sourced Langfuse configs for the default tenant
+    // Append sandbox-sourced Langfuse configs for the current tenant
     let sandboxConfigs: typeof regularConfigs = [];
-    if (tenantId === 1) {
+    {
       const sandboxes = db.prepare(`
         SELECT sandbox_id, name, langfuse_host, langfuse_public_key, langfuse_secret_key, updated_at
         FROM ab_sandboxes
         WHERE langfuse_host IS NOT NULL AND langfuse_host != ''
           AND langfuse_public_key IS NOT NULL AND langfuse_public_key != ''
-      `).all() as any[];
+          AND tenant_id = ?
+      `).all(tenantId) as any[];
 
       // Map sandbox configs (use negative IDs to distinguish them)
       // sandbox_a = -1, sandbox_b = -2
@@ -9178,8 +9308,9 @@ export async function diagnoseProductionTrace(
     }
 
     // Build tool I/O context from all observations
+    const diagToolNames = configId ? getToolNamesForConfig(db, configId).all : getAllKnownToolNames();
     const toolIO: ToolIOSummary[] = filteredObservations
-      .filter((obs: any) => ['chord_ortho_patient', 'schedule_appointment_ortho', 'current_date_time'].includes(obs.name))
+      .filter((obs: any) => diagToolNames.includes(obs.name))
       .map((obs: any) => {
         const input = typeof obs.input === 'string' ? obs.input : JSON.stringify(obs.input || '');
         const output = typeof obs.output === 'string' ? obs.output : JSON.stringify(obs.output || '');
@@ -9951,23 +10082,25 @@ export async function getProductionSessionStats(
       SELECT COUNT(*) as c FROM production_sessions ps WHERE ${whereClause}
     `).get(...params) as any;
 
-    // Transfers: sessions with chord_handleEscalation observations
+    // Transfers: sessions with escalation tool observations
+    const allEscalToolIn = sqlInList(['chord_handleEscalation', 'chord_OGHandleEscalation']);
+    const allSchedToolIn = sqlInList(['schedule_appointment_ortho', 'chord_scheduling_v08', 'chord_scheduling_v07_dev']);
     const transferRow = db.prepare(`
       SELECT COUNT(DISTINCT t.session_id) as c
       FROM production_trace_observations o
       JOIN production_traces t ON o.trace_id = t.trace_id
       JOIN production_sessions ps ON t.session_id = ps.session_id
-      WHERE ${whereClause} AND o.name = 'chord_handleEscalation'
+      WHERE ${whereClause} AND o.name IN (${allEscalToolIn})
     `).get(...params) as any;
 
-    // Bookings: sessions with schedule_appointment_ortho + book_ action
+    // Bookings: sessions with scheduling tool + book_ action
     const bookingRow = db.prepare(`
       SELECT COUNT(DISTINCT t.session_id) as c
       FROM production_trace_observations o
       JOIN production_traces t ON o.trace_id = t.trace_id
       JOIN production_sessions ps ON t.session_id = ps.session_id
       WHERE ${whereClause}
-        AND o.name = 'schedule_appointment_ortho'
+        AND o.name IN (${allSchedToolIn})
         AND o.input LIKE '%book_%'
     `).get(...params) as any;
 

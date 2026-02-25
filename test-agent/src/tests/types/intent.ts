@@ -19,6 +19,12 @@ export type AgentIntent =
   | 'asking_email'
   | 'asking_parent_dob'  // Parent's own date of birth (not child's)
 
+  // Asking for patient DOB (Chord flow: asked first via ANI lookup, distinct from asking_child_dob)
+  | 'asking_patient_dob'
+
+  // Confirming ANI (Chord flow: "I see you're calling from [number]. Is that the best number?")
+  | 'confirming_ani'
+
   // Asking for child information
   | 'asking_child_count'
   | 'asking_child_name'
@@ -66,6 +72,8 @@ export type AgentIntent =
  * Mapping from intent to the collectable field it relates to
  */
 export const INTENT_TO_FIELD: Partial<Record<AgentIntent, string>> = {
+  'asking_patient_dob': 'child_dob',
+  'confirming_ani': 'parent_phone',
   'asking_parent_name': 'parent_name',
   'asking_spell_name': 'parent_name_spelling',
   'asking_phone': 'parent_phone',
@@ -154,6 +162,21 @@ export const INTENT_KEYWORDS: Record<AgentIntent, RegExp[]> = {
     /\bprovide your (date of birth|dob|birth\s*date)\b/i,              // "provide your date of birth"
     /\bi need your (date of birth|dob|birth\s*date)\b/i,               // "I need your date of birth"
     /\byour own (date of birth|dob|birth\s*date)\b/i,                  // "your own date of birth"
+  ],
+
+  'asking_patient_dob': [
+    // Chord IVA: asks "May I have the date of birth for the patient?" as first question
+    /\bdate of birth\s+(for|of)\s+(the\s+)?patient\b/i,           // "date of birth for the patient"
+    /\bpatient'?s?\s+date of birth\b/i,                           // "patient's date of birth"
+    /\bmay i have the date of birth\b/i,                          // "May I have the date of birth?" (generic, asked first)
+    /\bwhat is the date of birth\b/i,                             // "What is the date of birth?" (generic context)
+  ],
+  'confirming_ani': [
+    // Chord IVA: "I see you're calling from [number]. Is that the best number to reach you?"
+    /\bcalling from\b.*\b(is that|correct|confirm)\b/i,          // "calling from 215... Is that correct?"
+    /\bi see you'?re calling from\b/i,                            // "I see you're calling from..."
+    /\bcaller id\b.*\b(confirm|correct|best)\b/i,                // "caller ID... is that correct?"
+    /\bnumber.*ending in\b.*\b(is that|correct|best)\b/i,        // "number ending in 1234, is that correct?"
   ],
 
   'asking_child_count': [/\b(how many|number of).*child/i, /\bchildren.*coming in\b/i],
@@ -308,6 +331,10 @@ const INTENT_PRIORITY_ORDER: AgentIntent[] = [
   'asking_insurance',        // "what kind of insurance" - more specific patterns now
   'asking_time_preference',  // "prefer morning/afternoon" - specific
   'asking_location_preference', // "which location/office" - specific
+
+  // Chord-specific: patient DOB (asked first) and ANI confirmation
+  'asking_patient_dob',  // "May I have the date of birth for the patient?" - Chord first question
+  'confirming_ani',      // "I see you're calling from [number]" - Chord ANI confirmation
 
   // Parent DOB - check BEFORE child DOB to distinguish "your DOB" from "child's DOB"
   'asking_parent_dob',   // "May I have your date of birth?" - parent's own DOB

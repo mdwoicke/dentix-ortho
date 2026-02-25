@@ -42,6 +42,7 @@ export const ROUTES = {
   TEST_MONITOR_QUEUE_ACTIVITY: '/test-monitor/queue-activity',
   TEST_MONITOR_CACHE_HEALTH: '/test-monitor/cache-health',
   TEST_MONITOR_TRACE_ANALYSIS: '/test-monitor/trace-analysis',
+  TEST_MONITOR_DETAILED_REPORT: '/test-monitor/detailed-report',
   DOMINOS: '/dominos',
   DOMINOS_DASHBOARD: '/dominos/dashboard',
   DOMINOS_ORDERS: '/dominos/orders',
@@ -50,6 +51,7 @@ export const ROUTES = {
   DOMINOS_SESSIONS: '/dominos/sessions',
   DOMINOS_ERRORS: '/dominos/errors',
   DOMINOS_CALL_TRACING: '/dominos/call-tracing',
+  LIST_MANAGEMENT: '/list-management',
 } as const;
 
 /**

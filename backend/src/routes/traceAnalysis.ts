@@ -22,6 +22,12 @@ router.get('/:sessionId/intent', traceAnalysisController.getIntent);
 // GET /api/trace-analysis/:sessionId/verify - Fulfillment verification
 router.get('/:sessionId/verify', traceAnalysisController.verifySession);
 
+// GET /api/trace-analysis/:sessionId/investigate - Booking false positive investigation
+router.get('/:sessionId/investigate', traceAnalysisController.investigateSession);
+
+// GET /api/trace-analysis/:sessionId/investigate/report - Full markdown investigation report
+router.get('/:sessionId/investigate/report', traceAnalysisController.getInvestigationReport);
+
 // Booking correction endpoints
 router.post('/:sessionId/correction/check-slot', traceAnalysisController.checkSlotAvailability);
 router.post('/:sessionId/correction/book', traceAnalysisController.bookCorrection);

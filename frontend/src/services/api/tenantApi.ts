@@ -29,6 +29,9 @@ export interface TenantFull extends Tenant {
   dominos_service_auth_token: string | null;
   dominos_default_store_id: string | null;
   dominos_data_source_url: string | null;
+  fabric_workflow_url: string | null;
+  fabric_workflow_username: string | null;
+  fabric_workflow_password: string | null;
   created_at: string;
   updated_at: string;
 }

@@ -33,6 +33,14 @@ const SSHTargetSchema = z.object({
 });
 
 // =============================================================================
+// HELPERS
+// =============================================================================
+
+function getTenantIdFromRequest(req: Request): number | undefined {
+  return req.tenantContext?.id;
+}
+
+// =============================================================================
 // SKILLS ENDPOINTS
 // =============================================================================
 
@@ -40,9 +48,10 @@ const SSHTargetSchema = z.object({
  * GET /api/skills-runner/skills
  * List all available skills
  */
-export async function getSkills(_req: Request, res: Response): Promise<void> {
+export async function getSkills(req: Request, res: Response): Promise<void> {
   try {
-    const skills = skillsRegistry.getSkills();
+    const tenantId = getTenantIdFromRequest(req);
+    const skills = skillsRegistry.getSkills(tenantId);
     res.json({
       success: true,
       data: skills
@@ -60,9 +69,10 @@ export async function getSkills(_req: Request, res: Response): Promise<void> {
  * GET /api/skills-runner/skills/by-category
  * Get skills grouped by category
  */
-export async function getSkillsByCategory(_req: Request, res: Response): Promise<void> {
+export async function getSkillsByCategory(req: Request, res: Response): Promise<void> {
   try {
-    const skillsByCategory = skillsRegistry.getSkillsByCategory();
+    const tenantId = getTenantIdFromRequest(req);
+    const skillsByCategory = skillsRegistry.getSkillsByCategory(tenantId);
     res.json({
       success: true,
       data: skillsByCategory
@@ -83,7 +93,8 @@ export async function getSkillsByCategory(_req: Request, res: Response): Promise
 export async function getSkill(req: Request, res: Response): Promise<void> {
   try {
     const { skillId } = req.params;
-    const skill = skillsRegistry.getSkill(skillId);
+    const tenantId = getTenantIdFromRequest(req);
+    const skill = skillsRegistry.getSkill(skillId, tenantId);
 
     if (!skill) {
       res.status(404).json({
@@ -129,8 +140,9 @@ export async function executeSkill(req: Request, res: Response): Promise<void> {
 
     const { skillId, targetId, inputs } = parseResult.data;
 
-    // Get skill
-    const skill = skillsRegistry.getSkill(skillId);
+    // Get skill (tenant-scoped)
+    const tenantId = getTenantIdFromRequest(req);
+    const skill = skillsRegistry.getSkill(skillId, tenantId);
     if (!skill) {
       res.status(404).json({
         success: false,
@@ -151,7 +163,7 @@ export async function executeSkill(req: Request, res: Response): Promise<void> {
     }
 
     // Check if this is a Claude skill file execution (API mode)
-    if ((skill as any).skillType === 'claude-skill-file') {
+    if (skill.skillType === 'claude-skill-file') {
       // Execute via Claude Skill Service
       const claudeSkillService = getClaudeSkillService();
       const { sessionId } = await claudeSkillService.executeClaudeSkill({
@@ -173,7 +185,7 @@ export async function executeSkill(req: Request, res: Response): Promise<void> {
     }
 
     // Check if this is a PTY-based skill file execution (subscription mode)
-    if ((skill as any).skillType === 'pty-skill-file') {
+    if (skill.skillType === 'pty-skill-file') {
       const fs = await import('fs/promises');
       const path = await import('path');
 
@@ -230,7 +242,7 @@ export async function executeSkill(req: Request, res: Response): Promise<void> {
     }
 
     // Check if this is a PTY-based execution (for interactive CLI like Claude plugins)
-    if ((skill as any).skillType === 'pty') {
+    if (skill.skillType === 'pty') {
       // Build command
       const command = skillsRegistry.buildCommand(skill, inputs, targetId);
 

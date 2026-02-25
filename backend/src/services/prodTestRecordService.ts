@@ -12,6 +12,7 @@ import BetterSqlite3 from 'better-sqlite3';
 import { EventEmitter } from 'events';
 import { Cloud9Client } from './cloud9/client';
 import { Cloud9Config } from '../config/cloud9';
+import { getToolNamesForConfig, sqlInList } from './toolNameResolver';
 
 // Rate limit buffer between Cloud9 API calls (5 seconds)
 export const CANCELLATION_DELAY_MS = 5000;
@@ -170,6 +171,7 @@ export class ProdTestRecordService {
     try {
       // Get observations from production_trace_observations that match our criteria
       // Look for tool calls that created patients or appointments
+      const importTools = getToolNamesForConfig(this.db, configId);
       let sql = `
         SELECT
           pto.observation_id,
@@ -186,10 +188,16 @@ export class ProdTestRecordService {
           AND pt.started_at >= ?
           AND (
             -- SetPatient success responses (matches "Patient Added:" or "Patient GUID Added:" or JSON patientGUID)
-            (pto.name = 'chord_ortho_patient' AND (pto.output LIKE '%Patient Added:%' OR pto.output LIKE '%Patient GUID Added%' OR pto.output LIKE '%"patientGUID"%'))
+            (pto.name IN (${sqlInList(importTools.patientTools)}) AND (pto.output LIKE '%Patient Added:%' OR pto.output LIKE '%Patient GUID Added%' OR pto.output LIKE '%"patientGUID"%'))
             OR
             -- SetAppointment success responses (old text format or new JSON format)
-            (pto.name = 'schedule_appointment_ortho' AND (pto.output LIKE '%Appointment GUID Added%' OR pto.output LIKE '%"appointmentGUID"%'))
+            (pto.name IN (${sqlInList(importTools.schedulingTools)}) AND (pto.output LIKE '%Appointment GUID Added%' OR pto.output LIKE '%"appointmentGUID"%'))
+            OR
+            -- NexHealth: appointmentId present and not null
+            (pto.name IN (${sqlInList(importTools.schedulingTools)}) AND pto.output LIKE '%"appointmentId":%' AND pto.output NOT LIKE '%"appointmentId":null%' AND pto.output NOT LIKE '%"appointmentId": null%')
+            OR
+            -- NexHealth K8: booking response has patient_id + provider_id + start_time (appointment object)
+            (pto.name IN (${sqlInList(importTools.schedulingTools)}) AND pto.output LIKE '%"patient_id":%' AND pto.output LIKE '%"provider_id":%' AND pto.output LIKE '%"start_time":%')
           )
       `;
 
@@ -226,7 +234,7 @@ export class ProdTestRecordService {
           const output = this.parseJson(obs.output);
 
           // Determine if this is a patient or appointment creation
-          if (obs.name === 'chord_ortho_patient' && output) {
+          if (importTools.patientTools.includes(obs.name) && output) {
             const patientGuid = this.extractPatientGuid(output);
             if (patientGuid) {
               const imported = this.importPatientRecord(obs, input, patientGuid);
@@ -237,7 +245,7 @@ export class ProdTestRecordService {
                 result.duplicatesSkipped++;
               }
             }
-          } else if (obs.name === 'schedule_appointment_ortho' && output) {
+          } else if (importTools.schedulingTools.includes(obs.name) && output) {
             const appointmentGuid = this.extractAppointmentGuid(output);
             if (appointmentGuid) {
               const imported = await this.importAppointmentRecord(obs, input, appointmentGuid, output);
@@ -274,18 +282,34 @@ export class ProdTestRecordService {
       return output.patientGUID;
     }
 
-    // New format: parent.patientGUID
+    // NexHealth: patientId (integer)
+    if (typeof output === 'object' && output.patientId) {
+      return String(output.patientId);
+    }
+
+    // New format: parent.patientGUID or parent.patientId
     if (typeof output === 'object' && output.parent?.patientGUID) {
       return output.parent.patientGUID;
     }
+    if (typeof output === 'object' && output.parent?.patientId) {
+      return String(output.parent.patientId);
+    }
 
-    // New format: children[].patientGUID (return first one found)
+    // New format: children[].patientGUID or children[].patientId (return first one found)
     if (typeof output === 'object' && output.children && Array.isArray(output.children)) {
       for (const child of output.children) {
         if (child.patientGUID) {
           return child.patientGUID;
         }
+        if (child.patientId) {
+          return String(child.patientId);
+        }
       }
+    }
+
+    // NexHealth K8: "patient_id" field with context (booking response)
+    if (typeof output === 'object' && output.patient_id) {
+      return String(output.patient_id);
     }
 
     const outputStr = typeof output === 'string' ? output : JSON.stringify(output);
@@ -298,9 +322,13 @@ export class ProdTestRecordService {
     const guidAddedMatch = outputStr.match(/Patient GUID Added:\s*([a-f0-9-]{36})/i);
     if (guidAddedMatch) return guidAddedMatch[1];
 
-    // Fallback: extract from JSON string with regex
+    // Fallback: extract from JSON string with regex (Cloud9 UUID)
     const jsonMatch = outputStr.match(/"patientGUID"\s*:\s*"([a-f0-9-]{36})"/i);
     if (jsonMatch) return jsonMatch[1];
+
+    // Fallback: NexHealth integer patientId in JSON string
+    const patientIdMatch = outputStr.match(/"patientId"\s*:\s*(\d+)/);
+    if (patientIdMatch) return patientIdMatch[1];
 
     return null;
   }
@@ -321,18 +349,39 @@ export class ProdTestRecordService {
       return output.appointmentGUID;
     }
 
-    // New format: nested in children[].appointment.appointmentGUID
+    // NexHealth: appointmentId (integer) at top level
+    if (typeof output === 'object' && output.appointmentId) {
+      return String(output.appointmentId);
+    }
+
+    // New format: nested in children[].appointment.appointmentGUID or children[].appointment.appointmentId
     if (typeof output === 'object' && output.children && Array.isArray(output.children)) {
       for (const child of output.children) {
         if (child.appointment?.appointmentGUID) {
           return child.appointment.appointmentGUID;
         }
+        if (child.appointment?.appointmentId) {
+          return String(child.appointment.appointmentId);
+        }
+        // NexHealth: appointmentId directly on child
+        if (child.appointmentId) {
+          return String(child.appointmentId);
+        }
       }
     }
 
-    // Fallback: extract from JSON string with regex
+    // NexHealth K8: "id" field in booking response with patient_id context
+    if (typeof output === 'object' && output.id && output.patient_id) {
+      return String(output.id);
+    }
+
+    // Fallback: extract from JSON string with regex (Cloud9 UUID)
     const jsonMatch = outputStr.match(/"appointmentGUID"\s*:\s*"([a-f0-9-]{36})"/i);
     if (jsonMatch) return jsonMatch[1];
+
+    // Fallback: NexHealth integer appointmentId in JSON string
+    const apptIdMatch = outputStr.match(/"appointmentId"\s*:\s*(\d+)/);
+    if (apptIdMatch) return apptIdMatch[1];
 
     return null;
   }
@@ -497,11 +546,16 @@ export class ProdTestRecordService {
     let patientGuid = apptData.PatientGUID || apptData.patientGUID || '';
     let childInfo: any = null;
 
-    // New JSON format: Find the child with matching appointmentGUID
+    // New JSON format: Find the child with matching appointmentGUID or appointmentId
     if (output?.children && Array.isArray(output.children)) {
-      childInfo = output.children.find((c: any) => c.appointment?.appointmentGUID === appointmentGuid);
+      childInfo = output.children.find((c: any) =>
+        c.appointment?.appointmentGUID === appointmentGuid
+        || String(c.appointment?.appointmentId) === appointmentGuid
+        || String(c.appointmentId) === appointmentGuid
+      );
       if (childInfo) {
-        patientGuid = childInfo.patientGUID || patientGuid;
+        // Cloud9: patientGUID (UUID), NexHealth: patientId (integer)
+        patientGuid = childInfo.patientGUID || (childInfo.patientId ? String(childInfo.patientId) : null) || patientGuid;
         console.log(`[ProdTestRecordService] Found child info from output: ${childInfo.firstName || 'Unknown'} (${patientGuid})`);
       }
     }
@@ -540,9 +594,11 @@ export class ProdTestRecordService {
 
     // Also extract family and parent info from output for the new format
     let familyId = output?.familyId || apptData.familyId || apptData.family_id || null;
-    let parentPatientGuid = output?.parent?.patientGUID || apptData.parentPatientGuid || apptData.parent_patient_guid || null;
+    // Cloud9: parent.patientGUID, NexHealth: parent.patientId
+    let parentPatientGuid = output?.parent?.patientGUID || (output?.parent?.patientId ? String(output.parent.patientId) : null) || apptData.parentPatientGuid || apptData.parent_patient_guid || null;
     let isChild = childInfo ? true : (apptData.isChild || apptData.is_child || false);
-    let appointmentStartTime = childInfo?.appointment?.startTime || apptData.StartTime || apptData.startTime || null;
+    // Cloud9: startTime, NexHealth: start_time
+    let appointmentStartTime = childInfo?.appointment?.startTime || childInfo?.appointment?.start_time || apptData.StartTime || apptData.startTime || null;
 
     // If patient name not in input, try to get from existing records
     if (!patientFirstName && !patientLastName && patientGuid) {
@@ -559,8 +615,9 @@ export class ProdTestRecordService {
       }
     }
 
-    // If still no name, try Cloud9 API lookup
-    if (!patientFirstName && !patientLastName && patientGuid) {
+    // If still no name, try Cloud9 API lookup (only for UUID-format GUIDs, not NexHealth integer IDs)
+    const isUuidFormat = patientGuid && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(patientGuid);
+    if (!patientFirstName && !patientLastName && isUuidFormat) {
       try {
         console.log(`[ProdTestRecordService] Looking up patient info from Cloud9 for: ${patientGuid}`);
         const cloud9Response = await this.cloud9Client.getPatientInformation(patientGuid);
@@ -863,6 +920,7 @@ export class ProdTestRecordService {
       console.log(`[ProdTestRecordService] Importing traces for patient: ${upperPatientGuid}`);
 
       // Find observations where the input contains this patient GUID (for book_child calls)
+      const allSchedIn = sqlInList(['schedule_appointment_ortho', 'chord_scheduling_v08', 'chord_scheduling_v07_dev']);
       const observations = this.db.prepare(`
         SELECT
           pto.observation_id,
@@ -875,8 +933,8 @@ export class ProdTestRecordService {
           pt.langfuse_config_id
         FROM production_trace_observations pto
         JOIN production_traces pt ON pto.trace_id = pt.trace_id
-        WHERE pto.name = 'schedule_appointment_ortho'
-          AND pto.output LIKE '%Appointment GUID Added%'
+        WHERE pto.name IN (${allSchedIn})
+          AND (pto.output LIKE '%Appointment GUID Added%' OR (pto.output LIKE '%"appointmentId":%' AND pto.output NOT LIKE '%"appointmentId":null%') OR (pto.output LIKE '%"patient_id":%' AND pto.output LIKE '%"provider_id":%' AND pto.output LIKE '%"start_time":%'))
           AND UPPER(pto.input) LIKE '%' || ? || '%'
         ORDER BY pto.started_at DESC
       `).all(upperPatientGuid) as any[];
@@ -1913,6 +1971,14 @@ export class ProdTestRecordService {
     try {
       console.log(`[ProdTestRecordService] Syncing session ${sessionId} to Prod Tracker`);
 
+      // Look up config from session to get the correct tool names
+      const sessionRow = this.db.prepare('SELECT langfuse_config_id FROM production_sessions WHERE session_id = ?').get(sessionId) as any;
+      const syncTools = sessionRow?.langfuse_config_id
+        ? getToolNamesForConfig(this.db, sessionRow.langfuse_config_id)
+        : null;
+      const syncPatientIn = syncTools ? sqlInList(syncTools.patientTools) : sqlInList(['chord_ortho_patient', 'chord_patient_v07_stage']);
+      const syncSchedIn = syncTools ? sqlInList(syncTools.schedulingTools) : sqlInList(['schedule_appointment_ortho', 'chord_scheduling_v08', 'chord_scheduling_v07_dev']);
+
       // Get observations from this session that match SetPatient/SetAppointment patterns
       const observations = this.db.prepare(`
         SELECT
@@ -1929,10 +1995,16 @@ export class ProdTestRecordService {
         WHERE pt.session_id = ?
           AND (
             -- SetPatient success responses
-            (pto.name = 'chord_ortho_patient' AND (pto.output LIKE '%Patient Added:%' OR pto.output LIKE '%Patient GUID Added%'))
+            (pto.name IN (${syncPatientIn}) AND (pto.output LIKE '%Patient Added:%' OR pto.output LIKE '%Patient GUID Added%'))
             OR
             -- SetAppointment success responses
-            (pto.name = 'schedule_appointment_ortho' AND pto.output LIKE '%Appointment GUID Added%')
+            (pto.name IN (${syncSchedIn}) AND pto.output LIKE '%Appointment GUID Added%')
+            OR
+            -- NexHealth: appointmentId present and not null
+            (pto.name IN (${syncSchedIn}) AND pto.output LIKE '%"appointmentId":%' AND pto.output NOT LIKE '%"appointmentId":null%' AND pto.output NOT LIKE '%"appointmentId": null%')
+            OR
+            -- NexHealth K8: booking response has patient_id + provider_id + start_time
+            (pto.name IN (${syncSchedIn}) AND pto.output LIKE '%"patient_id":%' AND pto.output LIKE '%"provider_id":%' AND pto.output LIKE '%"start_time":%')
           )
         ORDER BY pto.started_at ASC
       `).all(sessionId) as any[];
@@ -1958,8 +2030,11 @@ export class ProdTestRecordService {
           const input = this.parseJson(obs.input);
           const output = this.parseJson(obs.output);
 
-          // Process patient creation
-          if (obs.name === 'chord_ortho_patient' && output) {
+          // Process patient creation (match any known patient tool name)
+          const isPatientTool = syncTools ? syncTools.patientTools.includes(obs.name) : ['chord_ortho_patient', 'chord_patient_v07_stage'].includes(obs.name);
+          const isSchedTool = syncTools ? syncTools.schedulingTools.includes(obs.name) : ['schedule_appointment_ortho', 'chord_scheduling_v08', 'chord_scheduling_v07_dev'].includes(obs.name);
+
+          if (isPatientTool && output) {
             const patientGuid = this.extractPatientGuid(output);
             if (patientGuid) {
               const imported = this.importPatientRecord(obs, input, patientGuid);
@@ -1972,7 +2047,7 @@ export class ProdTestRecordService {
             }
           }
           // Process appointment creation
-          else if (obs.name === 'schedule_appointment_ortho' && output) {
+          else if (isSchedTool && output) {
             const appointmentGuid = this.extractAppointmentGuid(output);
             if (appointmentGuid) {
               const imported = await this.importAppointmentRecord(obs, input, appointmentGuid, output);

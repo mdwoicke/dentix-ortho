@@ -1641,7 +1641,7 @@ export function AnalysisPage() {
                   variant="outline"
                   onClick={() => {
                     // Open in Call Tracing page
-                    window.open(`/test-monitor/call-trace?sessionId=${sessionSearchResult.session.sessionId}`, '_blank');
+                    window.open(`/test-monitor/call-trace?sessionId=${encodeURIComponent(sessionSearchResult.session.sessionId)}`, '_blank');
                   }}
                 >
                   Open in Call Tracing

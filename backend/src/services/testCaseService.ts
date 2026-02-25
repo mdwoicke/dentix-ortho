@@ -101,6 +101,17 @@ function ensureTable(db: BetterSqlite3.Database): void {
     CREATE INDEX IF NOT EXISTS idx_test_cases_case_id ON test_cases(case_id);
   `);
 
+  // Migration: add tenant_id if not present
+  const cols = db.pragma('table_info(test_cases)') as { name: string }[];
+  if (!cols.some(c => c.name === 'tenant_id')) {
+    db.exec(`
+      ALTER TABLE test_cases ADD COLUMN tenant_id INTEGER NOT NULL DEFAULT 1;
+      DROP INDEX IF EXISTS idx_test_cases_case_id;
+      CREATE UNIQUE INDEX idx_test_cases_tenant_case ON test_cases(tenant_id, case_id);
+      CREATE INDEX idx_test_cases_tenant ON test_cases(tenant_id);
+    `);
+  }
+
   tableInitialized = true;
 }
 
@@ -127,7 +138,7 @@ function getReadOnlyDb(): BetterSqlite3.Database {
 /**
  * Get all test cases (optionally filtered)
  */
-export function getTestCases(options?: { category?: string; includeArchived?: boolean }): TestCaseRecord[] {
+export function getTestCases(options?: { category?: string; includeArchived?: boolean }, tenantId: number = 1): TestCaseRecord[] {
   const db = getReadOnlyDb();
   try {
     let query = `
@@ -135,8 +146,8 @@ export function getTestCases(options?: { category?: string; includeArchived?: bo
              expectations_json, is_archived, version, created_at, updated_at
       FROM test_cases
     `;
-    const conditions: string[] = [];
-    const params: any[] = [];
+    const conditions: string[] = ['tenant_id = ?'];
+    const params: any[] = [tenantId];
 
     if (!options?.includeArchived) {
       conditions.push('is_archived = 0');
@@ -177,15 +188,15 @@ export function getTestCases(options?: { category?: string; includeArchived?: bo
 /**
  * Get a single test case by ID
  */
-export function getTestCase(caseId: string): TestCaseRecord | null {
+export function getTestCase(caseId: string, tenantId: number = 1): TestCaseRecord | null {
   const db = getReadOnlyDb();
   try {
     const row = db.prepare(`
       SELECT id, case_id, name, description, category, tags_json, steps_json,
              expectations_json, is_archived, version, created_at, updated_at
       FROM test_cases
-      WHERE case_id = ?
-    `).get(caseId) as any;
+      WHERE case_id = ? AND tenant_id = ?
+    `).get(caseId, tenantId) as any;
 
     if (!row) return null;
 
@@ -211,14 +222,14 @@ export function getTestCase(caseId: string): TestCaseRecord | null {
 /**
  * Create a new test case
  */
-export function createTestCase(testCase: Omit<TestCaseRecord, 'id' | 'version' | 'createdAt' | 'updatedAt'>): TestCaseRecord {
+export function createTestCase(testCase: Omit<TestCaseRecord, 'id' | 'version' | 'createdAt' | 'updatedAt'>, tenantId: number = 1): TestCaseRecord {
   const db = getWritableDb();
   try {
     const now = new Date().toISOString();
 
     const info = db.prepare(`
-      INSERT INTO test_cases (case_id, name, description, category, tags_json, steps_json, expectations_json, is_archived, version, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+      INSERT INTO test_cases (case_id, name, description, category, tags_json, steps_json, expectations_json, is_archived, version, created_at, updated_at, tenant_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
     `).run(
       testCase.caseId,
       testCase.name,
@@ -229,7 +240,8 @@ export function createTestCase(testCase: Omit<TestCaseRecord, 'id' | 'version' |
       JSON.stringify(testCase.expectations),
       testCase.isArchived ? 1 : 0,
       now,
-      now
+      now,
+      tenantId
     );
 
     return {
@@ -247,7 +259,7 @@ export function createTestCase(testCase: Omit<TestCaseRecord, 'id' | 'version' |
 /**
  * Update an existing test case
  */
-export function updateTestCase(caseId: string, updates: Partial<Omit<TestCaseRecord, 'id' | 'caseId' | 'createdAt'>>): TestCaseRecord | null {
+export function updateTestCase(caseId: string, updates: Partial<Omit<TestCaseRecord, 'id' | 'caseId' | 'createdAt'>>, tenantId: number = 1): TestCaseRecord | null {
   const db = getWritableDb();
   try {
     // First get the existing record
@@ -255,8 +267,8 @@ export function updateTestCase(caseId: string, updates: Partial<Omit<TestCaseRec
       SELECT id, case_id, name, description, category, tags_json, steps_json,
              expectations_json, is_archived, version, created_at, updated_at
       FROM test_cases
-      WHERE case_id = ?
-    `).get(caseId) as any;
+      WHERE case_id = ? AND tenant_id = ?
+    `).get(caseId, tenantId) as any;
 
     if (!existingRow) return null;
 
@@ -293,7 +305,7 @@ export function updateTestCase(caseId: string, updates: Partial<Omit<TestCaseRec
       UPDATE test_cases
       SET name = ?, description = ?, category = ?, tags_json = ?, steps_json = ?,
           expectations_json = ?, is_archived = ?, version = ?, updated_at = ?
-      WHERE case_id = ?
+      WHERE case_id = ? AND tenant_id = ?
     `).run(
       updated.name,
       updated.description,
@@ -304,7 +316,8 @@ export function updateTestCase(caseId: string, updates: Partial<Omit<TestCaseRec
       updated.isArchived ? 1 : 0,
       newVersion,
       now,
-      caseId
+      caseId,
+      tenantId
     );
 
     return {
@@ -323,12 +336,12 @@ export function updateTestCase(caseId: string, updates: Partial<Omit<TestCaseRec
 /**
  * Archive a test case (soft delete)
  */
-export function archiveTestCase(caseId: string): boolean {
+export function archiveTestCase(caseId: string, tenantId: number = 1): boolean {
   const db = getWritableDb();
   try {
     const result = db.prepare(`
-      UPDATE test_cases SET is_archived = 1, updated_at = ? WHERE case_id = ?
-    `).run(new Date().toISOString(), caseId);
+      UPDATE test_cases SET is_archived = 1, updated_at = ? WHERE case_id = ? AND tenant_id = ?
+    `).run(new Date().toISOString(), caseId, tenantId);
 
     return result.changes > 0;
   } finally {
@@ -339,10 +352,10 @@ export function archiveTestCase(caseId: string): boolean {
 /**
  * Permanently delete a test case
  */
-export function deleteTestCase(caseId: string): boolean {
+export function deleteTestCase(caseId: string, tenantId: number = 1): boolean {
   const db = getWritableDb();
   try {
-    const result = db.prepare(`DELETE FROM test_cases WHERE case_id = ?`).run(caseId);
+    const result = db.prepare(`DELETE FROM test_cases WHERE case_id = ? AND tenant_id = ?`).run(caseId, tenantId);
     return result.changes > 0;
   } finally {
     db.close();
@@ -352,8 +365,8 @@ export function deleteTestCase(caseId: string): boolean {
 /**
  * Clone a test case with a new ID
  */
-export function cloneTestCase(caseId: string, newCaseId: string): TestCaseRecord | null {
-  const existing = getTestCase(caseId);
+export function cloneTestCase(caseId: string, newCaseId: string, tenantId: number = 1): TestCaseRecord | null {
+  const existing = getTestCase(caseId, tenantId);
   if (!existing) return null;
 
   return createTestCase({
@@ -365,21 +378,21 @@ export function cloneTestCase(caseId: string, newCaseId: string): TestCaseRecord
     steps: JSON.parse(JSON.stringify(existing.steps)),
     expectations: JSON.parse(JSON.stringify(existing.expectations)),
     isArchived: false,
-  });
+  }, tenantId);
 }
 
 /**
  * Get test case statistics
  */
-export function getTestCaseStats(): TestCaseStats {
+export function getTestCaseStats(tenantId: number = 1): TestCaseStats {
   const db = getReadOnlyDb();
   try {
-    const total = (db.prepare('SELECT COUNT(*) as count FROM test_cases WHERE is_archived = 0').get() as any)?.count || 0;
-    const archived = (db.prepare('SELECT COUNT(*) as count FROM test_cases WHERE is_archived = 1').get() as any)?.count || 0;
+    const total = (db.prepare('SELECT COUNT(*) as count FROM test_cases WHERE is_archived = 0 AND tenant_id = ?').get(tenantId) as any)?.count || 0;
+    const archived = (db.prepare('SELECT COUNT(*) as count FROM test_cases WHERE is_archived = 1 AND tenant_id = ?').get(tenantId) as any)?.count || 0;
 
     const byCategoryRows = db.prepare(`
-      SELECT category, COUNT(*) as count FROM test_cases WHERE is_archived = 0 GROUP BY category
-    `).all() as any[];
+      SELECT category, COUNT(*) as count FROM test_cases WHERE is_archived = 0 AND tenant_id = ? GROUP BY category
+    `).all(tenantId) as any[];
 
     const byCategory: Record<string, number> = {};
     for (const row of byCategoryRows) {
@@ -395,10 +408,10 @@ export function getTestCaseStats(): TestCaseStats {
 /**
  * Get all unique tags from test cases
  */
-export function getAllTags(): string[] {
+export function getAllTags(tenantId: number = 1): string[] {
   const db = getReadOnlyDb();
   try {
-    const rows = db.prepare(`SELECT tags_json FROM test_cases WHERE is_archived = 0`).all() as any[];
+    const rows = db.prepare(`SELECT tags_json FROM test_cases WHERE is_archived = 0 AND tenant_id = ?`).all(tenantId) as any[];
 
     const tagSet = new Set<string>();
     for (const row of rows) {
@@ -417,10 +430,10 @@ export function getAllTags(): string[] {
 /**
  * Check if a test case ID exists
  */
-export function testCaseExists(caseId: string): boolean {
+export function testCaseExists(caseId: string, tenantId: number = 1): boolean {
   const db = getReadOnlyDb();
   try {
-    const row = db.prepare('SELECT 1 FROM test_cases WHERE case_id = ?').get(caseId);
+    const row = db.prepare('SELECT 1 FROM test_cases WHERE case_id = ? AND tenant_id = ?').get(caseId, tenantId);
     return !!row;
   } finally {
     db.close();
@@ -430,15 +443,15 @@ export function testCaseExists(caseId: string): boolean {
 /**
  * Generate the next available case ID for a category
  */
-export function generateNextCaseId(category: 'happy-path' | 'edge-case' | 'error-handling'): string {
+export function generateNextCaseId(category: 'happy-path' | 'edge-case' | 'error-handling', tenantId: number = 1): string {
   const prefix = category === 'happy-path' ? 'HAPPY' :
                  category === 'edge-case' ? 'EDGE' : 'ERR';
 
   const db = getReadOnlyDb();
   try {
     const rows = db.prepare(`
-      SELECT case_id FROM test_cases WHERE case_id LIKE ?
-    `).all(`${prefix}-%`) as any[];
+      SELECT case_id FROM test_cases WHERE case_id LIKE ? AND tenant_id = ?
+    `).all(`${prefix}-%`, tenantId) as any[];
 
     let maxNum = 0;
     for (const row of rows) {
@@ -610,7 +623,7 @@ ${testCasesCode}
 /**
  * Sync all test cases from database to TypeScript files
  */
-export function syncToTypeScript(): { success: boolean; filesWritten: string[]; errors: string[] } {
+export function syncToTypeScript(tenantId: number = 1): { success: boolean; filesWritten: string[]; errors: string[] } {
   const filesWritten: string[] = [];
   const errors: string[] = [];
 
@@ -621,7 +634,7 @@ export function syncToTypeScript(): { success: boolean; filesWritten: string[]; 
     }
 
     // Get all non-archived test cases grouped by category
-    const allTestCases = getTestCases({ includeArchived: false });
+    const allTestCases = getTestCases({ includeArchived: false }, tenantId);
 
     const byCategory: Record<string, TestCaseRecord[]> = {
       'happy-path': [],

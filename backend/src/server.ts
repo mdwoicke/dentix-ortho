@@ -11,6 +11,9 @@ import { run as runTenantTabsMigration } from './database/migrations/003_add_ten
 import { run as runDominosIntegrationMigration } from './database/migrations/004_add_dominos_integration';
 import { run as runDominosOrderTablesMigration } from './database/migrations/005_add_dominos_order_tables';
 import { run as runDominosDataSourceMigration } from './database/migrations/006_add_dominos_data_source';
+import { run as runPromptMultiTenancyMigration } from './database/migrations/007_prompt_multi_tenancy';
+import { run as runTenantSkillsMigration } from './database/migrations/008_tenant_skills';
+import { run as runFabricWorkflowMigration } from './database/migrations/009_fabric_workflow';
 
 // Load environment variables
 dotenv.config();
@@ -37,6 +40,9 @@ try {
   runDominosIntegrationMigration(getDatabase());
   runDominosOrderTablesMigration(getDatabase());
   runDominosDataSourceMigration(getDatabase());
+  runPromptMultiTenancyMigration(getDatabase());
+  runTenantSkillsMigration(getDatabase());
+  runFabricWorkflowMigration(getDatabase());
   logger.info('Multi-tenancy migration check completed');
 } catch (error) {
   logger.error('Failed to run multi-tenancy migration', {

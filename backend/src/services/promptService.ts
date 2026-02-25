@@ -156,28 +156,70 @@ function ensureArtifactDeployEventsTable(db: BetterSqlite3.Database): void {
 // Path to test-agent database
 const TEST_AGENT_DB_PATH = path.resolve(__dirname, '../../../test-agent/data/test-results.db');
 
-// V1 Directory - canonical source for production files
+// Default tenant IDs
+const ORTHO_TENANT_ID = 1;
+const CHORD_TENANT_ID = 5;
+const DEFAULT_TENANT_ID = ORTHO_TENANT_ID;
+
+// V1 Directory - canonical source for production files (Ortho)
 const V1_DIR = path.resolve(__dirname, '../../../docs/v1');
 
-// Prompt file mappings - Updated to use V1 directory
-const PROMPT_FILE_MAPPINGS: Record<string, { path: string; displayName: string }> = {
-  system_prompt: {
-    path: path.join(V1_DIR, 'Chord_Cloud9_SystemPrompt.md'),
-    displayName: 'System Prompt',
+// Chord artifact directory
+const CHORD_DIR = path.resolve(__dirname, '../../../../chord_e2e_package/current');
+
+type PromptFileMappings = Record<string, { path: string; displayName: string }>;
+
+// Per-tenant prompt file mappings
+const TENANT_PROMPT_FILE_MAPPINGS: Record<number, PromptFileMappings> = {
+  [ORTHO_TENANT_ID]: {
+    system_prompt: {
+      path: path.join(V1_DIR, 'Chord_Cloud9_SystemPrompt.md'),
+      displayName: 'System Prompt',
+    },
+    scheduling_tool: {
+      path: path.join(V1_DIR, 'schedule_appointment_dso_Tool.json'),
+      displayName: 'Scheduling Tool',
+    },
+    patient_tool: {
+      path: path.join(V1_DIR, 'chord_dso_patient_Tool.json'),
+      displayName: 'Patient Tool',
+    },
+    nodered_flow: {
+      path: path.join(V1_DIR, 'nodered_Cloud9_flows.json'),
+      displayName: 'Node Red Flows',
+    },
   },
-  scheduling_tool: {
-    path: path.join(V1_DIR, 'schedule_appointment_dso_Tool.json'),
-    displayName: 'Scheduling Tool',
-  },
-  patient_tool: {
-    path: path.join(V1_DIR, 'chord_dso_patient_Tool.json'),
-    displayName: 'Patient Tool',
-  },
-  nodered_flow: {
-    path: path.join(V1_DIR, 'nodered_Cloud9_flows.json'),
-    displayName: 'Node Red Flows',
+  [CHORD_TENANT_ID]: {
+    chord_system_prompt: {
+      path: path.join(CHORD_DIR, 'prompt_chord-current.txt'),
+      displayName: 'Chord System Prompt',
+    },
+    chord_patient_tool: {
+      path: path.join(CHORD_DIR, 'chord_patient_v07_stage-CustomTool-current.json'),
+      displayName: 'Chord Patient Tool',
+    },
+    chord_scheduling_tool: {
+      path: path.join(CHORD_DIR, 'chord_scheduling_v07_dev-CustomTool-current.json'),
+      displayName: 'Chord Scheduling Tool',
+    },
+    chord_escalation_tool: {
+      path: path.join(CHORD_DIR, 'chord_handleEscalation-CustomTool-current.json'),
+      displayName: 'Chord Escalation Tool',
+    },
+    chord_nodered_flow: {
+      path: path.join(CHORD_DIR, 'Chord-NexHealth-Flow-V4-UPDATED-current.json'),
+      displayName: 'Chord Node Red Flows',
+    },
   },
 };
+
+/** Get prompt file mappings for a specific tenant (falls back to Ortho) */
+export function getPromptFileMappings(tenantId: number = DEFAULT_TENANT_ID): PromptFileMappings {
+  return TENANT_PROMPT_FILE_MAPPINGS[tenantId] || TENANT_PROMPT_FILE_MAPPINGS[DEFAULT_TENANT_ID];
+}
+
+/** Backward-compatible alias — returns Ortho mappings */
+const PROMPT_FILE_MAPPINGS = TENANT_PROMPT_FILE_MAPPINGS[ORTHO_TENANT_ID];
 
 // ============================================================================
 // CONTENT VALIDATION
@@ -494,6 +536,12 @@ function getReadOnlyDb(): BetterSqlite3.Database {
   return new BetterSqlite3(TEST_AGENT_DB_PATH, { readonly: true });
 }
 
+/** Check if a table has the tenant_id column (migration 007) */
+function hasTenantColumn(db: BetterSqlite3.Database, table: string): boolean {
+  const columns = db.pragma(`table_info('${table}')`) as { name: string }[];
+  return columns.some(c => c.name === 'tenant_id');
+}
+
 /**
  * Get the next version number for a prompt file
  *
@@ -503,18 +551,21 @@ function getReadOnlyDb(): BetterSqlite3.Database {
  *
  * @param db - Database connection (must be already open)
  * @param fileKey - The file key to get next version for
+ * @param tenantId - Tenant to scope version lookup
  * @returns The next sequential version number
  */
-function getNextVersion(db: BetterSqlite3.Database, fileKey: string): number {
+function getNextVersion(db: BetterSqlite3.Database, fileKey: string, tenantId: number = DEFAULT_TENANT_ID): number {
+  const hasTenant = hasTenantColumn(db, 'prompt_version_history');
+
   // Get max version from history table (most reliable source)
-  const historyMax = db.prepare(`
-    SELECT MAX(version) as maxVersion FROM prompt_version_history WHERE file_key = ?
-  `).get(fileKey) as { maxVersion: number | null } | undefined;
+  const historyMax = hasTenant
+    ? db.prepare(`SELECT MAX(version) as maxVersion FROM prompt_version_history WHERE file_key = ? AND tenant_id = ?`).get(fileKey, tenantId) as { maxVersion: number | null } | undefined
+    : db.prepare(`SELECT MAX(version) as maxVersion FROM prompt_version_history WHERE file_key = ?`).get(fileKey) as { maxVersion: number | null } | undefined;
 
   // Get current working copy version as fallback
-  const workingCopy = db.prepare(`
-    SELECT version FROM prompt_working_copies WHERE file_key = ?
-  `).get(fileKey) as { version: number } | undefined;
+  const workingCopy = hasTenant
+    ? db.prepare(`SELECT version FROM prompt_working_copies WHERE file_key = ? AND tenant_id = ?`).get(fileKey, tenantId) as { version: number } | undefined
+    : db.prepare(`SELECT version FROM prompt_working_copies WHERE file_key = ?`).get(fileKey) as { version: number } | undefined;
 
   // Use the highest of: history max, working copy version, or 0
   const maxFromHistory = historyMax?.maxVersion || 0;
@@ -525,17 +576,23 @@ function getNextVersion(db: BetterSqlite3.Database, fileKey: string): number {
 }
 
 /**
- * Initialize working copies from disk files if they don't exist
+ * Initialize working copies from disk files if they don't exist.
+ * @param tenantId - Tenant to initialize for (defaults to Ortho for backward compat)
  */
-export function initializeWorkingCopies(): void {
+export function initializeWorkingCopies(tenantId: number = DEFAULT_TENANT_ID): void {
   const db = getWritableDb();
+  const mappings = getPromptFileMappings(tenantId);
+
+  // Check if tenant_id column exists (migration 007 may not have run yet)
+  const columns = db.pragma("table_info('prompt_working_copies')") as { name: string }[];
+  const hasTenantId = columns.some(c => c.name === 'tenant_id');
 
   try {
-    for (const [fileKey, mapping] of Object.entries(PROMPT_FILE_MAPPINGS)) {
-      // Check if working copy already exists
-      const existing = db.prepare(
-        'SELECT id FROM prompt_working_copies WHERE file_key = ?'
-      ).get(fileKey);
+    for (const [fileKey, mapping] of Object.entries(mappings)) {
+      // Check if working copy already exists (tenant-aware if column exists)
+      const existing = hasTenantId
+        ? db.prepare('SELECT id FROM prompt_working_copies WHERE file_key = ? AND tenant_id = ?').get(fileKey, tenantId)
+        : db.prepare('SELECT id FROM prompt_working_copies WHERE file_key = ?').get(fileKey);
 
       if (!existing) {
         // Read from disk and create initial working copy
@@ -543,17 +600,28 @@ export function initializeWorkingCopies(): void {
           const content = fs.readFileSync(mapping.path, 'utf-8');
           const now = new Date().toISOString();
 
-          // Create working copy
-          db.prepare(`
-            INSERT INTO prompt_working_copies (file_key, file_path, display_name, content, version, updated_at)
-            VALUES (?, ?, ?, ?, 1, ?)
-          `).run(fileKey, mapping.path, mapping.displayName, content, now);
+          if (hasTenantId) {
+            db.prepare(`
+              INSERT INTO prompt_working_copies (file_key, file_path, display_name, content, version, updated_at, tenant_id)
+              VALUES (?, ?, ?, ?, 1, ?, ?)
+            `).run(fileKey, mapping.path, mapping.displayName, content, now, tenantId);
 
-          // Create initial version history entry
-          db.prepare(`
-            INSERT INTO prompt_version_history (file_key, version, content, change_description, created_at)
-            VALUES (?, 1, ?, 'Initial version from disk', ?)
-          `).run(fileKey, content, now);
+            db.prepare(`
+              INSERT INTO prompt_version_history (file_key, version, content, change_description, created_at, tenant_id)
+              VALUES (?, 1, ?, 'Initial version from disk', ?, ?)
+            `).run(fileKey, content, now, tenantId);
+          } else {
+            // Fallback: no tenant_id column yet
+            db.prepare(`
+              INSERT INTO prompt_working_copies (file_key, file_path, display_name, content, version, updated_at)
+              VALUES (?, ?, ?, ?, 1, ?)
+            `).run(fileKey, mapping.path, mapping.displayName, content, now);
+
+            db.prepare(`
+              INSERT INTO prompt_version_history (file_key, version, content, change_description, created_at)
+              VALUES (?, 1, ?, 'Initial version from disk', ?)
+            `).run(fileKey, content, now);
+          }
         }
       }
     }
@@ -564,23 +632,35 @@ export function initializeWorkingCopies(): void {
 
 /**
  * Get all prompt files with their current version info
+ * @param tenantId - Filter by tenant (defaults to Ortho for backward compat)
  */
-export function getPromptFiles(): PromptFile[] {
+export function getPromptFiles(tenantId: number = DEFAULT_TENANT_ID): PromptFile[] {
   // Ensure working copies are initialized
-  initializeWorkingCopies();
+  initializeWorkingCopies(tenantId);
 
+  const mappings = getPromptFileMappings(tenantId);
   const db = getReadOnlyDb();
   try {
-    const rows = db.prepare(`
-      SELECT file_key, file_path, version, last_fix_id, updated_at
-      FROM prompt_working_copies
-      ORDER BY file_key
-    `).all() as any[];
+    // Check if tenant_id column exists
+    const columns = db.pragma("table_info('prompt_working_copies')") as { name: string }[];
+    const hasTenantId = columns.some(c => c.name === 'tenant_id');
+
+    const rows = hasTenantId
+      ? db.prepare(`
+          SELECT file_key, file_path, version, last_fix_id, updated_at
+          FROM prompt_working_copies WHERE tenant_id = ?
+          ORDER BY file_key
+        `).all(tenantId) as any[]
+      : db.prepare(`
+          SELECT file_key, file_path, version, last_fix_id, updated_at
+          FROM prompt_working_copies
+          ORDER BY file_key
+        `).all() as any[];
 
     return rows.map(row => ({
       fileKey: row.file_key,
       filePath: row.file_path,
-      displayName: PROMPT_FILE_MAPPINGS[row.file_key]?.displayName || row.file_key,
+      displayName: mappings[row.file_key]?.displayName || PROMPT_FILE_MAPPINGS[row.file_key]?.displayName || row.file_key,
       version: row.version,
       lastFixId: row.last_fix_id,
       updatedAt: row.updated_at,
@@ -592,16 +672,21 @@ export function getPromptFiles(): PromptFile[] {
 
 /**
  * Get current content for a specific prompt file
+ * @param tenantId - Filter by tenant (defaults to Ortho for backward compat)
  */
-export function getPromptContent(fileKey: string): { content: string; version: number } | null {
+export function getPromptContent(fileKey: string, tenantId: number = DEFAULT_TENANT_ID): { content: string; version: number } | null {
   // Ensure working copies are initialized
-  initializeWorkingCopies();
+  initializeWorkingCopies(tenantId);
 
   const db = getReadOnlyDb();
   try {
-    const row = db.prepare(`
-      SELECT content, version FROM prompt_working_copies WHERE file_key = ?
-    `).get(fileKey) as any;
+    // Check if tenant_id column exists
+    const columns = db.pragma("table_info('prompt_working_copies')") as { name: string }[];
+    const hasTenantId = columns.some(c => c.name === 'tenant_id');
+
+    const row = hasTenantId
+      ? db.prepare(`SELECT content, version FROM prompt_working_copies WHERE file_key = ? AND tenant_id = ?`).get(fileKey, tenantId) as any
+      : db.prepare(`SELECT content, version FROM prompt_working_copies WHERE file_key = ?`).get(fileKey) as any;
 
     if (!row) {
       return null;
@@ -618,17 +703,29 @@ export function getPromptContent(fileKey: string): { content: string; version: n
 
 /**
  * Get version history for a prompt file
+ * @param tenantId - Filter by tenant (defaults to Ortho for backward compat)
  */
-export function getPromptHistory(fileKey: string, limit: number = 20): PromptVersionHistory[] {
+export function getPromptHistory(fileKey: string, limit: number = 20, tenantId: number = DEFAULT_TENANT_ID): PromptVersionHistory[] {
   const db = getReadOnlyDb();
   try {
-    const rows = db.prepare(`
-      SELECT id, file_key, version, content, fix_id, change_description, created_at
-      FROM prompt_version_history
-      WHERE file_key = ?
-      ORDER BY version DESC
-      LIMIT ?
-    `).all(fileKey, limit) as any[];
+    const columns = db.pragma("table_info('prompt_version_history')") as { name: string }[];
+    const hasTenantId = columns.some(c => c.name === 'tenant_id');
+
+    const rows = hasTenantId
+      ? db.prepare(`
+          SELECT id, file_key, version, content, fix_id, change_description, created_at
+          FROM prompt_version_history
+          WHERE file_key = ? AND tenant_id = ?
+          ORDER BY version DESC
+          LIMIT ?
+        `).all(fileKey, tenantId, limit) as any[]
+      : db.prepare(`
+          SELECT id, file_key, version, content, fix_id, change_description, created_at
+          FROM prompt_version_history
+          WHERE file_key = ?
+          ORDER BY version DESC
+          LIMIT ?
+        `).all(fileKey, limit) as any[];
 
     return rows.map(row => ({
       id: row.id,
@@ -650,16 +747,18 @@ export function getPromptHistory(fileKey: string, limit: number = 20): PromptVer
  * IMPORTANT: This function validates the merged content BEFORE saving.
  * If validation fails, the fix is NOT applied and an error is thrown.
  */
-export function applyFix(fileKey: string, fixId: string): { newVersion: number; content: string; warnings?: string[] } {
+export function applyFix(fileKey: string, fixId: string, tenantId: number = DEFAULT_TENANT_ID): { newVersion: number; content: string; warnings?: string[] } {
   // Ensure working copies are initialized
-  initializeWorkingCopies();
+  initializeWorkingCopies(tenantId);
 
   const db = getWritableDb();
   try {
+    const hasTenant = hasTenantColumn(db, 'prompt_working_copies');
+
     // Get current working copy
-    const current = db.prepare(`
-      SELECT content, version FROM prompt_working_copies WHERE file_key = ?
-    `).get(fileKey) as any;
+    const current = hasTenant
+      ? db.prepare(`SELECT content, version FROM prompt_working_copies WHERE file_key = ? AND tenant_id = ?`).get(fileKey, tenantId) as any
+      : db.prepare(`SELECT content, version FROM prompt_working_copies WHERE file_key = ?`).get(fileKey) as any;
 
     if (!current) {
       throw new Error(`Prompt file not found: ${fileKey}`);
@@ -719,21 +818,36 @@ export function applyFix(fileKey: string, fixId: string): { newVersion: number; 
     const contentToSave = !isJavaScriptFile ? escapeForFlowise(mergedContent) : mergedContent;
 
     // Get next sequential version (ensures no duplicates)
-    const newVersion = getNextVersion(db, fileKey);
+    const newVersion = getNextVersion(db, fileKey, tenantId);
     const now = new Date().toISOString();
 
     // Update working copy
-    db.prepare(`
-      UPDATE prompt_working_copies
-      SET content = ?, version = ?, last_fix_id = ?, updated_at = ?
-      WHERE file_key = ?
-    `).run(contentToSave, newVersion, fixId, now, fileKey);
+    if (hasTenant) {
+      db.prepare(`
+        UPDATE prompt_working_copies
+        SET content = ?, version = ?, last_fix_id = ?, updated_at = ?
+        WHERE file_key = ? AND tenant_id = ?
+      `).run(contentToSave, newVersion, fixId, now, fileKey, tenantId);
+    } else {
+      db.prepare(`
+        UPDATE prompt_working_copies
+        SET content = ?, version = ?, last_fix_id = ?, updated_at = ?
+        WHERE file_key = ?
+      `).run(contentToSave, newVersion, fixId, now, fileKey);
+    }
 
     // Create version history entry
-    db.prepare(`
-      INSERT INTO prompt_version_history (file_key, version, content, fix_id, change_description, created_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(fileKey, newVersion, contentToSave, fixId, fix.change_description, now);
+    if (hasTenant) {
+      db.prepare(`
+        INSERT INTO prompt_version_history (file_key, version, content, fix_id, change_description, created_at, tenant_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(fileKey, newVersion, contentToSave, fixId, fix.change_description, now, tenantId);
+    } else {
+      db.prepare(`
+        INSERT INTO prompt_version_history (file_key, version, content, fix_id, change_description, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(fileKey, newVersion, contentToSave, fixId, fix.change_description, now);
+    }
 
     // Update fix status to 'applied'
     db.prepare(`
@@ -743,10 +857,18 @@ export function applyFix(fileKey: string, fixId: string): { newVersion: number; 
     // Record deploy event for version correlation
     try {
       ensureArtifactDeployEventsTable(db);
-      db.prepare(`
-        INSERT INTO artifact_deploy_events (artifact_key, version, deploy_method, description)
-        VALUES (?, ?, 'fix_applied', ?)
-      `).run(fileKey, newVersion, fix.change_description);
+      const hasDeployTenant = hasTenantColumn(db, 'artifact_deploy_events');
+      if (hasDeployTenant) {
+        db.prepare(`
+          INSERT INTO artifact_deploy_events (artifact_key, version, deploy_method, description, tenant_id)
+          VALUES (?, ?, 'fix_applied', ?, ?)
+        `).run(fileKey, newVersion, fix.change_description, tenantId);
+      } else {
+        db.prepare(`
+          INSERT INTO artifact_deploy_events (artifact_key, version, deploy_method, description)
+          VALUES (?, ?, 'fix_applied', ?)
+        `).run(fileKey, newVersion, fix.change_description);
+      }
     } catch (deployErr: unknown) {
       console.warn(`[promptService] Failed to record deploy event: ${deployErr instanceof Error ? deployErr.message : String(deployErr)}`);
     }
@@ -1036,14 +1158,16 @@ function insertIntoObjectWithProperty(_lines: string[], _propName: string, _code
 
 /**
  * Get content of a specific version
+ * @param tenantId - Filter by tenant (defaults to Ortho for backward compat)
  */
-export function getVersionContent(fileKey: string, version: number): string | null {
+export function getVersionContent(fileKey: string, version: number, tenantId: number = DEFAULT_TENANT_ID): string | null {
   const db = getReadOnlyDb();
   try {
-    const row = db.prepare(`
-      SELECT content FROM prompt_version_history
-      WHERE file_key = ? AND version = ?
-    `).get(fileKey, version) as any;
+    const hasTenant = hasTenantColumn(db, 'prompt_version_history');
+
+    const row = hasTenant
+      ? db.prepare(`SELECT content FROM prompt_version_history WHERE file_key = ? AND version = ? AND tenant_id = ?`).get(fileKey, version, tenantId) as any
+      : db.prepare(`SELECT content FROM prompt_version_history WHERE file_key = ? AND version = ?`).get(fileKey, version) as any;
 
     return row ? row.content : null;
   } finally {
@@ -1053,13 +1177,16 @@ export function getVersionContent(fileKey: string, version: number): string | nu
 
 /**
  * Sync working copy to disk (write current version to the actual file)
+ * @param tenantId - Filter by tenant (defaults to Ortho for backward compat)
  */
-export function syncToDisk(fileKey: string): boolean {
+export function syncToDisk(fileKey: string, tenantId: number = DEFAULT_TENANT_ID): boolean {
   const db = getReadOnlyDb();
   try {
-    const row = db.prepare(`
-      SELECT content, file_path FROM prompt_working_copies WHERE file_key = ?
-    `).get(fileKey) as any;
+    const hasTenant = hasTenantColumn(db, 'prompt_working_copies');
+
+    const row = hasTenant
+      ? db.prepare(`SELECT content, file_path FROM prompt_working_copies WHERE file_key = ? AND tenant_id = ?`).get(fileKey, tenantId) as any
+      : db.prepare(`SELECT content, file_path FROM prompt_working_copies WHERE file_key = ?`).get(fileKey) as any;
 
     if (!row) {
       return false;
@@ -1084,17 +1211,20 @@ export function syncToDisk(fileKey: string): boolean {
 export function saveNewVersion(
   fileKey: string,
   content: string,
-  changeDescription: string
+  changeDescription: string,
+  tenantId: number = DEFAULT_TENANT_ID
 ): { newVersion: number; content: string; warnings?: string[] } {
   // Ensure working copies are initialized
-  initializeWorkingCopies();
+  initializeWorkingCopies(tenantId);
 
   const db = getWritableDb();
   try {
+    const hasTenant = hasTenantColumn(db, 'prompt_working_copies');
+
     // Get current working copy
-    const current = db.prepare(`
-      SELECT content, version FROM prompt_working_copies WHERE file_key = ?
-    `).get(fileKey) as any;
+    const current = hasTenant
+      ? db.prepare(`SELECT content, version FROM prompt_working_copies WHERE file_key = ? AND tenant_id = ?`).get(fileKey, tenantId) as any
+      : db.prepare(`SELECT content, version FROM prompt_working_copies WHERE file_key = ?`).get(fileKey) as any;
 
     if (!current) {
       throw new Error(`Prompt file not found: ${fileKey}`);
@@ -1114,29 +1244,52 @@ export function saveNewVersion(
     const contentToSave = !isJavaScriptFile ? escapeForFlowise(content) : content;
 
     // Get next sequential version (ensures no duplicates)
-    const newVersion = getNextVersion(db, fileKey);
+    const newVersion = getNextVersion(db, fileKey, tenantId);
     const now = new Date().toISOString();
 
     // Update working copy
-    db.prepare(`
-      UPDATE prompt_working_copies
-      SET content = ?, version = ?, updated_at = ?
-      WHERE file_key = ?
-    `).run(contentToSave, newVersion, now, fileKey);
+    if (hasTenant) {
+      db.prepare(`
+        UPDATE prompt_working_copies
+        SET content = ?, version = ?, updated_at = ?
+        WHERE file_key = ? AND tenant_id = ?
+      `).run(contentToSave, newVersion, now, fileKey, tenantId);
+    } else {
+      db.prepare(`
+        UPDATE prompt_working_copies
+        SET content = ?, version = ?, updated_at = ?
+        WHERE file_key = ?
+      `).run(contentToSave, newVersion, now, fileKey);
+    }
 
     // Create version history entry
-    db.prepare(`
-      INSERT INTO prompt_version_history (file_key, version, content, fix_id, change_description, created_at)
-      VALUES (?, ?, ?, NULL, ?, ?)
-    `).run(fileKey, newVersion, contentToSave, changeDescription, now);
+    if (hasTenant) {
+      db.prepare(`
+        INSERT INTO prompt_version_history (file_key, version, content, fix_id, change_description, created_at, tenant_id)
+        VALUES (?, ?, ?, NULL, ?, ?, ?)
+      `).run(fileKey, newVersion, contentToSave, changeDescription, now, tenantId);
+    } else {
+      db.prepare(`
+        INSERT INTO prompt_version_history (file_key, version, content, fix_id, change_description, created_at)
+        VALUES (?, ?, ?, NULL, ?, ?)
+      `).run(fileKey, newVersion, contentToSave, changeDescription, now);
+    }
 
     // Record deploy event for version correlation
     try {
       ensureArtifactDeployEventsTable(db);
-      db.prepare(`
-        INSERT INTO artifact_deploy_events (artifact_key, version, deploy_method, description)
-        VALUES (?, ?, 'prompt_update', ?)
-      `).run(fileKey, newVersion, changeDescription);
+      const hasDeployTenant = hasTenantColumn(db, 'artifact_deploy_events');
+      if (hasDeployTenant) {
+        db.prepare(`
+          INSERT INTO artifact_deploy_events (artifact_key, version, deploy_method, description, tenant_id)
+          VALUES (?, ?, 'prompt_update', ?, ?)
+        `).run(fileKey, newVersion, changeDescription, tenantId);
+      } else {
+        db.prepare(`
+          INSERT INTO artifact_deploy_events (artifact_key, version, deploy_method, description)
+          VALUES (?, ?, 'prompt_update', ?)
+        `).run(fileKey, newVersion, changeDescription);
+      }
     } catch (deployErr: unknown) {
       console.warn(`[promptService] Failed to record deploy event: ${deployErr instanceof Error ? deployErr.message : String(deployErr)}`);
     }
@@ -1159,7 +1312,7 @@ export function saveNewVersion(
  * @param fixIds - Array of fix IDs to apply
  * @returns Results for each fix application
  */
-export function applyBatchFixes(fixIds: string[]): {
+export function applyBatchFixes(fixIds: string[], tenantId: number = DEFAULT_TENANT_ID): {
   results: Array<{
     fixId: string;
     success: boolean;
@@ -1176,7 +1329,7 @@ export function applyBatchFixes(fixIds: string[]): {
   };
 } {
   // Ensure working copies are initialized
-  initializeWorkingCopies();
+  initializeWorkingCopies(tenantId);
 
   const db = getWritableDb();
   const results: Array<{
@@ -1229,7 +1382,7 @@ export function applyBatchFixes(fixIds: string[]): {
     // Determine target file key for each fix
     const fixesWithFileKeys = fixes.map(fix => ({
       ...fix,
-      fileKey: determineFileKey(fix.targetFile, fix.type),
+      fileKey: determineFileKey(fix.targetFile, fix.type, tenantId),
     }));
 
     // Group fixes by file key
@@ -1249,12 +1402,14 @@ export function applyBatchFixes(fixIds: string[]): {
       fixesByFile.set(fix.fileKey, existing);
     }
 
+    const hasTenant = hasTenantColumn(db, 'prompt_working_copies');
+
     // Apply fixes to each file
     for (const [fileKey, fileFixes] of fixesByFile) {
       // Get current working copy
-      const current = db.prepare(`
-        SELECT content, version FROM prompt_working_copies WHERE file_key = ?
-      `).get(fileKey) as any;
+      const current = hasTenant
+        ? db.prepare(`SELECT content, version FROM prompt_working_copies WHERE file_key = ? AND tenant_id = ?`).get(fileKey, tenantId) as any
+        : db.prepare(`SELECT content, version FROM prompt_working_copies WHERE file_key = ?`).get(fileKey) as any;
 
       if (!current) {
         for (const fix of fileFixes) {
@@ -1269,7 +1424,7 @@ export function applyBatchFixes(fixIds: string[]): {
 
       let workingContent = current.content;
       // Start from next version minus 1, so first increment gives us the correct next version
-      let currentVersion = getNextVersion(db, fileKey) - 1;
+      let currentVersion = getNextVersion(db, fileKey, tenantId) - 1;
       const isJavaScriptFile = fileKey.includes('tool') || fileKey.endsWith('.js');
 
       // Apply each fix to this file sequentially
@@ -1310,17 +1465,32 @@ export function applyBatchFixes(fixIds: string[]): {
           const now = new Date().toISOString();
 
           // Update working copy
-          db.prepare(`
-            UPDATE prompt_working_copies
-            SET content = ?, version = ?, last_fix_id = ?, updated_at = ?
-            WHERE file_key = ?
-          `).run(mergedContent, currentVersion, fix.fixId, now, fileKey);
+          if (hasTenant) {
+            db.prepare(`
+              UPDATE prompt_working_copies
+              SET content = ?, version = ?, last_fix_id = ?, updated_at = ?
+              WHERE file_key = ? AND tenant_id = ?
+            `).run(mergedContent, currentVersion, fix.fixId, now, fileKey, tenantId);
+          } else {
+            db.prepare(`
+              UPDATE prompt_working_copies
+              SET content = ?, version = ?, last_fix_id = ?, updated_at = ?
+              WHERE file_key = ?
+            `).run(mergedContent, currentVersion, fix.fixId, now, fileKey);
+          }
 
           // Create version history entry
-          db.prepare(`
-            INSERT INTO prompt_version_history (file_key, version, content, fix_id, change_description, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-          `).run(fileKey, currentVersion, mergedContent, fix.fixId, fix.changeDescription, now);
+          if (hasTenant) {
+            db.prepare(`
+              INSERT INTO prompt_version_history (file_key, version, content, fix_id, change_description, created_at, tenant_id)
+              VALUES (?, ?, ?, ?, ?, ?, ?)
+            `).run(fileKey, currentVersion, mergedContent, fix.fixId, fix.changeDescription, now, tenantId);
+          } else {
+            db.prepare(`
+              INSERT INTO prompt_version_history (file_key, version, content, fix_id, change_description, created_at)
+              VALUES (?, ?, ?, ?, ?, ?)
+            `).run(fileKey, currentVersion, mergedContent, fix.fixId, fix.changeDescription, now);
+          }
 
           // Update fix status to 'applied'
           db.prepare(`
@@ -1366,45 +1536,54 @@ export function applyBatchFixes(fixIds: string[]): {
 
 /**
  * Determine the file key based on target file path and fix type
+ * Tenant-aware: Chord files use chord_ prefix
  */
-function determineFileKey(targetFile: string, type: string): string | null {
+function determineFileKey(targetFile: string, type: string, tenantId: number = DEFAULT_TENANT_ID): string | null {
   const targetLower = targetFile?.toLowerCase() || '';
+  const isChord = tenantId === CHORD_TENANT_ID;
+  const prefix = isChord ? 'chord_' : '';
+
+  // Check for escalation tool (Chord-specific)
+  if (targetLower.includes('escalation') || targetLower.includes('handleescalation')) {
+    return 'chord_escalation_tool';
+  }
 
   // Check for Node Red flow files
   if (targetLower.includes('nodered') || targetLower.includes('flow')) {
-    return 'nodered_flow';
+    return `${prefix}nodered_flow`;
   }
 
   // Check for scheduling-related files
   if (targetLower.includes('schedule') || targetLower.includes('scheduling') || targetLower.includes('appointment')) {
-    return 'scheduling_tool';
+    return `${prefix}scheduling_tool`;
   }
 
   // Check for patient-related files
   if (targetLower.includes('patient')) {
-    return 'patient_tool';
+    return `${prefix}patient_tool`;
   }
 
   // Check for system prompt
   if (targetLower.includes('systemprompt') || targetLower.includes('system_prompt') || targetLower.includes('chord_cloud9')) {
-    return 'system_prompt';
+    return `${prefix}system_prompt`;
   }
 
   // Fallback based on fix type
   if (type === 'tool') {
-    // Default to scheduling tool for tool fixes
-    return 'scheduling_tool';
+    return `${prefix}scheduling_tool`;
   }
 
   // Default to system prompt for prompt fixes
-  return 'system_prompt';
+  return `${prefix}system_prompt`;
 }
 
 /**
  * Reset working copy from disk (discard all changes and reload from source file)
+ * @param tenantId - Tenant context for file mapping lookup (defaults to Ortho)
  */
-export function resetFromDisk(fileKey: string): { version: number; content: string } {
-  const mapping = PROMPT_FILE_MAPPINGS[fileKey];
+export function resetFromDisk(fileKey: string, tenantId: number = DEFAULT_TENANT_ID): { version: number; content: string } {
+  const mappings = getPromptFileMappings(tenantId);
+  const mapping = mappings[fileKey];
   if (!mapping) {
     throw new Error(`Unknown file key: ${fileKey}`);
   }
@@ -1417,34 +1596,56 @@ export function resetFromDisk(fileKey: string): { version: number; content: stri
   const db = getWritableDb();
 
   try {
-    const current = db.prepare(`
-      SELECT version FROM prompt_working_copies WHERE file_key = ?
-    `).get(fileKey) as any;
+    const hasTenant = hasTenantColumn(db, 'prompt_working_copies');
+
+    const current = hasTenant
+      ? db.prepare(`SELECT version FROM prompt_working_copies WHERE file_key = ? AND tenant_id = ?`).get(fileKey, tenantId) as any
+      : db.prepare(`SELECT version FROM prompt_working_copies WHERE file_key = ?`).get(fileKey) as any;
 
     // Get next sequential version (ensures no duplicates)
-    const newVersion = getNextVersion(db, fileKey);
+    const newVersion = getNextVersion(db, fileKey, tenantId);
     const now = new Date().toISOString();
 
     if (current) {
-      // Update existing working copy
-      db.prepare(`
-        UPDATE prompt_working_copies
-        SET content = ?, version = ?, updated_at = ?, last_fix_id = NULL
-        WHERE file_key = ?
-      `).run(content, newVersion, now, fileKey);
+      if (hasTenant) {
+        db.prepare(`
+          UPDATE prompt_working_copies
+          SET content = ?, version = ?, updated_at = ?, last_fix_id = NULL
+          WHERE file_key = ? AND tenant_id = ?
+        `).run(content, newVersion, now, fileKey, tenantId);
+      } else {
+        db.prepare(`
+          UPDATE prompt_working_copies
+          SET content = ?, version = ?, updated_at = ?, last_fix_id = NULL
+          WHERE file_key = ?
+        `).run(content, newVersion, now, fileKey);
+      }
     } else {
-      // Create new working copy
-      db.prepare(`
-        INSERT INTO prompt_working_copies (file_key, file_path, display_name, content, version, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `).run(fileKey, mapping.path, mapping.displayName, content, newVersion, now);
+      if (hasTenant) {
+        db.prepare(`
+          INSERT INTO prompt_working_copies (file_key, file_path, display_name, content, version, updated_at, tenant_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).run(fileKey, mapping.path, mapping.displayName, content, newVersion, now, tenantId);
+      } else {
+        db.prepare(`
+          INSERT INTO prompt_working_copies (file_key, file_path, display_name, content, version, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `).run(fileKey, mapping.path, mapping.displayName, content, newVersion, now);
+      }
     }
 
     // Create version history entry
-    db.prepare(`
-      INSERT INTO prompt_version_history (file_key, version, content, fix_id, change_description, created_at)
-      VALUES (?, ?, ?, NULL, 'Reset from disk file', ?)
-    `).run(fileKey, newVersion, content, now);
+    if (hasTenant) {
+      db.prepare(`
+        INSERT INTO prompt_version_history (file_key, version, content, fix_id, change_description, created_at, tenant_id)
+        VALUES (?, ?, ?, NULL, 'Reset from disk file', ?, ?)
+      `).run(fileKey, newVersion, content, now, tenantId);
+    } else {
+      db.prepare(`
+        INSERT INTO prompt_version_history (file_key, version, content, fix_id, change_description, created_at)
+        VALUES (?, ?, ?, NULL, 'Reset from disk file', ?)
+      `).run(fileKey, newVersion, content, now);
+    }
 
     return { version: newVersion, content };
   } finally {
@@ -1476,18 +1677,27 @@ function ensureDeploymentTable(db: BetterSqlite3.Database): void {
 /**
  * Get deployed versions for all prompt files
  * Returns a map of fileKey -> most recently deployed version
+ * @param tenantId - Filter by tenant (defaults to Ortho for backward compat)
  */
-export function getDeployedVersions(): Record<string, number> {
+export function getDeployedVersions(tenantId: number = DEFAULT_TENANT_ID): Record<string, number> {
   const db = getWritableDb();
 
   try {
     ensureDeploymentTable(db);
+    const hasTenant = hasTenantColumn(db, 'prompt_deployments');
 
-    const rows = db.prepare(`
-      SELECT file_key, MAX(version) as version
-      FROM prompt_deployments
-      GROUP BY file_key
-    `).all() as Array<{ file_key: string; version: number }>;
+    const rows = hasTenant
+      ? db.prepare(`
+          SELECT file_key, MAX(version) as version
+          FROM prompt_deployments
+          WHERE tenant_id = ?
+          GROUP BY file_key
+        `).all(tenantId) as Array<{ file_key: string; version: number }>
+      : db.prepare(`
+          SELECT file_key, MAX(version) as version
+          FROM prompt_deployments
+          GROUP BY file_key
+        `).all() as Array<{ file_key: string; version: number }>;
 
     const result: Record<string, number> = {};
     for (const row of rows) {
@@ -1507,20 +1717,28 @@ export function markAsDeployed(
   fileKey: string,
   version: number,
   deployedBy?: string,
-  notes?: string
+  notes?: string,
+  tenantId: number = DEFAULT_TENANT_ID
 ): { success: boolean; message: string } {
   const db = getWritableDb();
 
   try {
     ensureDeploymentTable(db);
+    const hasTenant = hasTenantColumn(db, 'prompt_deployments');
 
     const now = new Date().toISOString();
 
-    // Insert or update deployment record
-    db.prepare(`
-      INSERT OR REPLACE INTO prompt_deployments (file_key, version, deployed_at, deployed_by, notes)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(fileKey, version, now, deployedBy || null, notes || null);
+    if (hasTenant) {
+      db.prepare(`
+        INSERT OR REPLACE INTO prompt_deployments (file_key, version, deployed_at, deployed_by, notes, tenant_id)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(fileKey, version, now, deployedBy || null, notes || null, tenantId);
+    } else {
+      db.prepare(`
+        INSERT OR REPLACE INTO prompt_deployments (file_key, version, deployed_at, deployed_by, notes)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(fileKey, version, now, deployedBy || null, notes || null);
+    }
 
     return {
       success: true,
@@ -1534,7 +1752,7 @@ export function markAsDeployed(
 /**
  * Get deployment history for a prompt file
  */
-export function getDeploymentHistory(fileKey: string, limit: number = 10): Array<{
+export function getDeploymentHistory(fileKey: string, limit: number = 10, tenantId: number = DEFAULT_TENANT_ID): Array<{
   version: number;
   deployedAt: string;
   deployedBy: string | null;
@@ -1544,19 +1762,33 @@ export function getDeploymentHistory(fileKey: string, limit: number = 10): Array
 
   try {
     ensureDeploymentTable(db);
+    const hasTenant = hasTenantColumn(db, 'prompt_deployments');
 
-    const rows = db.prepare(`
-      SELECT version, deployed_at, deployed_by, notes
-      FROM prompt_deployments
-      WHERE file_key = ?
-      ORDER BY deployed_at DESC
-      LIMIT ?
-    `).all(fileKey, limit) as Array<{
-      version: number;
-      deployed_at: string;
-      deployed_by: string | null;
-      notes: string | null;
-    }>;
+    const rows = hasTenant
+      ? db.prepare(`
+          SELECT version, deployed_at, deployed_by, notes
+          FROM prompt_deployments
+          WHERE file_key = ? AND tenant_id = ?
+          ORDER BY deployed_at DESC
+          LIMIT ?
+        `).all(fileKey, tenantId, limit) as Array<{
+          version: number;
+          deployed_at: string;
+          deployed_by: string | null;
+          notes: string | null;
+        }>
+      : db.prepare(`
+          SELECT version, deployed_at, deployed_by, notes
+          FROM prompt_deployments
+          WHERE file_key = ?
+          ORDER BY deployed_at DESC
+          LIMIT ?
+        `).all(fileKey, limit) as Array<{
+          version: number;
+          deployed_at: string;
+          deployed_by: string | null;
+          notes: string | null;
+        }>;
 
     return rows.map(row => ({
       version: row.version,
@@ -1583,23 +1815,25 @@ export function getDeploymentHistory(fileKey: string, limit: number = 10): Array
  */
 export function rollbackToVersion(
   fileKey: string,
-  targetVersion: number
+  targetVersion: number,
+  tenantId: number = DEFAULT_TENANT_ID
 ): { newVersion: number; content: string; originalVersion: number } {
   // Get the content from the target version
-  const targetContent = getVersionContent(fileKey, targetVersion);
+  const targetContent = getVersionContent(fileKey, targetVersion, tenantId);
   if (!targetContent) {
     throw new Error(`Version ${targetVersion} not found for ${fileKey}`);
   }
 
   // Get current version for reference
-  const current = getPromptContent(fileKey);
+  const current = getPromptContent(fileKey, tenantId);
   const originalVersion = current?.version || 0;
 
   // Save as a new version with a rollback description
   const result = saveNewVersion(
     fileKey,
     targetContent,
-    `Rolled back to version ${targetVersion}`
+    `Rolled back to version ${targetVersion}`,
+    tenantId
   );
 
   return {
@@ -1621,7 +1855,8 @@ export function rollbackToVersion(
 export function getVersionDiff(
   fileKey: string,
   version1: number,
-  version2: number
+  version2: number,
+  tenantId: number = DEFAULT_TENANT_ID
 ): {
   version1Lines: number;
   version2Lines: number;
@@ -1629,8 +1864,8 @@ export function getVersionDiff(
   removedLines: number;
   changedLines: number;
 } {
-  const content1 = getVersionContent(fileKey, version1);
-  const content2 = getVersionContent(fileKey, version2);
+  const content1 = getVersionContent(fileKey, version1, tenantId);
+  const content2 = getVersionContent(fileKey, version2, tenantId);
 
   if (!content1 || !content2) {
     throw new Error('One or both versions not found');

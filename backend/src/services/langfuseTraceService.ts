@@ -4,6 +4,7 @@
  */
 
 import BetterSqlite3 from 'better-sqlite3';
+import { getToolNamesForConfig, getAllKnownToolNames, sqlInList } from './toolNameResolver';
 
 // ============================================================================
 // TYPE DEFINITIONS
@@ -500,6 +501,9 @@ export class LangfuseTraceService {
    * - For transfers/bookings in LLM output, only check GENERATION type
    */
   private updateSessionCachedStats(sessionId: string, configId: number): void {
+    const tools = getToolNamesForConfig(this.db, configId);
+    const toolInList = sqlInList(tools.all);
+
     this.db.prepare(`
       UPDATE production_sessions SET
         error_count = (
@@ -507,7 +511,7 @@ export class LangfuseTraceService {
           JOIN production_traces pt ON pto.trace_id = pt.trace_id
           WHERE pt.session_id = ? AND pt.langfuse_config_id = ?
             AND (pto.level = 'ERROR' OR pto.output LIKE '%"success":false%' OR pto.output LIKE '%"success": false%' OR pto.output LIKE '%_debug_error%')
-            AND pto.name IN ('chord_ortho_patient', 'schedule_appointment_ortho', 'current_date_time', 'chord_handleEscalation')
+            AND pto.name IN (${toolInList})
         ),
         has_successful_booking = (
           SELECT COUNT(*) > 0 FROM production_trace_observations pto
@@ -515,35 +519,45 @@ export class LangfuseTraceService {
           WHERE pt.session_id = ? AND pt.langfuse_config_id = ?
             AND (
               -- Tool response: Cloud9 API confirmed booking
-              (pto.name = 'schedule_appointment_ortho' AND pto.output LIKE '%Appointment GUID Added%')
-              OR (pto.name = 'schedule_appointment_ortho' AND (pto.output LIKE '%"booked":true%' OR pto.output LIKE '%"booked": true%'))
+              (pto.name IN (${sqlInList(tools.schedulingTools)}) AND pto.output LIKE '%Appointment GUID Added%')
+              OR (pto.name IN (${sqlInList(tools.schedulingTools)}) AND (pto.output LIKE '%"booked":true%' OR pto.output LIKE '%"booked": true%'))
               -- Tool response: Booking was queued for async processing (appointment created by background queue)
-              OR (pto.name = 'schedule_appointment_ortho' AND (pto.output LIKE '%"anyQueued":true%' OR pto.output LIKE '%"anyQueued": true%'))
+              OR (pto.name IN (${sqlInList(tools.schedulingTools)}) AND (pto.output LIKE '%"anyQueued":true%' OR pto.output LIKE '%"anyQueued": true%'))
+              -- NexHealth: appointmentId present and not null
+              OR (pto.name IN (${sqlInList(tools.schedulingTools)}) AND pto.output LIKE '%"appointmentId":%' AND pto.output NOT LIKE '%"appointmentId":null%' AND pto.output NOT LIKE '%"appointmentId": null%')
+              -- NexHealth K8: booking response has "id":<number>,"patient_id":<number> (appointment object returned directly)
+              OR (pto.name IN (${sqlInList(tools.schedulingTools)}) AND pto.output LIKE '%"patient_id":%' AND pto.output LIKE '%"provider_id":%' AND pto.output LIKE '%"start_time":%')
               -- LLM output: Sibling booking confirmation in PAYLOAD (only check GENERATION, not prompts)
               -- Must check for actual GUID value (quoted string), not null
               -- Pattern: "Child1_appointmentGUID": "xxx" vs "Child1_appointmentGUID": null
               OR (pto.type = 'GENERATION' AND pto.output LIKE '%"Child1_appointmentGUID": "%-%-%-%-%" %')
               OR (pto.type = 'GENERATION' AND pto.output LIKE '%"Child2_appointmentGUID": "%-%-%-%-%" %')
+              -- NexHealth: Sibling booking confirmation with integer appointmentId in PAYLOAD
+              OR (pto.type = 'GENERATION' AND pto.output LIKE '%"Child1_appointmentId":%' AND pto.output NOT LIKE '%"Child1_appointmentId": null%' AND pto.output NOT LIKE '%"Child1_appointmentId":null%')
+              OR (pto.type = 'GENERATION' AND pto.output LIKE '%"Child2_appointmentId":%' AND pto.output NOT LIKE '%"Child2_appointmentId": null%' AND pto.output NOT LIKE '%"Child2_appointmentId":null%')
             )
         ),
         has_transfer = (
           SELECT COUNT(*) > 0 FROM production_trace_observations pto
           JOIN production_traces pt ON pto.trace_id = pt.trace_id
           WHERE pt.session_id = ? AND pt.langfuse_config_id = ?
-            -- Only check LLM GENERATION outputs for actual disposition, not system prompt templates
-            AND pto.type = 'GENERATION'
             AND (
-              -- Ortho: Check Call_Final_Disposition in the payload (most reliable)
-              -- Note: Output contains escaped JSON so we match \"Transfer\" pattern
-              pto.output LIKE '%\\"Call_Final_Disposition\\": \\"Transfer\\"%'
-              OR pto.output LIKE '%\\"Call_Final_Disposition\\":\\"Transfer\\"%'
-              -- Ortho: Also check caller_intent for backward compatibility
-              OR pto.output LIKE '%\\"caller_intent\\": \\"transfer\\"%'
-              OR pto.output LIKE '%\\"caller_intent\\":\\"transfer\\"%'
-              -- Dominos: "ET": true in PAYLOAD means escalation transfer
-              -- BUT only if telephonyTransferCall is present (not telephonyDisconnectCall which is just a hangup)
-              OR (pto.output LIKE '%\\"ET\\": true%' AND pto.output LIKE '%telephonyTransferCall%')
-              OR (pto.output LIKE '%\\"ET\\":true%' AND pto.output LIKE '%telephonyTransferCall%')
+              -- === LLM GENERATION outputs for disposition ===
+              (pto.type = 'GENERATION' AND (
+                -- Ortho: Check Call_Final_Disposition in the payload (most reliable)
+                -- Note: Output contains escaped JSON so we match \"Transfer\" pattern
+                pto.output LIKE '%\\"Call_Final_Disposition\\": \\"Transfer\\"%'
+                OR pto.output LIKE '%\\"Call_Final_Disposition\\":\\"Transfer\\"%'
+                -- Ortho: Also check caller_intent for backward compatibility
+                OR pto.output LIKE '%\\"caller_intent\\": \\"transfer\\"%'
+                OR pto.output LIKE '%\\"caller_intent\\":\\"transfer\\"%'
+                -- Dominos: "ET": true in PAYLOAD means escalation transfer
+                -- BUT only if telephonyTransferCall is present (not telephonyDisconnectCall which is just a hangup)
+                OR (pto.output LIKE '%\\"ET\\": true%' AND pto.output LIKE '%telephonyTransferCall%')
+                OR (pto.output LIKE '%\\"ET\\":true%' AND pto.output LIKE '%telephonyTransferCall%')
+              ))
+              -- === Chord: Escalation tool was invoked (tool SPAN observation, not GENERATION) ===
+              OR (pto.name IN (${sqlInList(tools.escalationTools)}) AND pto.type = 'SPAN')
             )
         ),
         has_order = (
@@ -759,6 +773,7 @@ export class LangfuseTraceService {
     // IMPORTANT: Filter to match transformToApiCalls logic in testMonitorController.ts
     // - Exclude internal Langchain traces (RunnableMap, RunnableLambda, etc.)
     // - Only count GENERATION, SPAN, or tool/api related observations
+    const allToolNames = configId ? sqlInList(getToolNamesForConfig(this.db, configId).all) : sqlInList(getAllKnownToolNames());
     const sql = `
       SELECT pt.*, lc.name as config_name, lc.host as langfuse_host,
         (SELECT COUNT(*) FROM production_trace_observations pto
@@ -771,7 +786,7 @@ export class LangfuseTraceService {
          )
          AND (
            -- Filter: Only count errors from actual tool calls
-           pto.name IN ('chord_ortho_patient', 'schedule_appointment_ortho', 'current_date_time', 'chord_handleEscalation')
+           pto.name IN (${allToolNames})
          )
         ) as error_count
       FROM production_traces pt
@@ -801,6 +816,7 @@ export class LangfuseTraceService {
    */
   getTrace(traceId: string): { trace: any; observations: any[] } | null {
     // Include error_count calculated dynamically (same logic as getSession/getSessions)
+    const traceToolNames = sqlInList(getAllKnownToolNames());
     const trace = this.db.prepare(`
       SELECT pt.*, lc.name as config_name, lc.host as langfuse_host,
         (SELECT COUNT(*) FROM production_trace_observations pto
@@ -813,7 +829,7 @@ export class LangfuseTraceService {
            )
            AND (
              -- Filter: Only count errors from actual tool calls
-             pto.name IN ('chord_ortho_patient', 'schedule_appointment_ortho', 'current_date_time', 'chord_handleEscalation')
+             pto.name IN (${traceToolNames})
            )
         ) as error_count
       FROM production_traces pt
@@ -1176,12 +1192,17 @@ export class LangfuseTraceService {
     }
 
     // Disposition filter - uses same criteria as getProductionSessionStats
+    // Use config-specific tool names when configId is available, otherwise all known names
+    const sessionTools = configId ? getToolNamesForConfig(this.db, configId) : null;
+    const schedToolIn = sessionTools ? sqlInList(sessionTools.schedulingTools) : sqlInList(['schedule_appointment_ortho', 'chord_scheduling_v08', 'chord_scheduling_v07_dev']);
+    const escalToolIn = sessionTools ? sqlInList(sessionTools.escalationTools) : sqlInList(['chord_handleEscalation', 'chord_OGHandleEscalation']);
+
     if (disposition === 'bookings') {
       whereClauses.push(`ps.session_id IN (
         SELECT DISTINCT t.session_id
         FROM production_trace_observations o
         JOIN production_traces t ON o.trace_id = t.trace_id
-        WHERE o.name = 'schedule_appointment_ortho' AND o.input LIKE '%book_%'
+        WHERE o.name IN (${schedToolIn}) AND o.input LIKE '%book_%'
       )`);
     } else if (disposition === 'errors') {
       whereClauses.push('ps.error_count > 0');
@@ -1190,7 +1211,7 @@ export class LangfuseTraceService {
         SELECT DISTINCT t.session_id
         FROM production_trace_observations o
         JOIN production_traces t ON o.trace_id = t.trace_id
-        WHERE o.name = 'chord_handleEscalation'
+        WHERE o.name IN (${escalToolIn})
       )`);
     }
 
@@ -1215,8 +1236,8 @@ export class LangfuseTraceService {
         SELECT o.input, o.output FROM production_trace_observations o
         JOIN production_traces t ON o.trace_id = t.trace_id
         WHERE t.session_id = ?
-          AND o.name = 'schedule_appointment_ortho'
-          AND o.input LIKE '%book_child%'
+          AND o.name IN (${schedToolIn})
+          AND o.input LIKE '%book_%'
         LIMIT 1
       `);
       for (const s of bookingSessions) {
@@ -1291,6 +1312,12 @@ export class LangfuseTraceService {
   } | null {
     // Build query for session with error_count calculated dynamically
     // (same logic as getSessions() to ensure consistency)
+    // Resolve tool names: use config-specific if configId known, otherwise all known names
+    const sessToolNames = configId ? sqlInList(getToolNamesForConfig(this.db, configId).all) : sqlInList(getAllKnownToolNames());
+    const sessSchedTools = configId
+      ? sqlInList(getToolNamesForConfig(this.db, configId).schedulingTools)
+      : sqlInList(['schedule_appointment_ortho', 'chord_scheduling_v08', 'chord_scheduling_v07_dev']);
+
     let sessionQuery = `
       SELECT ps.*, lc.name as config_name, lc.host as langfuse_host,
         (SELECT COUNT(*) FROM production_trace_observations pto
@@ -1305,7 +1332,7 @@ export class LangfuseTraceService {
            )
            AND (
              -- Filter: Only count errors from actual tool calls
-             pto.name IN ('chord_ortho_patient', 'schedule_appointment_ortho', 'current_date_time', 'chord_handleEscalation')
+             pto.name IN (${sessToolNames})
            )
         ) as error_count,
         (SELECT COUNT(*) > 0 FROM production_trace_observations pto
@@ -1314,10 +1341,14 @@ export class LangfuseTraceService {
            AND pt.langfuse_config_id = ps.langfuse_config_id
            AND (
              -- Tool response: Cloud9 API confirmed booking
-             (pto.name = 'schedule_appointment_ortho' AND pto.output LIKE '%Appointment GUID Added%')
-             OR (pto.name = 'schedule_appointment_ortho' AND (pto.output LIKE '%"booked":true%' OR pto.output LIKE '%"booked": true%'))
+             (pto.name IN (${sessSchedTools}) AND pto.output LIKE '%Appointment GUID Added%')
+             OR (pto.name IN (${sessSchedTools}) AND (pto.output LIKE '%"booked":true%' OR pto.output LIKE '%"booked": true%'))
              -- Tool response: Booking was queued for async processing (appointment created by background queue)
-             OR (pto.name = 'schedule_appointment_ortho' AND (pto.output LIKE '%"anyQueued":true%' OR pto.output LIKE '%"anyQueued": true%'))
+             OR (pto.name IN (${sessSchedTools}) AND (pto.output LIKE '%"anyQueued":true%' OR pto.output LIKE '%"anyQueued": true%'))
+             -- NexHealth: appointmentId present and not null
+             OR (pto.name IN (${sessSchedTools}) AND pto.output LIKE '%"appointmentId":%' AND pto.output NOT LIKE '%"appointmentId":null%' AND pto.output NOT LIKE '%"appointmentId": null%')
+             -- NexHealth K8: booking response has "patient_id"/<number>,"provider_id":<number>,"start_time" (appointment object)
+             OR (pto.name IN (${sessSchedTools}) AND pto.output LIKE '%"patient_id":%' AND pto.output LIKE '%"provider_id":%' AND pto.output LIKE '%"start_time":%')
              -- LLM output: Sibling booking confirmation in PAYLOAD (only check GENERATION, not prompts)
              -- Must check for actual GUID value (quoted string), not null
              OR (pto.type = 'GENERATION' AND pto.output LIKE '%"Child1_appointmentGUID": "%-%-%-%-%" %')
@@ -1391,7 +1422,7 @@ export class LangfuseTraceService {
            )
            AND (
              -- Filter: Only count errors from actual tool calls
-             pto.name IN ('chord_ortho_patient', 'schedule_appointment_ortho', 'current_date_time', 'chord_handleEscalation')
+             pto.name IN (${sessToolNames})
            )
         ) as error_count
       FROM production_traces pt
@@ -1773,6 +1804,8 @@ export class LangfuseTraceService {
   getTraceInsights(configId: number, fromDate: string, toDate: string): any {
     console.log(`[LangfuseTraceService] Getting insights for config ${configId} from ${fromDate} to ${toDate}`);
 
+    const insightTools = getToolNamesForConfig(this.db, configId);
+    const insightToolInList = sqlInList(insightTools.all);
     const daysCount = Math.ceil((new Date(toDate).getTime() - new Date(fromDate).getTime()) / (1000 * 60 * 60 * 24));
 
     // Overview counts
@@ -1799,7 +1832,10 @@ export class LangfuseTraceService {
       SELECT COUNT(*) as cnt
       FROM production_trace_observations o
       JOIN production_traces t ON o.trace_id = t.trace_id
-      WHERE o.output LIKE '%Appointment GUID Added%'
+      WHERE (
+        o.output LIKE '%Appointment GUID Added%'
+        OR (o.name IN (${sqlInList(insightTools.schedulingTools)}) AND o.output LIKE '%"patient_id":%' AND o.output LIKE '%"provider_id":%' AND o.output LIKE '%"start_time":%')
+      )
         AND t.started_at >= ? AND t.started_at <= ?
         AND t.langfuse_config_id = ?
     `).get(fromDate, toDate, configId) as any)?.cnt || 0;
@@ -1822,7 +1858,7 @@ export class LangfuseTraceService {
       SELECT DISTINCT t.session_id
       FROM production_trace_observations o
       JOIN production_traces t ON o.trace_id = t.trace_id
-      WHERE o.name = 'schedule_appointment_ortho'
+      WHERE o.name IN (${sqlInList(insightTools.schedulingTools)})
         AND o.input LIKE '%"patientGUID":""%'
         AND t.started_at >= ? AND t.started_at <= ?
         AND t.langfuse_config_id = ?
@@ -1833,7 +1869,7 @@ export class LangfuseTraceService {
       SELECT COUNT(DISTINCT o.trace_id) as cnt
       FROM production_trace_observations o
       JOIN production_traces t ON o.trace_id = t.trace_id
-      WHERE o.name = 'schedule_appointment_ortho'
+      WHERE o.name IN (${sqlInList(insightTools.schedulingTools)})
         AND o.input LIKE '%"patientGUID":""%'
         AND t.started_at >= ? AND t.started_at <= ?
         AND t.langfuse_config_id = ?
@@ -1850,7 +1886,7 @@ export class LangfuseTraceService {
       FROM production_trace_observations o
       JOIN production_traces t ON o.trace_id = t.trace_id
       WHERE (o.output LIKE '%502%' OR o.output LIKE '%500%')
-        AND o.name = 'schedule_appointment_ortho'
+        AND o.name IN (${insightToolInList})
         AND t.started_at >= ? AND t.started_at <= ?
         AND t.langfuse_config_id = ?
     `).all(fromDate, toDate, configId) as any[];
@@ -1869,7 +1905,7 @@ export class LangfuseTraceService {
       SELECT COUNT(*) as cnt
       FROM production_trace_observations o
       JOIN production_traces t ON o.trace_id = t.trace_id
-      WHERE o.name = 'schedule_appointment_ortho'
+      WHERE o.name IN (${sqlInList(insightTools.schedulingTools)})
         AND o.input LIKE '%"action":"slots"%'
         AND t.started_at >= ? AND t.started_at <= ?
         AND t.langfuse_config_id = ?
@@ -1879,7 +1915,7 @@ export class LangfuseTraceService {
       SELECT DISTINCT t.session_id
       FROM production_trace_observations o
       JOIN production_traces t ON o.trace_id = t.trace_id
-      WHERE o.name = 'schedule_appointment_ortho'
+      WHERE o.name IN (${sqlInList(insightTools.schedulingTools)})
         AND o.output LIKE '%"success":false%'
         AND t.started_at >= ? AND t.started_at <= ?
         AND t.langfuse_config_id = ?
@@ -1902,7 +1938,10 @@ export class LangfuseTraceService {
         SELECT 1 FROM production_traces t
         JOIN production_trace_observations o ON t.trace_id = o.trace_id
         WHERE t.session_id = ?
-          AND o.output LIKE '%Appointment GUID Added%'
+          AND (
+            o.output LIKE '%Appointment GUID Added%'
+            OR (o.name IN (${sqlInList(insightTools.schedulingTools)}) AND o.output LIKE '%"patient_id":%' AND o.output LIKE '%"provider_id":%' AND o.output LIKE '%"start_time":%')
+          )
         LIMIT 1
       `).get(row.session_id);
       if (hasBooking) recovered++;
@@ -1981,7 +2020,7 @@ export class LangfuseTraceService {
       SELECT o.name, COUNT(*) as count, AVG(o.latency_ms) as avg_latency
       FROM production_trace_observations o
       JOIN production_traces t ON o.trace_id = t.trace_id
-      WHERE o.name IN ('chord_ortho_patient', 'schedule_appointment_ortho', 'current_date_time', 'chord_handleEscalation')
+      WHERE o.name IN (${insightToolInList})
         AND t.started_at >= ? AND t.started_at <= ?
         AND t.langfuse_config_id = ?
       GROUP BY o.name
@@ -1997,7 +2036,7 @@ export class LangfuseTraceService {
       SELECT DISTINCT t.session_id, o.input
       FROM production_trace_observations o
       JOIN production_traces t ON o.trace_id = t.trace_id
-      WHERE o.name = 'chord_handleEscalation'
+      WHERE o.name IN (${sqlInList(insightTools.escalationTools)})
         AND t.started_at >= ? AND t.started_at <= ?
         AND t.langfuse_config_id = ?
     `).all(fromDate, toDate, configId) as any[];
@@ -2010,6 +2049,18 @@ export class LangfuseTraceService {
         escalationReasons[reason] = (escalationReasons[reason] || 0) + 1;
       } catch (e) {}
     });
+
+    // Helper to aggregate tool stats across multiple tool name variants
+    function sumToolStats(map: Record<string, { count: number; avgLatencyMs: number }>, names: string[]) {
+      let total = { count: 0, avgLatencyMs: 0 };
+      let totalLatency = 0;
+      for (const n of names) {
+        const s = map[n];
+        if (s) { total.count += s.count; totalLatency += s.avgLatencyMs * s.count; }
+      }
+      if (total.count > 0) total.avgLatencyMs = Math.round(totalLatency / total.count);
+      return total;
+    }
 
     // Build response
     return {
@@ -2133,10 +2184,17 @@ export class LangfuseTraceService {
         totalCost
       },
       toolCallStats: {
-        chordOrthoPatient: toolStatsMap['chord_ortho_patient'] || { count: 0, avgLatencyMs: 0 },
-        scheduleAppointmentOrtho: toolStatsMap['schedule_appointment_ortho'] || { count: 0, avgLatencyMs: 0 },
-        currentDateTime: toolStatsMap['current_date_time'] || { count: 0, avgLatencyMs: 0 },
-        handleEscalation: toolStatsMap['chord_handleEscalation'] || { count: 0, avgLatencyMs: 0 }
+        patientTool: sumToolStats(toolStatsMap, insightTools.patientTools),
+        schedulingTool: sumToolStats(toolStatsMap, insightTools.schedulingTools),
+        currentDateTime: sumToolStats(toolStatsMap, insightTools.dateTimeTools),
+        handleEscalation: sumToolStats(toolStatsMap, insightTools.escalationTools),
+        // Include actual tool names for frontend display
+        toolNames: {
+          patientTool: insightTools.patientTool,
+          schedulingTool: insightTools.schedulingTool,
+          dateTimeTool: insightTools.dateTimeTool,
+          escalationTool: insightTools.escalationTool,
+        }
       },
       escalations: {
         count: escalations.length,

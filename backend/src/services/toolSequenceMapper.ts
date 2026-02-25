@@ -6,6 +6,8 @@
  */
 
 import type { CallerIntent, CallerIntentType } from './callerIntentClassifier';
+import type { ToolNames } from './toolNameResolver';
+import { getDefaultToolNames } from './toolNameResolver';
 
 // ============================================================================
 // TYPE DEFINITIONS
@@ -42,31 +44,6 @@ export interface ToolSequenceResult {
 // EXPECTED SEQUENCES
 // ============================================================================
 
-const BOOKING_SEQUENCE: ExpectedStep[] = [
-  { toolName: 'current_date_time', description: 'Get current date/time', occurrences: 'once' },
-  { toolName: 'chord_ortho_patient', action: 'lookup', description: 'Patient lookup', occurrences: 'once' },
-  { toolName: 'schedule_appointment_ortho', action: 'slots', description: 'Fetch available slots', occurrences: 'per_child' },
-  { toolName: 'chord_ortho_patient', action: 'create_patient', description: 'Create new patient', occurrences: 'per_child', optional: true },
-  { toolName: 'schedule_appointment_ortho', action: 'book_child', description: 'Book appointment', occurrences: 'per_child' },
-];
-
-const RESCHEDULING_SEQUENCE: ExpectedStep[] = [
-  { toolName: 'current_date_time', description: 'Get current date/time', occurrences: 'once' },
-  { toolName: 'chord_ortho_patient', action: 'lookup', description: 'Patient lookup', occurrences: 'once' },
-  { toolName: 'schedule_appointment_ortho', action: 'slots', description: 'Fetch available slots', occurrences: 'once' },
-  { toolName: 'schedule_appointment_ortho', action: 'cancel', description: 'Cancel existing appointment', occurrences: 'once' },
-  { toolName: 'schedule_appointment_ortho', action: 'book_child', description: 'Book new appointment', occurrences: 'once' },
-];
-
-const CANCELLATION_SEQUENCE: ExpectedStep[] = [
-  { toolName: 'chord_ortho_patient', action: 'lookup', description: 'Patient lookup', occurrences: 'once' },
-  { toolName: 'schedule_appointment_ortho', action: 'cancel', description: 'Cancel appointment', occurrences: 'once' },
-];
-
-const INFO_LOOKUP_SEQUENCE: ExpectedStep[] = [
-  { toolName: 'chord_ortho_patient', action: 'lookup', description: 'Patient lookup', occurrences: 'once' },
-];
-
 // Action aliases: map canonical action names to all observed variants
 const ACTION_ALIASES: Record<string, string[]> = {
   slots: ['slots', 'grouped_slots', 'get_slots'],
@@ -76,12 +53,35 @@ const ACTION_ALIASES: Record<string, string[]> = {
   cancel: ['cancel', 'cancel_appointment'],
 };
 
-const SEQUENCE_MAP: Record<CallerIntentType, ExpectedStep[]> = {
-  booking: BOOKING_SEQUENCE,
-  rescheduling: RESCHEDULING_SEQUENCE,
-  cancellation: CANCELLATION_SEQUENCE,
-  info_lookup: INFO_LOOKUP_SEQUENCE,
-};
+/** Build tool sequences dynamically from resolved tool names */
+function buildSequences(tools: ToolNames): Record<CallerIntentType, ExpectedStep[]> {
+  return {
+    booking: [
+      { toolName: tools.dateTimeTool, description: 'Get current date/time', occurrences: 'once' },
+      { toolName: tools.patientTool, action: 'lookup', description: 'Patient lookup', occurrences: 'once' },
+      { toolName: tools.schedulingTool, action: 'slots', description: 'Fetch available slots', occurrences: 'per_child' },
+      { toolName: tools.patientTool, action: 'create_patient', description: 'Create new patient', occurrences: 'per_child', optional: true },
+      { toolName: tools.schedulingTool, action: 'book_child', description: 'Book appointment', occurrences: 'per_child' },
+    ],
+    rescheduling: [
+      { toolName: tools.dateTimeTool, description: 'Get current date/time', occurrences: 'once' },
+      { toolName: tools.patientTool, action: 'lookup', description: 'Patient lookup', occurrences: 'once' },
+      { toolName: tools.schedulingTool, action: 'slots', description: 'Fetch available slots', occurrences: 'once' },
+      { toolName: tools.schedulingTool, action: 'cancel', description: 'Cancel existing appointment', occurrences: 'once' },
+      { toolName: tools.schedulingTool, action: 'book_child', description: 'Book new appointment', occurrences: 'once' },
+    ],
+    cancellation: [
+      { toolName: tools.patientTool, action: 'lookup', description: 'Patient lookup', occurrences: 'once' },
+      { toolName: tools.schedulingTool, action: 'cancel', description: 'Cancel appointment', occurrences: 'once' },
+    ],
+    info_lookup: [
+      { toolName: tools.patientTool, action: 'lookup', description: 'Patient lookup', occurrences: 'once' },
+    ],
+  };
+}
+
+// Default sequences (Ortho/Cloud9) for backward compatibility
+const DEFAULT_SEQUENCE_MAP = buildSequences(getDefaultToolNames());
 
 // ============================================================================
 // PUBLIC FUNCTIONS
@@ -89,20 +89,24 @@ const SEQUENCE_MAP: Record<CallerIntentType, ExpectedStep[]> = {
 
 /**
  * Get the expected tool call sequence for a given caller intent.
+ * Pass toolNames to use tenant-specific tool names (e.g., Chord vs Ortho).
  */
-export function getExpectedSequence(intent: CallerIntent): ExpectedStep[] {
-  return SEQUENCE_MAP[intent.type] || INFO_LOOKUP_SEQUENCE;
+export function getExpectedSequence(intent: CallerIntent, toolNames?: ToolNames): ExpectedStep[] {
+  const seqMap = toolNames ? buildSequences(toolNames) : DEFAULT_SEQUENCE_MAP;
+  return seqMap[intent.type] || seqMap.info_lookup;
 }
 
 /**
  * Map actual observations against expected tool sequence to determine completion.
+ * Pass toolNames to use tenant-specific tool names (e.g., Chord vs Ortho).
  */
-export function mapToolSequence(intent: CallerIntent, observations: any[]): ToolSequenceResult {
-  const expectedSteps = getExpectedSequence(intent);
+export function mapToolSequence(intent: CallerIntent, observations: any[], toolNames?: ToolNames): ToolSequenceResult {
+  const expectedSteps = getExpectedSequence(intent, toolNames);
   const childCount = intent.bookingDetails?.childCount || 1;
 
   // Pre-scan for patient creations embedded in book_child outputs
-  const embeddedCreations = countEmbeddedPatientCreations(observations);
+  const schedToolNames = toolNames ? toolNames.schedulingTools : undefined;
+  const embeddedCreations = countEmbeddedPatientCreations(observations, schedToolNames);
 
   const stepStatuses: StepStatus[] = expectedSteps.map((step) => {
     const expectedCount = step.occurrences === 'per_child' ? childCount : 1;
@@ -198,13 +202,14 @@ export function mapToolSequence(intent: CallerIntent, observations: any[]): Tool
  * The book_child action creates patients inline (output.children[].created: true)
  * rather than using a separate create_patient tool call.
  */
-function countEmbeddedPatientCreations(observations: any[]): { count: number; observationIds: string[] } {
+function countEmbeddedPatientCreations(observations: any[], schedulingToolNames?: string[]): { count: number; observationIds: string[] } {
+  const schedNames = schedulingToolNames || ['schedule_appointment_ortho', 'chord_scheduling_v08', 'chord_scheduling_v07_dev'];
   let count = 0;
   const observationIds: string[] = [];
 
   for (const obs of observations) {
-    // Look for schedule_appointment_ortho with book_child action
-    if (obs.name !== 'schedule_appointment_ortho') continue;
+    // Look for scheduling tool with book_child action
+    if (!schedNames.includes(obs.name)) continue;
 
     const input = parseObservationInput(obs.input);
     if (input?.action !== 'book_child') continue;

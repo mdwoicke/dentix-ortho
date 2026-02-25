@@ -130,6 +130,7 @@ export const ALL_TABS = [
   'ab_testing_sandbox', 'ai_prompting', 'api_testing', 'advanced',
   'dominos_dashboard', 'dominos_orders', 'dominos_health',
   'dominos_menu', 'dominos_sessions', 'dominos_errors',
+  'list_management',
 ] as const;
 
 /** @deprecated Use ALL_TABS instead */

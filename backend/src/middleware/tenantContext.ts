@@ -22,6 +22,7 @@ export interface TenantContext {
   flowise: { url: string; apiKey: string };
   langfuse: { host: string; publicKey: string; secretKey: string };
   dominos: { serviceUrl: string; authToken: string; defaultStoreId: string; dataSourceUrl: string };
+  fabricWorkflow: { url: string; username: string; password: string };
   v1FilesDir: string;
   noderedFlowsDir: string;
   colorPrimary: string;
@@ -87,6 +88,11 @@ function tenantToContext(tenant: Tenant): TenantContext {
       authToken: tenant.dominos_service_auth_token || '',
       defaultStoreId: tenant.dominos_default_store_id || '',
       dataSourceUrl: tenant.dominos_data_source_url || '',
+    },
+    fabricWorkflow: {
+      url: tenant.fabric_workflow_url || '',
+      username: tenant.fabric_workflow_username || '',
+      password: tenant.fabric_workflow_password || '',
     },
     v1FilesDir: tenant.v1_files_dir,
     noderedFlowsDir: tenant.nodered_flows_dir,

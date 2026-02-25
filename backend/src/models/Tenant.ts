@@ -36,6 +36,9 @@ export interface Tenant {
   dominos_service_auth_token: string | null;
   dominos_default_store_id: string | null;
   dominos_data_source_url: string | null;
+  fabric_workflow_url: string | null;
+  fabric_workflow_username: string | null;
+  fabric_workflow_password: string | null;
   is_active: boolean;
   is_default: boolean;
   created_at: string;
@@ -93,6 +96,9 @@ export interface CreateTenantInput {
   dominos_service_auth_token?: string;
   dominos_default_store_id?: string;
   dominos_data_source_url?: string;
+  fabric_workflow_url?: string;
+  fabric_workflow_username?: string;
+  fabric_workflow_password?: string;
 }
 
 export interface UpdateTenantInput extends Partial<CreateTenantInput> {
@@ -168,7 +174,8 @@ export class TenantModel {
         langfuse_host, langfuse_public_key, langfuse_secret_key,
         v1_files_dir, nodered_flows_dir,
         dominos_service_url, dominos_service_auth_token, dominos_default_store_id,
-        dominos_data_source_url
+        dominos_data_source_url,
+        fabric_workflow_url, fabric_workflow_username, fabric_workflow_password
       ) VALUES (
         ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?,
@@ -178,7 +185,8 @@ export class TenantModel {
         ?, ?, ?,
         ?, ?,
         ?, ?, ?,
-        ?
+        ?,
+        ?, ?, ?
       )
     `);
 
@@ -211,6 +219,9 @@ export class TenantModel {
       input.dominos_service_auth_token || null,
       input.dominos_default_store_id || null,
       input.dominos_data_source_url || null,
+      input.fabric_workflow_url || null,
+      input.fabric_workflow_username || null,
+      input.fabric_workflow_password || null,
     );
 
     loggers.dbOperation('INSERT', 'tenants', { slug: input.slug });
@@ -237,6 +248,8 @@ export class TenantModel {
       v1_files_dir: 'v1_files_dir', nodered_flows_dir: 'nodered_flows_dir',
       dominos_service_url: 'dominos_service_url', dominos_service_auth_token: 'dominos_service_auth_token',
       dominos_default_store_id: 'dominos_default_store_id', dominos_data_source_url: 'dominos_data_source_url',
+      fabric_workflow_url: 'fabric_workflow_url', fabric_workflow_username: 'fabric_workflow_username',
+      fabric_workflow_password: 'fabric_workflow_password',
     };
 
     for (const [key, col] of Object.entries(fields)) {

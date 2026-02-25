@@ -7,6 +7,7 @@
  *
  * File Keys:
  *   nodered_flow, scheduling_tool, patient_tool, system_prompt
+ *   chord_nodered_flow, chord_scheduling_tool, chord_patient_tool, chord_system_prompt
  *
  * For tools: extracts "func" field and saves to both DB and a .js file
  */
@@ -17,12 +18,20 @@ const path = require('path');
 
 const DB_PATH = path.join(__dirname, '../data/test-results.db');
 const V1_DIR = path.join(__dirname, '../../docs/v1');
+const TENANTS_DIR = path.join(__dirname, '../../tenants');
 
 const FILE_MAPPINGS = {
+  // Default tenant (Cloud9 / Ortho)
   nodered_flow: { path: path.join(V1_DIR, 'nodered_Cloud9_flows.json'), displayName: 'Node Red Flows', extractFunc: false },
   scheduling_tool: { path: path.join(V1_DIR, 'schedule_appointment_dso_Tool.json'), displayName: 'Scheduling Tool', extractFunc: true, funcFile: 'scheduling_tool_func.js' },
   patient_tool: { path: path.join(V1_DIR, 'chord_dso_patient_Tool.json'), displayName: 'Patient Tool', extractFunc: true, funcFile: 'patient_tool_func.js' },
-  system_prompt: { path: path.join(V1_DIR, 'Chord_Cloud9_SystemPrompt.md'), displayName: 'System Prompt', extractFunc: false }
+  system_prompt: { path: path.join(V1_DIR, 'Chord_Cloud9_SystemPrompt.md'), displayName: 'System Prompt', extractFunc: false },
+
+  // Chord (NexHealth) tenant
+  chord_nodered_flow: { path: path.join(TENANTS_DIR, 'chord/v1/nodered_NexHealth_flows.json'), displayName: 'Chord Node Red Flows', extractFunc: false },
+  chord_scheduling_tool: { path: path.join(TENANTS_DIR, 'chord/v1/schedule_appointment_dso_Tool.json'), displayName: 'Chord Scheduling Tool', extractFunc: true, funcFile: 'scheduling_tool_func.js', funcDir: path.join(TENANTS_DIR, 'chord/v1') },
+  chord_patient_tool: { path: path.join(TENANTS_DIR, 'chord/v1/chord_dso_patient_Tool.json'), displayName: 'Chord Patient Tool', extractFunc: true, funcFile: 'patient_tool_func.js', funcDir: path.join(TENANTS_DIR, 'chord/v1') },
+  chord_system_prompt: { path: path.join(TENANTS_DIR, 'chord/v1/Chord_NexHealth_SystemPrompt.md'), displayName: 'Chord System Prompt', extractFunc: false, escapedDir: path.join(TENANTS_DIR, 'chord/v1') }
 };
 
 function updateVersion(fileKey, changeDescription) {
@@ -43,10 +52,11 @@ function updateVersion(fileKey, changeDescription) {
     const json = JSON.parse(content);
     const rawFunc = json.func;
 
-    // Write raw version for reference
-    const funcPath = path.join(V1_DIR, mapping.funcFile);
+    // Write raw version for reference (use funcDir if specified, else V1_DIR)
+    const targetDir = mapping.funcDir || V1_DIR;
+    const funcPath = path.join(targetDir, mapping.funcFile);
     fs.writeFileSync(funcPath, rawFunc);
-    console.log(`Extracted func -> ${mapping.funcFile} (${rawFunc.length} chars)`);
+    console.log(`Extracted func -> ${funcPath} (${rawFunc.length} chars)`);
 
     // ALWAYS create escaped version for Flowise (double curly brackets)
     const escaped = rawFunc.split('{').join('{{').split('}').join('}}');
@@ -59,11 +69,12 @@ function updateVersion(fileKey, changeDescription) {
   }
 
   // For system prompt, also create escaped version
-  if (fileKey === 'system_prompt') {
+  if (fileKey === 'system_prompt' || fileKey === 'chord_system_prompt') {
+    const escapedDir = mapping.escapedDir || V1_DIR;
     const escaped = content.split('{').join('{{').split('}').join('}}');
-    const escapedPath = path.join(V1_DIR, 'system_prompt_escaped.md');
+    const escapedPath = path.join(escapedDir, 'system_prompt_escaped.md');
     fs.writeFileSync(escapedPath, escaped);
-    console.log(`Escaped for Flowise -> system_prompt_escaped.md (${escaped.length} chars)`);
+    console.log(`Escaped for Flowise -> ${escapedPath} (${escaped.length} chars)`);
     // content remains unchanged (raw version for DB)
   }
 

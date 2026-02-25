@@ -53,7 +53,7 @@ export interface ChildVerification {
   details: RecordVerification[];
 }
 
-export type FulfillmentStatus = 'verified' | 'partial' | 'failed' | 'no_claims';
+export type FulfillmentStatus = 'verified' | 'partial' | 'failed' | 'no_claims' | 'observation_verified';
 
 export interface FulfillmentVerdict {
   status: FulfillmentStatus;
@@ -87,13 +87,15 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Try to extract a GUID-like value from an object using multiple field name variations.
+ * Try to extract a GUID-like or ID value from an object using multiple field name variations.
+ * Supports both Cloud9 UUIDs (string, length > 8) and NexHealth integer IDs.
  */
 function extractGuid(obj: any, ...keys: string[]): string | undefined {
   if (!obj || typeof obj !== 'object') return undefined;
   for (const key of keys) {
     const val = obj[key];
-    if (typeof val === 'string' && val.length > 8) return val;
+    if (typeof val === 'string' && val.length > 0) return val;
+    if (typeof val === 'number' && val > 0) return String(val);
   }
   return undefined;
 }
@@ -160,9 +162,9 @@ export function extractClaimedRecords(observations: any[], _intent: CallerIntent
     if (action === 'book_child' && output) {
       // New format: output.children[] array with per-child results + output.parent
       if (Array.isArray(output.children)) {
-        // Extract parent claim if present
+        // Extract parent claim if present (Cloud9 UUID or NexHealth integer)
         if (output.parent) {
-          const parentGuid = extractGuid(output.parent, 'patientGUID', 'patientGuid', 'PatientGUID', 'guid');
+          const parentGuid = extractGuid(output.parent, 'patientGUID', 'patientGuid', 'PatientGUID', 'patientId', 'guid');
           if (parentGuid) {
             const parentName = output.parent.firstName && output.parent.lastName
               ? `${output.parent.firstName} ${output.parent.lastName}`
@@ -180,8 +182,8 @@ export function extractClaimedRecords(observations: any[], _intent: CallerIntent
         for (const child of output.children) {
           const childName = child.firstName || child.childName || child.name || undefined;
 
-          // Patient claim from child
-          const childPatGuid = extractGuid(child, 'patientGUID', 'patientGuid', 'PatientGUID', 'guid');
+          // Patient claim from child (Cloud9 UUID or NexHealth integer)
+          const childPatGuid = extractGuid(child, 'patientGUID', 'patientGuid', 'PatientGUID', 'patientId', 'guid');
           if (childPatGuid) {
             claims.push({
               type: 'patient',
@@ -192,9 +194,9 @@ export function extractClaimedRecords(observations: any[], _intent: CallerIntent
             });
           }
 
-          // Appointment claim from child.appointment
+          // Appointment claim from child.appointment (Cloud9 UUID or NexHealth integer)
           const appt = child.appointment || child;
-          const apptGuid = extractGuid(appt, 'appointmentGUID', 'appointmentGuid', 'AppointmentGUID', 'apptGuid', 'guid');
+          const apptGuid = extractGuid(appt, 'appointmentGUID', 'appointmentGuid', 'AppointmentGUID', 'appointmentId', 'apptGuid', 'id', 'guid');
           if (apptGuid) {
             claims.push({
               type: 'appointment',
@@ -202,7 +204,7 @@ export function extractClaimedRecords(observations: any[], _intent: CallerIntent
               patientGuid: childPatGuid,
               claimedName: childName,
               childName,
-              claimedDate: appt.startTime || appt.date || undefined,
+              claimedDate: appt.startTime || appt.start_time || appt.date || undefined,
               source: `book_child_appt:${obsId}`,
             });
           } else if (child.status === 'queued' || child.queued) {
@@ -211,20 +213,22 @@ export function extractClaimedRecords(observations: any[], _intent: CallerIntent
           }
         }
       } else {
-        // Legacy flat format: single GUID at top level
-        const apptGuid = extractGuid(output, 'appointmentGuid', 'AppointmentGUID', 'apptGuid', 'apptGUID', 'guid', 'GUID');
+        // Legacy flat format or NexHealth K8 raw pass-through: single ID at top level
+        const apptGuid = extractGuid(output, 'appointmentGuid', 'AppointmentGUID', 'appointmentId', 'apptGuid', 'apptGUID', 'guid', 'GUID')
+          // NexHealth K8: top-level { id, patient_id, provider_id, start_time }
+          || (output.patient_id && output.start_time ? extractGuid(output, 'id') : undefined);
         if (apptGuid) {
-          const patGuid = extractGuid(output, 'patientGuid', 'PatientGUID', 'patGUID')
-            || extractGuid(input, 'patientGuid', 'PatientGUID', 'patGUID');
+          const patGuid = extractGuid(output, 'patientGuid', 'PatientGUID', 'patientId', 'patient_id', 'patGUID')
+            || extractGuid(input, 'patientGuid', 'PatientGUID', 'patientId', 'patGUID');
 
-          const childName = input?.childName || output?.childName || undefined;
+          const childName = input?.childName || output?.childName || output?.patient_name || undefined;
           claims.push({
             type: 'appointment',
             guid: apptGuid,
             patientGuid: patGuid,
             claimedName: childName,
             childName,
-            claimedDate: input?.date || input?.startTime || output?.date || output?.startTime || undefined,
+            claimedDate: input?.date || input?.startTime || output?.date || output?.startTime || output?.start_time || undefined,
             source: `book_child:${obsId}`,
           });
         }
@@ -451,13 +455,51 @@ function buildSummary(
 }
 
 /**
+ * Build observation-based verification for non-Cloud9 tenants (e.g., NexHealth/Chord).
+ * Instead of calling an external API, we trust the tool observation outputs as proof.
+ */
+function verifyFromObservations(
+  claims: ClaimedRecord[],
+  intent: CallerIntent,
+): FulfillmentVerdict {
+  const isBookingIntent = intent.type === 'booking' || intent.type === 'rescheduling';
+
+  // Build pseudo-verifications from claims — treat the observation output as truth
+  const verifications: RecordVerification[] = claims.map((claim) => ({
+    claimed: claim,
+    exists: true, // Tool returned a valid ID, so we trust it exists
+    mismatches: [],
+  }));
+
+  const { childVerifications, parentVerifications } = buildChildVerifications(claims, verifications, intent);
+
+  const hasAnyBooking = childVerifications.some(
+    (cv) => cv.appointmentRecordStatus === 'pass'
+  );
+
+  const summary = isBookingIntent
+    ? `Verified from tool outputs (NexHealth — no live API check). ${buildSummary(childVerifications, parentVerifications, isBookingIntent)}`
+    : 'No booking records to verify (NexHealth tenant)';
+
+  return {
+    status: hasAnyBooking || !isBookingIntent ? 'observation_verified' : 'no_claims',
+    verifications,
+    childVerifications,
+    summary,
+    verifiedAt: new Date().toISOString(),
+  };
+}
+
+/**
  * Verify fulfillment for a session by extracting claimed records from observations
  * and checking them against Cloud9 production API.
+ * For non-Cloud9 tenants (tenantId provided), verification uses observation data only.
  */
 export async function verifyFulfillment(
   _sessionId: string,
   observations: any[],
   intent: CallerIntent,
+  tenantId?: number,
 ): Promise<FulfillmentVerdict> {
   const claims = extractClaimedRecords(observations, intent);
   const isBookingIntent = intent.type === 'booking' || intent.type === 'rescheduling';
@@ -472,6 +514,11 @@ export async function verifyFulfillment(
         : 'No verifiable claims found in session observations',
       verifiedAt: new Date().toISOString(),
     };
+  }
+
+  // Non-Cloud9 tenants (e.g., Chord/NexHealth tenant 5): verify from observations only
+  if (tenantId && tenantId !== 1) {
+    return verifyFromObservations(claims, intent);
   }
 
   const client = new Cloud9Client('production');

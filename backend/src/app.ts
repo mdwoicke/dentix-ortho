@@ -18,6 +18,7 @@ import traceAnalysisRoutes from './routes/traceAnalysis';
 import dominosRoutes from './routes/dominos';
 import apiAgentRoutes from './routes/apiAgent';
 import nodeRedProxyRoutes from './routes/nodeRedProxy';
+import fabricWorkflowRoutes from './routes/fabricWorkflow';
 import path from 'path';
 
 /**
@@ -56,6 +57,16 @@ app.use((req: Request, res: Response, next) => {
   next();
 });
 
+// Normalize session IDs in URL path: browsers/URLSearchParams decode '+' as space
+// in conv_ session IDs (e.g., conv_9_+19546824812 → conv_9_ 19546824812).
+// Re-encode spaces back to '+' in the URL path before routing.
+app.use((req, _res, next) => {
+  if (req.path.includes('/conv_') && req.path.includes('%20')) {
+    req.url = req.url.replace(/%20/g, '+');
+  }
+  next();
+});
+
 // ===========================================
 // Routes
 // ===========================================
@@ -88,6 +99,7 @@ app.use('/api/trace-analysis', traceAnalysisRoutes);
 app.use('/api/dominos', dominosRoutes);
 app.use('/api/api-agent', apiAgentRoutes);
 app.use('/api/nodered/ortho', nodeRedProxyRoutes);
+app.use('/api/fabric-workflow', fabricWorkflowRoutes);
 
 // ===========================================
 // Error Handling

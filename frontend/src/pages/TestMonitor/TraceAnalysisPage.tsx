@@ -683,6 +683,8 @@ function DiagnosticReportCard({ diagnosis }: { diagnosis: DiagnosisResult }) {
 // ============================================================================
 
 function CallReportCard({ report }: { report: CallReport }) {
+  const [expandedToolIdx, setExpandedToolIdx] = useState<number | null>(null);
+
   const statusColor = {
     success: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300',
     partial: 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300',
@@ -743,21 +745,58 @@ function CallReportCard({ report }: { report: CallReport }) {
           <div>
             <div className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">Tool Call Sequence</div>
             <div className="space-y-2">
-              {report.toolCalls.map((tc, i) => (
-                <div key={i} className="p-2 rounded-lg bg-gray-50 dark:bg-gray-700/30 border border-gray-200 dark:border-gray-600 text-sm">
-                  <div className="flex items-center gap-2">
-                    <span>{toolStatusDot(tc.status)}</span>
-                    <span className="font-medium text-gray-900 dark:text-white">{i + 1}. {tc.name}</span>
-                    <span className="text-gray-500 dark:text-gray-400">{'\u2192'}</span>
-                    <code className="text-xs px-1.5 py-0.5 rounded bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300">{tc.action}</code>
-                    {tc.durationMs && <span className="text-xs text-gray-400 ml-auto">{(tc.durationMs / 1000).toFixed(1)}s</span>}
+              {report.toolCalls.map((tc, i) => {
+                const isExpanded = expandedToolIdx === i;
+                const hasError = tc.status === 'error' || tc.status === 'partial';
+                const borderColor = hasError ? (tc.status === 'error' ? 'border-l-red-500' : 'border-l-yellow-500') : 'border-l-blue-500';
+                return (
+                  <div key={i} className="rounded-lg bg-gray-50 dark:bg-gray-700/30 border border-gray-200 dark:border-gray-600 text-sm overflow-hidden">
+                    <div
+                      className="p-2 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700/50"
+                      onClick={() => setExpandedToolIdx(isExpanded ? null : i)}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-gray-400 w-3">{isExpanded ? '\u25BE' : '\u25B8'}</span>
+                        <span>{toolStatusDot(tc.status)}</span>
+                        <span className="font-medium text-gray-900 dark:text-white">{i + 1}. {tc.name}</span>
+                        <span className="text-gray-500 dark:text-gray-400">{'\u2192'}</span>
+                        <code className="text-xs px-1.5 py-0.5 rounded bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300">{tc.action}</code>
+                        {tc.durationMs && <span className="text-xs text-gray-400 ml-auto">{(tc.durationMs / 1000).toFixed(1)}s</span>}
+                      </div>
+                      <div className="mt-1 text-xs text-gray-500 dark:text-gray-400 ml-9">
+                        <div>Input: {tc.inputSummary}</div>
+                        <div>Output: {tc.outputSummary}</div>
+                      </div>
+                    </div>
+                    {isExpanded && (
+                      <div className={`border-t border-gray-200 dark:border-gray-600 border-l-4 ${borderColor}`}>
+                        {tc.errorAnalysis && (
+                          <div className={`mx-3 mt-3 p-2.5 rounded text-xs ${tc.status === 'error' ? 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300' : 'bg-yellow-50 dark:bg-yellow-900/20 text-yellow-700 dark:text-yellow-300'}`}>
+                            <span className="font-semibold">{tc.status === 'error' ? 'Error Analysis' : 'Warning'}:</span> {tc.errorAnalysis}
+                          </div>
+                        )}
+                        {tc.statusMessage && (
+                          <div className="mx-3 mt-2 text-xs text-gray-500 dark:text-gray-400">
+                            <span className="font-medium">Status Message:</span> {tc.statusMessage}
+                          </div>
+                        )}
+                        {tc.fullInput && (
+                          <div className="mx-3 mt-3">
+                            <div className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Full Input</div>
+                            <pre className="p-3 rounded bg-gray-900 text-green-400 text-xs leading-relaxed overflow-x-auto max-h-[32rem] overflow-y-auto whitespace-pre-wrap break-words">{JSON.stringify(tc.fullInput, null, 2)}</pre>
+                          </div>
+                        )}
+                        {tc.fullOutput && (
+                          <div className="mx-3 mt-3 mb-3">
+                            <div className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Full Output</div>
+                            <pre className="p-3 rounded bg-gray-900 text-green-400 text-xs leading-relaxed overflow-x-auto max-h-[32rem] overflow-y-auto whitespace-pre-wrap break-words">{JSON.stringify(tc.fullOutput, null, 2)}</pre>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
-                  <div className="ml-6 mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    <div>Input: {tc.inputSummary}</div>
-                    <div>Output: {tc.outputSummary}</div>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}

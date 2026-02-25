@@ -1424,7 +1424,7 @@ export async function diagnoseProductionSession(
   options?: { useLLM?: boolean }
 ): Promise<DiagnosisResult> {
   const response = await post<DiagnosisResult>(
-    `/test-monitor/production-calls/sessions/${sessionId}/diagnose`,
+    `/test-monitor/production-calls/sessions/${encodeURIComponent(sessionId)}/diagnose`,
     { useLLM: options?.useLLM ?? true },
     { timeout: API_CONFIG.AI_TIMEOUT }
   );
@@ -1450,7 +1450,7 @@ export interface SessionGoalStatus {
  */
 export async function getSessionGoalStatus(sessionId: string): Promise<SessionGoalStatus> {
   const response = await get<TestMonitorApiResponse<SessionGoalStatus>>(
-    `/test-monitor/production-calls/sessions/${sessionId}/goal-status`
+    `/test-monitor/production-calls/sessions/${encodeURIComponent(sessionId)}/goal-status`
   );
   return response.data;
 }
@@ -1489,7 +1489,7 @@ export interface SessionExistingFixes {
 export async function getSessionExistingFixes(sessionId: string): Promise<SessionExistingFixes> {
   // Backend returns data directly, not wrapped in a data property
   return get<SessionExistingFixes>(
-    `/test-monitor/production-calls/sessions/${sessionId}/fixes`
+    `/test-monitor/production-calls/sessions/${encodeURIComponent(sessionId)}/fixes`
   );
 }
 
@@ -1595,7 +1595,7 @@ export async function getProductionSession(
   if (configId) params.append('configId', configId.toString());
 
   const queryString = params.toString();
-  const url = `/test-monitor/production-calls/sessions/${sessionId}${queryString ? `?${queryString}` : ''}`;
+  const url = `/test-monitor/production-calls/sessions/${encodeURIComponent(sessionId)}${queryString ? `?${queryString}` : ''}`;
   const response = await get<TestMonitorApiResponse<ProductionSessionDetailResponse>>(url);
   return response.data;
 }
@@ -1609,7 +1609,7 @@ export async function refreshProductionSession(
   configId?: number
 ): Promise<ProductionSessionDetailResponse> {
   const response = await post<TestMonitorApiResponse<ProductionSessionDetailResponse>>(
-    `/test-monitor/production-calls/sessions/${sessionId}/refresh`,
+    `/test-monitor/production-calls/sessions/${encodeURIComponent(sessionId)}/refresh`,
     { configId }
   );
   return response.data;
@@ -2354,6 +2354,10 @@ export interface CallReportToolCall {
   inputSummary: string;
   outputSummary: string;
   status: 'success' | 'error' | 'partial';
+  fullInput?: Record<string, any>;
+  fullOutput?: Record<string, any>;
+  statusMessage?: string;
+  errorAnalysis?: string;
 }
 
 export interface CallReportBookingResult {
@@ -2399,7 +2403,7 @@ export async function getTraceAnalysis(
   if (options?.configId) params.append('configId', options.configId.toString());
 
   const queryString = params.toString();
-  const url = `/trace-analysis/${sessionId}${queryString ? `?${queryString}` : ''}`;
+  const url = `/trace-analysis/${encodeURIComponent(sessionId)}${queryString ? `?${queryString}` : ''}`;
   const response = await get<TraceAnalysisResponse>(url, { timeout: API_CONFIG.AI_TIMEOUT });
   return response;
 }
@@ -2502,7 +2506,7 @@ export async function checkSlotAvailability(
   sessionId: string,
   params: { patientGUID: string; intendedStartTime: string; date: string; scheduleViewGUID?: string }
 ): Promise<SlotCheckResult> {
-  return post<SlotCheckResult>(`/trace-analysis/${sessionId}/correction/check-slot`, params);
+  return post<SlotCheckResult>(`/trace-analysis/${encodeURIComponent(sessionId)}/correction/check-slot`, params);
 }
 
 export async function bookCorrection(
@@ -2512,14 +2516,14 @@ export async function bookCorrection(
     scheduleColumnGUID: string; appointmentTypeGUID?: string; minutes?: number; childName?: string;
   }
 ): Promise<CorrectionResult> {
-  return post<CorrectionResult>(`/trace-analysis/${sessionId}/correction/book`, params);
+  return post<CorrectionResult>(`/trace-analysis/${encodeURIComponent(sessionId)}/correction/book`, params);
 }
 
 export async function cancelCorrection(
   sessionId: string,
   params: { appointmentGUID: string; childName?: string }
 ): Promise<CorrectionResult> {
-  return post<CorrectionResult>(`/trace-analysis/${sessionId}/correction/cancel`, params);
+  return post<CorrectionResult>(`/trace-analysis/${encodeURIComponent(sessionId)}/correction/cancel`, params);
 }
 
 export async function rescheduleCorrection(
@@ -2529,9 +2533,82 @@ export async function rescheduleCorrection(
     scheduleViewGUID: string; scheduleColumnGUID: string; childName?: string;
   }
 ): Promise<CorrectionResult> {
-  return post<CorrectionResult>(`/trace-analysis/${sessionId}/correction/reschedule`, params);
+  return post<CorrectionResult>(`/trace-analysis/${encodeURIComponent(sessionId)}/correction/reschedule`, params);
 }
 
 export async function getCorrectionHistory(sessionId: string): Promise<{ corrections: BookingCorrectionRecord[] }> {
-  return get<{ corrections: BookingCorrectionRecord[] }>(`/trace-analysis/${sessionId}/correction/history`);
+  return get<{ corrections: BookingCorrectionRecord[] }>(`/trace-analysis/${encodeURIComponent(sessionId)}/correction/history`);
+}
+
+// ── Booking Investigation ───────────────────────────────────────────────────
+
+export interface InvestigationToolCall {
+  index: number;
+  name: string;
+  action: string;
+  level: string;
+  isError: boolean;
+  statusMessage: string | null;
+  input: Record<string, any>;
+  output: Record<string, any>;
+  timestamp: string;
+}
+
+export interface PayloadFinding {
+  traceId: string;
+  timestamp: string;
+  apptIds: string[];
+  apptGuids: string[];
+  patientIds: string[];
+  childNames: string[];
+  callerName: string | null;
+  parentPatientId: string | null;
+  payloadJson: any;
+}
+
+export type InvestigationClassification = 'CLEAN' | 'LEGITIMATE' | 'FALSE_POSITIVE' | 'FALSE_POSITIVE_WITH_TOOL' | 'INCONCLUSIVE';
+
+export interface InvestigationResult {
+  sessionId: string;
+  classification: InvestigationClassification;
+  configName: string;
+  session: {
+    configId: number;
+    hasSuccessfulBooking: number;
+    hasTransfer: number;
+    hasOrder: number;
+    traceCount: number;
+    errorCount: number;
+    firstTraceAt: string;
+    lastTraceAt: string;
+    userId: string | null;
+  };
+  toolCalls: InvestigationToolCall[];
+  bookingToolCallCount: number;
+  payloadFindings: PayloadFinding[];
+  allExtractedIds: string[];
+  placeholderIds: string[];
+  callerName: string | null;
+  childNames: string[];
+  phone: string | null;
+}
+
+/**
+ * Investigate a session for false positive booking detection.
+ */
+export async function investigateSessionBooking(sessionId: string): Promise<InvestigationResult> {
+  const response = await get<TestMonitorApiResponse<InvestigationResult>>(
+    `/trace-analysis/${encodeURIComponent(sessionId)}/investigate`
+  );
+  return response.data;
+}
+
+/**
+ * Get a full markdown investigation report for a session.
+ */
+export async function getInvestigationReport(sessionId: string): Promise<{ markdown: string; classification: string; sessionId: string }> {
+  const response = await get<TestMonitorApiResponse<{ markdown: string; classification: string; sessionId: string }>>(
+    `/trace-analysis/${encodeURIComponent(sessionId)}/investigate/report`
+  );
+  return response.data;
 }

@@ -50,7 +50,9 @@ import {
   QueueActivityPage,
   CacheHealthPage,
   TraceAnalysisPage,
+  DetailedReportPage,
 } from '../pages/TestMonitor';
+import { ListManagementPage } from '../pages/ListManagement';
 import { NotFound } from '../pages/NotFound';
 import { ROUTES } from '../utils/constants';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
@@ -74,6 +76,7 @@ function SmartHome() {
     appointments: ROUTES.APPOINTMENTS,
     calendar: ROUTES.CALENDAR,
     settings: ROUTES.SETTINGS,
+    list_management: ROUTES.LIST_MANAGEMENT,
   };
 
   for (const tab of enabledTabs) {
@@ -214,6 +217,7 @@ export function AppRouter() {
             <Route path="alerts" element={<AlertsPage />} />
             <Route path="cache-health" element={<CacheHealthPage />} />
             <Route path="trace-analysis" element={<TraceAnalysisPage />} />
+            <Route path="detailed-report" element={<DetailedReportPage />} />
             <Route path="cases" element={<TestCasesPage />} />
             <Route path="goal-cases" element={<GoalTestsDashboard />} />
             <Route path="create" element={<CreateGoalTestPage />} />
@@ -225,6 +229,16 @@ export function AppRouter() {
             <Route path="api-testing" element={<APITestingPage />} />
             <Route path="run/:runId" element={<TestRunDetail />} />
           </Route>
+
+          {/* List Management */}
+          <Route
+            path="list-management"
+            element={
+              <ProtectedRoute tabKey="list_management">
+                <ListManagementPage />
+              </ProtectedRoute>
+            }
+          />
 
           {/* Dominos - Nested Routes */}
           <Route

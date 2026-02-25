@@ -9,6 +9,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { PageHeader } from '../../components/layout';
 import { Card, Button } from '../../components/ui';
 import * as tenantApi from '../../services/api/tenantApi';
+import { testConnection as testFabricConnection } from '../../services/api/fabricWorkflowApi';
 import type { TenantFull } from '../../services/api/tenantApi';
 import { ALL_TABS } from '../../types/auth.types';
 
@@ -26,6 +27,8 @@ function TenantEditForm({ tenantId, onBack }: { tenantId: number; onBack: () => 
   const [tabsSuccess, setTabsSuccess] = useState(false);
   const [logoPreview, setLogoPreview] = useState<string | null>(null);
   const logoInputRef = useRef<HTMLInputElement>(null);
+  const [fabricTesting, setFabricTesting] = useState(false);
+  const [fabricTestResult, setFabricTestResult] = useState<{ connected: boolean; recordCount?: number; error?: string } | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -136,6 +139,7 @@ function TenantEditForm({ tenantId, onBack }: { tenantId: number; onBack: () => 
     { label: 'Testing & Monitoring', keys: ['test_monitor', 'goal_tests', 'goal_test_generator', 'history', 'tuning'] },
     { label: 'Advanced', keys: ['ab_testing_sandbox', 'ai_prompting', 'api_testing', 'advanced'] },
     { label: 'Dominos Integration', keys: ['dominos_dashboard', 'dominos_orders', 'dominos_health', 'dominos_menu', 'dominos_sessions', 'dominos_errors'] },
+    { label: 'Fabric Workflow', keys: ['list_management'] },
   ];
 
   const TAB_LABELS: Record<string, string> = {
@@ -147,6 +151,7 @@ function TenantEditForm({ tenantId, onBack }: { tenantId: number; onBack: () => 
     dominos_dashboard: 'Dominos Dashboard', dominos_orders: 'Dominos Orders',
     dominos_health: 'Dominos Health', dominos_menu: 'Dominos Menu',
     dominos_sessions: 'Dominos Sessions', dominos_errors: 'Dominos Errors',
+    list_management: 'List Management',
   };
 
   const inputClass = "mt-1 block w-full rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm text-gray-900 dark:text-gray-100 focus:border-blue-500 focus:ring-1 focus:ring-blue-500";
@@ -414,6 +419,61 @@ function TenantEditForm({ tenantId, onBack }: { tenantId: number; onBack: () => 
                   <label className={labelClass}>Order Data Source URL</label>
                   <input type="text" value={(form as any).dominos_data_source_url || ''} onChange={(e) => updateField('dominos_data_source_url', e.target.value)} className={inputClass} placeholder="https://dominos-order-service-v4.replit.app" />
                   <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Base URL for importing order logs from the external order service</p>
+                </div>
+              </div>
+            </div>
+          </Card>
+        )}
+
+        {/* Fabric Workflow Integration */}
+        {enabledTabs.includes('list_management') && (
+          <Card>
+            <div className="p-6">
+              <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-4">Fabric Workflow</h3>
+              <div className="space-y-4 max-w-lg">
+                <div>
+                  <label className={labelClass}>Endpoint URL</label>
+                  <input type="text" value={(form as any).fabric_workflow_url || ''} onChange={(e) => updateField('fabric_workflow_url', e.target.value)} className={inputClass} placeholder="https://..." />
+                </div>
+                <div>
+                  <label className={labelClass}>Username</label>
+                  <input type="text" value={(form as any).fabric_workflow_username || ''} onChange={(e) => updateField('fabric_workflow_username', e.target.value)} className={inputClass} />
+                </div>
+                <div>
+                  <label className={labelClass}>Password</label>
+                  <input type="password" value={(form as any).fabric_workflow_password || ''} onChange={(e) => updateField('fabric_workflow_password', e.target.value)} className={inputClass} />
+                </div>
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    disabled={fabricTesting || !(form as any).fabric_workflow_url}
+                    onClick={async () => {
+                      setFabricTesting(true);
+                      setFabricTestResult(null);
+                      try {
+                        const result = await testFabricConnection({
+                          url: (form as any).fabric_workflow_url || '',
+                          username: (form as any).fabric_workflow_username || '',
+                          password: (form as any).fabric_workflow_password || '',
+                        });
+                        setFabricTestResult(result);
+                      } catch (err: any) {
+                        setFabricTestResult({ connected: false, error: err.message || 'Test failed' });
+                      } finally {
+                        setFabricTesting(false);
+                      }
+                    }}
+                    className="px-3 py-1.5 text-xs rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                  >
+                    {fabricTesting ? 'Testing...' : 'Test Connection'}
+                  </button>
+                  {fabricTestResult && (
+                    <span className={`text-xs ${fabricTestResult.connected ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                      {fabricTestResult.connected
+                        ? `Connected (${fabricTestResult.recordCount} records)`
+                        : fabricTestResult.error || 'Connection failed'}
+                    </span>
+                  )}
                 </div>
               </div>
             </div>

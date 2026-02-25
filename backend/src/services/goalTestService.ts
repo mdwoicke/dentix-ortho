@@ -282,6 +282,17 @@ function ensureTable(db: BetterSqlite3.Database): void {
     CREATE INDEX IF NOT EXISTS idx_goal_test_cases_case_id ON goal_test_cases(case_id);
   `);
 
+  // Migration: add tenant_id if not present
+  const cols = db.pragma('table_info(goal_test_cases)') as { name: string }[];
+  if (!cols.some(c => c.name === 'tenant_id')) {
+    db.exec(`
+      ALTER TABLE goal_test_cases ADD COLUMN tenant_id INTEGER NOT NULL DEFAULT 1;
+      DROP INDEX IF EXISTS idx_goal_test_cases_case_id;
+      CREATE UNIQUE INDEX idx_goal_test_cases_tenant_case ON goal_test_cases(tenant_id, case_id);
+      CREATE INDEX idx_goal_test_cases_tenant ON goal_test_cases(tenant_id);
+    `);
+  }
+
   tableInitialized = true;
 }
 
@@ -308,7 +319,7 @@ function getReadOnlyDb(): BetterSqlite3.Database {
 /**
  * Get all goal test cases (optionally filtered)
  */
-export function getGoalTestCases(options?: { category?: string; includeArchived?: boolean }): GoalTestCaseRecord[] {
+export function getGoalTestCases(options?: { category?: string; includeArchived?: boolean }, tenantId: number = 1): GoalTestCaseRecord[] {
   const db = getReadOnlyDb();
   try {
     let query = `
@@ -317,8 +328,8 @@ export function getGoalTestCases(options?: { category?: string; includeArchived?
              is_archived, version, created_at, updated_at
       FROM goal_test_cases
     `;
-    const conditions: string[] = [];
-    const params: any[] = [];
+    const conditions: string[] = ['tenant_id = ?'];
+    const params: any[] = [tenantId];
 
     if (!options?.includeArchived) {
       conditions.push('is_archived = 0');
@@ -362,7 +373,7 @@ export function getGoalTestCases(options?: { category?: string; includeArchived?
 /**
  * Get a single goal test case by ID
  */
-export function getGoalTestCase(caseId: string): GoalTestCaseRecord | null {
+export function getGoalTestCase(caseId: string, tenantId: number = 1): GoalTestCaseRecord | null {
   const db = getReadOnlyDb();
   try {
     const row = db.prepare(`
@@ -370,8 +381,8 @@ export function getGoalTestCase(caseId: string): GoalTestCaseRecord | null {
              goals_json, constraints_json, response_config_json, initial_message,
              is_archived, version, created_at, updated_at
       FROM goal_test_cases
-      WHERE case_id = ?
-    `).get(caseId) as any;
+      WHERE case_id = ? AND tenant_id = ?
+    `).get(caseId, tenantId) as any;
 
     if (!row) return null;
 
@@ -400,14 +411,14 @@ export function getGoalTestCase(caseId: string): GoalTestCaseRecord | null {
 /**
  * Create a new goal test case
  */
-export function createGoalTestCase(testCase: Omit<GoalTestCaseRecord, 'id' | 'version' | 'createdAt' | 'updatedAt'>): GoalTestCaseRecord {
+export function createGoalTestCase(testCase: Omit<GoalTestCaseRecord, 'id' | 'version' | 'createdAt' | 'updatedAt'>, tenantId: number = 1): GoalTestCaseRecord {
   const db = getWritableDb();
   try {
     const now = new Date().toISOString();
 
     const info = db.prepare(`
-      INSERT INTO goal_test_cases (case_id, name, description, category, tags_json, persona_json, goals_json, constraints_json, response_config_json, initial_message, is_archived, version, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+      INSERT INTO goal_test_cases (case_id, name, description, category, tags_json, persona_json, goals_json, constraints_json, response_config_json, initial_message, is_archived, version, created_at, updated_at, tenant_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
     `).run(
       testCase.caseId,
       testCase.name,
@@ -421,7 +432,8 @@ export function createGoalTestCase(testCase: Omit<GoalTestCaseRecord, 'id' | 've
       testCase.initialMessage,
       testCase.isArchived ? 1 : 0,
       now,
-      now
+      now,
+      tenantId
     );
 
     return {
@@ -439,7 +451,7 @@ export function createGoalTestCase(testCase: Omit<GoalTestCaseRecord, 'id' | 've
 /**
  * Update an existing goal test case
  */
-export function updateGoalTestCase(caseId: string, updates: Partial<Omit<GoalTestCaseRecord, 'id' | 'caseId' | 'createdAt'>>): GoalTestCaseRecord | null {
+export function updateGoalTestCase(caseId: string, updates: Partial<Omit<GoalTestCaseRecord, 'id' | 'caseId' | 'createdAt'>>, tenantId: number = 1): GoalTestCaseRecord | null {
   const db = getWritableDb();
   try {
     // First get the existing record
@@ -448,8 +460,8 @@ export function updateGoalTestCase(caseId: string, updates: Partial<Omit<GoalTes
              goals_json, constraints_json, response_config_json, initial_message,
              is_archived, version, created_at, updated_at
       FROM goal_test_cases
-      WHERE case_id = ?
-    `).get(caseId) as any;
+      WHERE case_id = ? AND tenant_id = ?
+    `).get(caseId, tenantId) as any;
 
     if (!existingRow) return null;
 
@@ -493,7 +505,7 @@ export function updateGoalTestCase(caseId: string, updates: Partial<Omit<GoalTes
       SET name = ?, description = ?, category = ?, tags_json = ?, persona_json = ?,
           goals_json = ?, constraints_json = ?, response_config_json = ?, initial_message = ?,
           is_archived = ?, version = ?, updated_at = ?
-      WHERE case_id = ?
+      WHERE case_id = ? AND tenant_id = ?
     `).run(
       updated.name,
       updated.description,
@@ -507,7 +519,8 @@ export function updateGoalTestCase(caseId: string, updates: Partial<Omit<GoalTes
       updated.isArchived ? 1 : 0,
       newVersion,
       now,
-      caseId
+      caseId,
+      tenantId
     );
 
     return {
@@ -526,12 +539,12 @@ export function updateGoalTestCase(caseId: string, updates: Partial<Omit<GoalTes
 /**
  * Archive a goal test case (soft delete)
  */
-export function archiveGoalTestCase(caseId: string): boolean {
+export function archiveGoalTestCase(caseId: string, tenantId: number = 1): boolean {
   const db = getWritableDb();
   try {
     const result = db.prepare(`
-      UPDATE goal_test_cases SET is_archived = 1, updated_at = ? WHERE case_id = ?
-    `).run(new Date().toISOString(), caseId);
+      UPDATE goal_test_cases SET is_archived = 1, updated_at = ? WHERE case_id = ? AND tenant_id = ?
+    `).run(new Date().toISOString(), caseId, tenantId);
 
     return result.changes > 0;
   } finally {
@@ -542,10 +555,10 @@ export function archiveGoalTestCase(caseId: string): boolean {
 /**
  * Permanently delete a goal test case
  */
-export function deleteGoalTestCase(caseId: string): boolean {
+export function deleteGoalTestCase(caseId: string, tenantId: number = 1): boolean {
   const db = getWritableDb();
   try {
-    const result = db.prepare(`DELETE FROM goal_test_cases WHERE case_id = ?`).run(caseId);
+    const result = db.prepare(`DELETE FROM goal_test_cases WHERE case_id = ? AND tenant_id = ?`).run(caseId, tenantId);
     return result.changes > 0;
   } finally {
     db.close();
@@ -555,8 +568,8 @@ export function deleteGoalTestCase(caseId: string): boolean {
 /**
  * Clone a goal test case with a new ID
  */
-export function cloneGoalTestCase(caseId: string, newCaseId: string): GoalTestCaseRecord | null {
-  const existing = getGoalTestCase(caseId);
+export function cloneGoalTestCase(caseId: string, newCaseId: string, tenantId: number = 1): GoalTestCaseRecord | null {
+  const existing = getGoalTestCase(caseId, tenantId);
   if (!existing) return null;
 
   return createGoalTestCase({
@@ -571,21 +584,21 @@ export function cloneGoalTestCase(caseId: string, newCaseId: string): GoalTestCa
     responseConfig: JSON.parse(JSON.stringify(existing.responseConfig)),
     initialMessage: existing.initialMessage,
     isArchived: false,
-  });
+  }, tenantId);
 }
 
 /**
  * Get goal test case statistics
  */
-export function getGoalTestCaseStats(): GoalTestCaseStats {
+export function getGoalTestCaseStats(tenantId: number = 1): GoalTestCaseStats {
   const db = getReadOnlyDb();
   try {
-    const total = (db.prepare('SELECT COUNT(*) as count FROM goal_test_cases WHERE is_archived = 0').get() as any)?.count || 0;
-    const archived = (db.prepare('SELECT COUNT(*) as count FROM goal_test_cases WHERE is_archived = 1').get() as any)?.count || 0;
+    const total = (db.prepare('SELECT COUNT(*) as count FROM goal_test_cases WHERE is_archived = 0 AND tenant_id = ?').get(tenantId) as any)?.count || 0;
+    const archived = (db.prepare('SELECT COUNT(*) as count FROM goal_test_cases WHERE is_archived = 1 AND tenant_id = ?').get(tenantId) as any)?.count || 0;
 
     const byCategoryRows = db.prepare(`
-      SELECT category, COUNT(*) as count FROM goal_test_cases WHERE is_archived = 0 GROUP BY category
-    `).all() as any[];
+      SELECT category, COUNT(*) as count FROM goal_test_cases WHERE is_archived = 0 AND tenant_id = ? GROUP BY category
+    `).all(tenantId) as any[];
 
     const byCategory: Record<string, number> = {};
     for (const row of byCategoryRows) {
@@ -601,10 +614,10 @@ export function getGoalTestCaseStats(): GoalTestCaseStats {
 /**
  * Get all unique tags from goal test cases
  */
-export function getAllTags(): string[] {
+export function getAllTags(tenantId: number = 1): string[] {
   const db = getReadOnlyDb();
   try {
-    const rows = db.prepare(`SELECT tags_json FROM goal_test_cases WHERE is_archived = 0`).all() as any[];
+    const rows = db.prepare(`SELECT tags_json FROM goal_test_cases WHERE is_archived = 0 AND tenant_id = ?`).all(tenantId) as any[];
 
     const tagSet = new Set<string>();
     for (const row of rows) {
@@ -623,10 +636,10 @@ export function getAllTags(): string[] {
 /**
  * Check if a goal test case ID exists
  */
-export function goalTestCaseExists(caseId: string): boolean {
+export function goalTestCaseExists(caseId: string, tenantId: number = 1): boolean {
   const db = getReadOnlyDb();
   try {
-    const row = db.prepare('SELECT 1 FROM goal_test_cases WHERE case_id = ?').get(caseId);
+    const row = db.prepare('SELECT 1 FROM goal_test_cases WHERE case_id = ? AND tenant_id = ?').get(caseId, tenantId);
     return !!row;
   } finally {
     db.close();
@@ -636,15 +649,15 @@ export function goalTestCaseExists(caseId: string): boolean {
 /**
  * Generate the next available case ID for a category
  */
-export function generateNextCaseId(category: 'happy-path' | 'edge-case' | 'error-handling'): string {
+export function generateNextCaseId(category: 'happy-path' | 'edge-case' | 'error-handling', tenantId: number = 1): string {
   const prefix = category === 'happy-path' ? 'GOAL-HAPPY' :
                  category === 'edge-case' ? 'GOAL-EDGE' : 'GOAL-ERR';
 
   const db = getReadOnlyDb();
   try {
     const rows = db.prepare(`
-      SELECT case_id FROM goal_test_cases WHERE case_id LIKE ?
-    `).all(`${prefix}-%`) as any[];
+      SELECT case_id FROM goal_test_cases WHERE case_id LIKE ? AND tenant_id = ?
+    `).all(`${prefix}-%`, tenantId) as any[];
 
     let maxNum = 0;
     for (const row of rows) {
@@ -674,8 +687,8 @@ export function validateGoalTestCase(testCase: Partial<GoalTestCaseRecord>): Val
   // Required fields
   if (!testCase.caseId || testCase.caseId.trim() === '') {
     errors.push({ field: 'caseId', message: 'Case ID is required' });
-  } else if (!/^GOAL-[A-Z]+-\d{3}$/.test(testCase.caseId)) {
-    errors.push({ field: 'caseId', message: 'Case ID must match pattern: GOAL-PREFIX-NNN (e.g., GOAL-HAPPY-001)' });
+  } else if (!/^(?:GOAL|CHORD-GOAL)-[A-Z]+-\d{3}$/.test(testCase.caseId)) {
+    errors.push({ field: 'caseId', message: 'Case ID must match pattern: GOAL-PREFIX-NNN or CHORD-GOAL-PREFIX-NNN (e.g., GOAL-HAPPY-001, CHORD-GOAL-HAPPY-001)' });
   }
 
   if (!testCase.name || testCase.name.trim() === '') {
@@ -822,7 +835,7 @@ ${testCasesCode}
 /**
  * Sync all goal test cases from database to TypeScript files
  */
-export function syncToTypeScript(): { success: boolean; filesWritten: string[]; errors: string[] } {
+export function syncToTypeScript(tenantId: number = 1): { success: boolean; filesWritten: string[]; errors: string[] } {
   const filesWritten: string[] = [];
   const errors: string[] = [];
 
@@ -833,7 +846,7 @@ export function syncToTypeScript(): { success: boolean; filesWritten: string[]; 
     }
 
     // Get all non-archived goal test cases grouped by category
-    const allTestCases = getGoalTestCases({ includeArchived: false });
+    const allTestCases = getGoalTestCases({ includeArchived: false }, tenantId);
 
     const byCategory: Record<string, GoalTestCaseRecord[]> = {
       'happy-path': [],

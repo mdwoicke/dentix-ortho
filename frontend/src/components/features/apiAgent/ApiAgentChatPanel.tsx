@@ -12,7 +12,8 @@ import { useResizablePanel } from '../../../hooks/useResizablePanel';
 import { useSpeechRecognition } from '../../../hooks/useSpeechRecognition';
 import type { ApiSource } from '../../../hooks/useApiAgentChat';
 import ChatMessage from './ChatMessage';
-import { matchSkill, clearLastSkill, setCurrentApiSource } from '../../../skills/cloud9';
+import { matchSkill as matchCloud9Skill, clearLastSkill as clearCloud9LastSkill, setCurrentApiSource as setCloud9ApiSource } from '../../../skills/cloud9';
+import { matchSkill as matchChordSkill, clearLastSkill as clearChordLastSkill, setCurrentApiSource as setChordApiSource } from '../../../skills/chord';
 
 type PageContext = 'default' | 'call-tracing' | 'prod-tracker';
 
@@ -24,7 +25,7 @@ interface ApiAgentChatPanelProps {
   onLinkClick?: (href: string) => boolean;
 }
 
-type TenantKind = 'ortho' | 'dominos';
+type TenantKind = 'ortho' | 'dominos' | 'chord';
 
 /** Suggested queries keyed by [apiSource][tenantKind]. */
 const SUGGESTED_QUERIES: Record<ApiSource, Record<TenantKind, string[]>> = {
@@ -42,6 +43,13 @@ const SUGGESTED_QUERIES: Record<ApiSource, Record<TenantKind, string[]>> = {
       'List recent failed orders',
       'Show error breakdown',
       'Service health status',
+    ],
+    chord: [
+      'How many calls today',
+      'Calls this week',
+      'Show recent sessions',
+      'Show trace insights',
+      'Find sessions with errors',
     ],
   },
   cloud9: {
@@ -61,6 +69,11 @@ const SUGGESTED_QUERIES: Record<ApiSource, Record<TenantKind, string[]>> = {
       'Create a sample order',
       'List recent orders',
     ],
+    chord: [
+      'Find patient Smith',
+      'Search for patient Jones',
+      'Show prompt versions',
+    ],
   },
   nodered: {
     ortho: [
@@ -75,6 +88,10 @@ const SUGGESTED_QUERIES: Record<ApiSource, Record<TenantKind, string[]>> = {
       'Analyze session intent',
       'Verify session goals',
     ],
+    chord: [
+      'Show prompt versions',
+      'Show recent sessions',
+    ],
   },
 };
 
@@ -82,14 +99,17 @@ const EMPTY_STATE_TEXT: Record<ApiSource, Record<TenantKind, string>> = {
   call: {
     ortho: 'Query call sessions & traces — call stats, recent sessions, errors, and insights.',
     dominos: 'Query Dominos call sessions — orders, errors, and dashboard stats.',
+    chord: 'Query Chord Dental IVA call sessions — call stats, recent sessions, and errors.',
   },
   cloud9: {
     ortho: 'Query Cloud9 APIs directly — patients, appointments, locations, and more.',
     dominos: 'Query Dominos endpoints — orders, sessions, errors, and dashboard stats.',
+    chord: 'Query Chord patient data — patient search and prompt versions.',
   },
   nodered: {
     ortho: 'Query via Node-RED middleware — patient lookup, scheduling, grouped slots, and more.',
     dominos: 'Query Dominos endpoints — orders, sessions, errors, and dashboard stats.',
+    chord: 'Query Chord via Node-RED — prompt versions and session data.',
   },
 };
 
@@ -151,13 +171,20 @@ const ApiAgentChatPanel: React.FC<ApiAgentChatPanelProps> = ({ isOpen, onClose, 
   } = useApiAgentChat();
 
   const currentTenant = useAppSelector(selectCurrentTenant);
-  const tenantKind: TenantKind = useMemo(
-    () => (currentTenant?.slug?.includes('dominos') ? 'dominos' : 'ortho'),
-    [currentTenant?.slug],
-  );
+  const tenantKind: TenantKind = useMemo(() => {
+    const slug = currentTenant?.slug || '';
+    if (slug.includes('dominos')) return 'dominos';
+    if (slug.includes('chord')) return 'chord';
+    return 'ortho';
+  }, [currentTenant?.slug]);
+
+  // Select skill functions based on tenant
+  const matchSkill = tenantKind === 'chord' ? matchChordSkill : matchCloud9Skill;
+  const clearLastSkill = tenantKind === 'chord' ? clearChordLastSkill : clearCloud9LastSkill;
+  const setCurrentApiSource = tenantKind === 'chord' ? setChordApiSource : setCloud9ApiSource;
 
   // Keep the skill registry aware of which tab is active
-  useEffect(() => { setCurrentApiSource(apiSource); }, [apiSource]);
+  useEffect(() => { setCurrentApiSource(apiSource); }, [apiSource, setCurrentApiSource]);
 
   const { width, isDragging, onMouseDown: onResizeMouseDown } = useResizablePanel({
     storageKey: 'api-agent-chat-width',
@@ -460,11 +487,13 @@ const ApiAgentChatPanel: React.FC<ApiAgentChatPanelProps> = ({ isOpen, onClose, 
                   ? 'Listening...'
                   : tenantKind === 'dominos'
                     ? 'Ask about Dominos data...'
-                    : apiSource === 'call'
-                      ? 'Ask about call sessions & traces...'
-                      : apiSource === 'cloud9'
-                        ? 'Ask about Cloud9 API data...'
-                        : 'Ask about Node-RED endpoints...'
+                    : tenantKind === 'chord'
+                      ? 'Ask about Chord Dental IVA data...'
+                      : apiSource === 'call'
+                        ? 'Ask about call sessions & traces...'
+                        : apiSource === 'cloud9'
+                          ? 'Ask about Cloud9 API data...'
+                          : 'Ask about Node-RED endpoints...'
               }
               disabled={isLoading || skillRunning}
               className={`flex-1 px-3 py-2 text-sm rounded-lg

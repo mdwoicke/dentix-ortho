@@ -30,6 +30,7 @@
     "axios": "^1.13.2",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
+    "mermaid": "^11.12.3",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-hook-form": "^7.69.0",
@@ -38,6 +39,7 @@
     "react-resizable-panels": "^4.4.1",
     "react-router-dom": "^7.11.0",
     "recharts": "^3.6.0",
+    "rehype-raw": "^7.0.0",
     "remark-gfm": "^4.0.1",
     "tailwind-merge": "^3.4.0",
     "zod": "^4.2.1"

@@ -4,12 +4,14 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import ApiAgentChatPanel from '../../components/features/apiAgent/ApiAgentChatPanel';
 import { useSearchParams, useLocation } from 'react-router-dom';
 import { PageHeader } from '../../components/layout';
 import { Button, Card, Spinner } from '../../components/ui';
 import { TranscriptViewer } from '../../components/features/testMonitor/TranscriptViewer';
 import { PerformanceWaterfall } from '../../components/features/testMonitor/PerformanceWaterfall';
+import { ExpandablePanelContext } from '../../components/features/testMonitor/ExpandablePanel';
 import { LangfuseConnectionsManager } from '../../components/features/testMonitor/LangfuseConnectionsManager';
 import { TraceInsights } from '../../components/features/testMonitor/TraceInsights';
 import { CallFlowNavigator } from '../../components/features/testMonitor/CallFlowNavigator';
@@ -143,6 +145,11 @@ const Icons = {
   Flow: () => (
     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+    </svg>
+  ),
+  Waterfall: () => (
+    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h4v12H4zM10 10h4v8h-4zM16 4h4v14h-4z" />
     </svg>
   ),
 };
@@ -300,6 +307,7 @@ function TraceModal({ traceId, timezone, langfuseProjectId, onClose }: TraceModa
   const [error, setError] = useState<string | null>(null);
   const [traceDetail, setTraceDetail] = useState<ProductionTraceDetail | null>(null);
   const [activeTab, setActiveTab] = useState<TraceModalTab>('transcript');
+  const [showWaterfall, setShowWaterfall] = useState(false);
 
   useEffect(() => {
     async function fetchTrace() {
@@ -317,14 +325,20 @@ function TraceModal({ traceId, timezone, langfuseProjectId, onClose }: TraceModa
     fetchTrace();
   }, [traceId]);
 
-  // Handle escape key
+  // Handle escape key — close waterfall first if open, otherwise close modal
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') {
+        if (showWaterfall) {
+          setShowWaterfall(false);
+        } else {
+          onClose();
+        }
+      }
     };
     window.addEventListener('keydown', handleEscape);
     return () => window.removeEventListener('keydown', handleEscape);
-  }, [onClose]);
+  }, [onClose, showWaterfall]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -367,12 +381,23 @@ function TraceModal({ traceId, timezone, langfuseProjectId, onClose }: TraceModa
               </div>
             )}
           </div>
-          <button
-            onClick={onClose}
-            className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700"
-          >
-            <Icons.X />
-          </button>
+          <div className="flex items-center gap-2">
+            {traceDetail && (
+              <button
+                onClick={() => setShowWaterfall(true)}
+                className="p-2 text-gray-400 hover:text-amber-500 dark:hover:text-amber-400 rounded-lg hover:bg-amber-50 dark:hover:bg-amber-900/30 transition-colors"
+                title="Performance Waterfall"
+              >
+                <Icons.Waterfall />
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700"
+            >
+              <Icons.X />
+            </button>
+          </div>
         </div>
 
         {/* Tab Navigation */}
@@ -466,6 +491,44 @@ function TraceModal({ traceId, timezone, langfuseProjectId, onClose }: TraceModa
           )}
         </div>
       </div>
+
+      {/* Fullscreen Waterfall Overlay */}
+      {showWaterfall && traceDetail && createPortal(
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+          onClick={(e) => { if (e.target === e.currentTarget) setShowWaterfall(false); }}
+        >
+          <div
+            className="w-[95vw] h-[90vh] bg-gray-900 rounded-lg shadow-2xl flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-6 py-4 border-b border-gray-700 flex items-center justify-between flex-shrink-0">
+              <div>
+                <h2 className="text-lg font-semibold text-white">Performance Waterfall</h2>
+                <p className="text-sm text-gray-400">Timing visualization</p>
+              </div>
+              <button
+                onClick={() => setShowWaterfall(false)}
+                className="p-2 text-gray-400 hover:text-white rounded-lg hover:bg-gray-700 transition-colors"
+              >
+                <Icons.X />
+              </button>
+            </div>
+            <div className="flex-1 overflow-auto p-4">
+              <ExpandablePanelContext.Provider value={{ isExpanded: true }}>
+                <PerformanceWaterfall
+                  transcript={traceDetail.transcript}
+                  apiCalls={traceDetail.apiCalls}
+                  testStartTime={traceDetail.trace.startedAt}
+                  testDurationMs={traceDetail.trace.latencyMs || undefined}
+                  bottleneckThresholdMs={2000}
+                />
+              </ExpandablePanelContext.Provider>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 }
@@ -492,6 +555,7 @@ function SessionModal({ sessionId, configId, timezone, langfuseProjectId, onClos
   const [activeTab, setActiveTab] = useState<SessionModalTab>('transcript');
   const [copied, setCopied] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [showWaterfall, setShowWaterfall] = useState(false);
 
   // Copy all session data to clipboard
   const handleCopyAll = async () => {
@@ -600,14 +664,20 @@ function SessionModal({ sessionId, configId, timezone, langfuseProjectId, onClos
     fetchSession();
   }, [sessionId, configId]);
 
-  // Handle escape key
+  // Handle escape key — close waterfall first if open, otherwise close modal
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') {
+        if (showWaterfall) {
+          setShowWaterfall(false);
+        } else {
+          onClose();
+        }
+      }
     };
     window.addEventListener('keydown', handleEscape);
     return () => window.removeEventListener('keydown', handleEscape);
-  }, [onClose]);
+  }, [onClose, showWaterfall]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -688,6 +758,16 @@ function SessionModal({ sessionId, configId, timezone, langfuseProjectId, onClos
               >
                 {copied ? <Icons.Check /> : <Icons.Copy />}
                 {copied ? 'Copied!' : 'Copy All'}
+              </button>
+            )}
+            {/* Waterfall Button */}
+            {sessionDetail && (
+              <button
+                onClick={() => setShowWaterfall(true)}
+                className="p-2 text-gray-400 hover:text-amber-500 dark:hover:text-amber-400 rounded-lg hover:bg-amber-50 dark:hover:bg-amber-900/30 transition-colors"
+                title="Performance Waterfall"
+              >
+                <Icons.Waterfall />
               </button>
             )}
             <button
@@ -854,6 +934,44 @@ function SessionModal({ sessionId, configId, timezone, langfuseProjectId, onClos
           )}
         </div>
       </div>
+
+      {/* Fullscreen Waterfall Overlay */}
+      {showWaterfall && sessionDetail && createPortal(
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+          onClick={(e) => { if (e.target === e.currentTarget) setShowWaterfall(false); }}
+        >
+          <div
+            className="w-[95vw] h-[90vh] bg-gray-900 rounded-lg shadow-2xl flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-6 py-4 border-b border-gray-700 flex items-center justify-between flex-shrink-0">
+              <div>
+                <h2 className="text-lg font-semibold text-white">Performance Waterfall</h2>
+                <p className="text-sm text-gray-400">Timing visualization</p>
+              </div>
+              <button
+                onClick={() => setShowWaterfall(false)}
+                className="p-2 text-gray-400 hover:text-white rounded-lg hover:bg-gray-700 transition-colors"
+              >
+                <Icons.X />
+              </button>
+            </div>
+            <div className="flex-1 overflow-auto p-4">
+              <ExpandablePanelContext.Provider value={{ isExpanded: true }}>
+                <PerformanceWaterfall
+                  transcript={sessionDetail.transcript}
+                  apiCalls={sessionDetail.apiCalls}
+                  testStartTime={sessionDetail.session.firstTraceAt}
+                  testDurationMs={sessionDetail.session.totalLatencyMs || undefined}
+                  bottleneckThresholdMs={2000}
+                />
+              </ExpandablePanelContext.Provider>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 }
@@ -2183,7 +2301,7 @@ export default function CallTracePage() {
                             <Icons.Eye />
                           </button>
                           <a
-                            href={`/test-monitor/analysis?sessionId=${session.sessionId}${selectedConfigId ? `&configId=${selectedConfigId}` : ''}`}
+                            href={`/test-monitor/analysis?sessionId=${encodeURIComponent(session.sessionId)}${selectedConfigId ? `&configId=${selectedConfigId}` : ''}`}
                             onClick={(e) => e.stopPropagation()}
                             className="p-1.5 text-gray-400 hover:text-purple-600 dark:hover:text-purple-400 hover:bg-gray-100 dark:hover:bg-gray-600 rounded"
                             title="Analyze in Analysis page"

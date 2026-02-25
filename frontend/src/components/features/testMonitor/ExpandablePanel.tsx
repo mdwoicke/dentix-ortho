@@ -9,7 +9,7 @@ import { Card } from '../../ui';
 import { cn } from '../../../utils/cn';
 
 // Context to share expanded state with child components
-const ExpandablePanelContext = createContext<{ isExpanded: boolean }>({ isExpanded: false });
+export const ExpandablePanelContext = createContext<{ isExpanded: boolean }>({ isExpanded: false });
 export const useExpandablePanel = () => useContext(ExpandablePanelContext);
 
 interface ExpandablePanelProps {
