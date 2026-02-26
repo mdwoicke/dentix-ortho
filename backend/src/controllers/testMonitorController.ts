@@ -26,7 +26,7 @@ import { DiagnosticOrchestrator, DiagnosticRequest, ToolIOSummary } from '../ser
 import { ExpertAgentService, ExpertAgentType } from '../services/expertAgentService';
 import { classifyCallerIntent } from '../services/callerIntentClassifier';
 import { mapToolSequence, StepStatus } from '../services/toolSequenceMapper';
-import { getToolNamesForConfig, getAllKnownToolNames, sqlInList } from '../services/toolNameResolver';
+import { getToolNamesForConfig, getTenantIdForConfig, getDefaultToolNames, getAllKnownToolNames, sqlInList } from '../services/toolNameResolver';
 
 // Path to test-agent database (main database with all test run data)
 const TEST_AGENT_DB_PATH = path.resolve(__dirname, '../../../test-agent/data/test-results.db');
@@ -274,6 +274,18 @@ function getTestAgentDbWritable(): BetterSqlite3.Database {
       FOREIGN KEY (langfuse_config_id) REFERENCES langfuse_configs(id) ON DELETE SET NULL
     );
     CREATE INDEX IF NOT EXISTS idx_environment_presets_default ON environment_presets(is_default);
+
+    -- Session Appointment Cache: Stores NexHealth-verified appointment data per session
+    CREATE TABLE IF NOT EXISTS session_appointment_cache (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL,
+      config_id INTEGER,
+      appointments_json TEXT NOT NULL,
+      verified_at TEXT NOT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(session_id, config_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_session_appt_cache_session ON session_appointment_cache(session_id);
   `);
 
   // Add langfuse columns if they don't exist (for existing tables)
@@ -369,7 +381,24 @@ function getTestAgentDbWritable(): BetterSqlite3.Database {
     console.log('[Migration] Sandbox tables migrated with tenant_id');
   }
 
+  // Migration: Add project_id to langfuse_configs if missing
+  ensureLangfuseProjectIdColumn(db);
+
   return db;
+}
+
+/**
+ * Migration: Add project_id column to langfuse_configs table.
+ * Each Langfuse config may point to a different Langfuse instance with a different project ID.
+ */
+function ensureLangfuseProjectIdColumn(db: BetterSqlite3.Database): void {
+  const columns = db.prepare('PRAGMA table_info(langfuse_configs)').all() as any[];
+  const hasProjectId = columns.some((c: any) => c.name === 'project_id');
+  if (hasProjectId) return;
+
+  console.log('[Migration] Adding project_id to langfuse_configs...');
+  db.exec('ALTER TABLE langfuse_configs ADD COLUMN project_id TEXT');
+  console.log('[Migration] project_id column added to langfuse_configs');
 }
 
 /**
@@ -4999,12 +5028,44 @@ export async function testLangfuseConnection(
     const responseTimeMs = Date.now() - startTime;
 
     if (response.ok) {
+      // Also fetch project ID from the Langfuse API
+      let projectId: string | null = null;
+      try {
+        const projectResp = await fetch(`${normalizedHost}/api/public/projects`, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Basic ${authString}`,
+            'Content-Type': 'application/json',
+          },
+        });
+        if (projectResp.ok) {
+          const projectData = await projectResp.json() as any;
+          projectId = projectData.data?.[0]?.id || projectData.id || null;
+        }
+      } catch {
+        // Non-critical - project ID fetch failed, continue
+      }
+
+      // If we got a project ID and a config ID was provided, save it
+      if (projectId && req.body.configId) {
+        try {
+          const tenantId = getTenantIdFromRequest(req);
+          const db = getTestAgentDbWritable();
+          db.prepare('UPDATE langfuse_configs SET project_id = ?, updated_at = ? WHERE id = ? AND tenant_id = ?')
+            .run(projectId, new Date().toISOString(), req.body.configId, tenantId);
+          db.close();
+        } catch {
+          // Non-critical - save failed, continue
+        }
+      }
+
       res.json({
         success: true,
         data: {
           success: true,
           message: 'LangFuse connection successful',
           responseTimeMs,
+          projectId,
         },
       });
     } else {
@@ -7590,7 +7651,7 @@ export async function getLangfuseConfigs(
 
     // Get regular langfuse configs (exclude negative IDs which are reserved for sandbox configs)
     const configs = db.prepare(`
-      SELECT id, name, host, public_key, secret_key, is_default, created_at, updated_at
+      SELECT id, name, host, public_key, secret_key, is_default, project_id, created_at, updated_at
       FROM langfuse_configs
       WHERE id > 0 AND tenant_id = ?
       ORDER BY is_default DESC, name ASC
@@ -7605,6 +7666,7 @@ export async function getLangfuseConfigs(
       secretKey: c.secret_key ? '********' : '',
       hasSecretKey: !!c.secret_key,
       isDefault: !!c.is_default,
+      projectId: c.project_id || null,
       createdAt: c.created_at,
       updatedAt: c.updated_at,
       isSandbox: false,
@@ -7624,19 +7686,25 @@ export async function getLangfuseConfigs(
 
       // Map sandbox configs (use negative IDs to distinguish them)
       // sandbox_a = -1, sandbox_b = -2
-      sandboxConfigs = sandboxes.map((s: any) => ({
-        id: s.sandbox_id === 'sandbox_a' ? -1 : -2,
-        name: s.name, // "Sandbox A" or "Sandbox B"
-        host: s.langfuse_host,
-        publicKey: s.langfuse_public_key,
-        secretKey: s.langfuse_secret_key ? '********' : '',
-        hasSecretKey: !!s.langfuse_secret_key,
-        isDefault: false,
-        createdAt: s.updated_at,
-        updatedAt: s.updated_at,
-        isSandbox: true,
-        sandboxId: s.sandbox_id,
-      }));
+      sandboxConfigs = sandboxes.map((s: any) => {
+        // Look up project_id from the corresponding langfuse_configs entry
+        const sandboxConfigId = s.sandbox_id === 'sandbox_a' ? -1 : -2;
+        const existingConfig = db!.prepare('SELECT project_id FROM langfuse_configs WHERE id = ?').get(sandboxConfigId) as any;
+        return {
+          id: sandboxConfigId,
+          name: s.name, // "Sandbox A" or "Sandbox B"
+          host: s.langfuse_host,
+          publicKey: s.langfuse_public_key,
+          secretKey: s.langfuse_secret_key ? '********' : '',
+          hasSecretKey: !!s.langfuse_secret_key,
+          isDefault: false,
+          projectId: existingConfig?.project_id || null,
+          createdAt: s.updated_at,
+          updatedAt: s.updated_at,
+          isSandbox: true,
+          sandboxId: s.sandbox_id,
+        };
+      });
     }
 
     // Sort order: Production first (isDefault), then Sandbox A, Sandbox B, then rest alphabetically
@@ -7679,7 +7747,7 @@ export async function createLangfuseConfig(
 
   try {
     const tenantId = getTenantIdFromRequest(req);
-    const { name, host, publicKey, secretKey, isDefault } = req.body;
+    const { name, host, publicKey, secretKey, isDefault, projectId } = req.body;
 
     if (!name || !host || !publicKey) {
       res.status(400).json({
@@ -7699,9 +7767,9 @@ export async function createLangfuseConfig(
     }
 
     const result = db.prepare(`
-      INSERT INTO langfuse_configs (name, host, public_key, secret_key, is_default, tenant_id, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(name, host, publicKey, secretKey || '', isDefault ? 1 : 0, tenantId, now, now);
+      INSERT INTO langfuse_configs (name, host, public_key, secret_key, is_default, project_id, tenant_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(name, host, publicKey, secretKey || '', isDefault ? 1 : 0, projectId || null, tenantId, now, now);
 
     res.json({
       success: true,
@@ -7712,6 +7780,7 @@ export async function createLangfuseConfig(
         publicKey,
         hasSecretKey: !!secretKey,
         isDefault: !!isDefault,
+        projectId: projectId || null,
         createdAt: now,
         updatedAt: now,
       },
@@ -7744,7 +7813,7 @@ export async function updateLangfuseConfig(
   try {
     const tenantId = getTenantIdFromRequest(req);
     const { id } = req.params;
-    const { name, host, publicKey, secretKey, isDefault } = req.body;
+    const { name, host, publicKey, secretKey, isDefault, projectId } = req.body;
 
     if (!name || !host || !publicKey) {
       res.status(400).json({
@@ -7758,7 +7827,7 @@ export async function updateLangfuseConfig(
     const now = new Date().toISOString();
 
     // Check if config exists and belongs to this tenant
-    const existing = db.prepare('SELECT id, secret_key FROM langfuse_configs WHERE id = ? AND tenant_id = ?').get(id, tenantId) as any;
+    const existing = db.prepare('SELECT id, secret_key, project_id FROM langfuse_configs WHERE id = ? AND tenant_id = ?').get(id, tenantId) as any;
     if (!existing) {
       res.status(404).json({
         success: false,
@@ -7774,12 +7843,14 @@ export async function updateLangfuseConfig(
 
     // Only update secret_key if it's not the masked placeholder
     const newSecretKey = secretKey === '********' ? existing.secret_key : (secretKey || '');
+    // Only update project_id if provided (don't clear it)
+    const newProjectId = projectId !== undefined ? (projectId || null) : existing.project_id;
 
     db.prepare(`
       UPDATE langfuse_configs
-      SET name = ?, host = ?, public_key = ?, secret_key = ?, is_default = ?, updated_at = ?
+      SET name = ?, host = ?, public_key = ?, secret_key = ?, is_default = ?, project_id = ?, updated_at = ?
       WHERE id = ? AND tenant_id = ?
-    `).run(name, host, publicKey, newSecretKey, isDefault ? 1 : 0, now, id, tenantId);
+    `).run(name, host, publicKey, newSecretKey, isDefault ? 1 : 0, newProjectId, now, id, tenantId);
 
     res.json({
       success: true,
@@ -7790,6 +7861,7 @@ export async function updateLangfuseConfig(
         publicKey,
         hasSecretKey: !!newSecretKey,
         isDefault: !!isDefault,
+        projectId: newProjectId,
         updatedAt: now,
       },
     });
@@ -8011,7 +8083,7 @@ export async function getActiveLangfuseConfig(
     ensureLangfuseConfigsMigrated(db, tenantId);
 
     const config = db.prepare(`
-      SELECT id, name, host, public_key, secret_key, is_default, created_at, updated_at
+      SELECT id, name, host, public_key, secret_key, is_default, project_id, created_at, updated_at
       FROM langfuse_configs
       WHERE is_default = 1 AND tenant_id = ?
     `).get(tenantId) as any;
@@ -8034,6 +8106,7 @@ export async function getActiveLangfuseConfig(
         secretKey: config.secret_key || '',
         hasSecretKey: !!config.secret_key,
         isDefault: true,
+        projectId: config.project_id || null,
         createdAt: config.created_at,
         updatedAt: config.updated_at,
       },
@@ -8740,6 +8813,7 @@ function transformObservationRow(row: any) {
       input: row.usage_input_tokens,
       output: row.usage_output_tokens,
       total: row.usage_total_tokens,
+      cacheRead: row.usage_cache_read_tokens || null,
     },
     cost: row.cost,
     level: row.level,
@@ -8896,6 +8970,8 @@ function transformToApiCalls(observations: any[]): any[] {
       toolName: obs.name || obs.model || 'unknown',
       requestPayload: obs.input ? JSON.parse(obs.input) : null,
       responsePayload: obs.output ? JSON.parse(obs.output) : null,
+      errorMessage: obs.status_message || null,
+      level: obs.level || 'DEFAULT',
       status: obs.level === 'ERROR' ? 'failed' : 'completed',
       durationMs: obs.latency_ms,
       timestamp: obs.started_at,
@@ -10042,6 +10118,7 @@ function transformSessionRow(row: any): any {
     hasOrder: Boolean(row.has_order),
     patientNames: row.patient_names || null,
     patientGuids: row.patient_guids || null,
+    locationName: row.location_name || null,
   };
 }
 
@@ -10330,6 +10407,487 @@ export async function refreshProductionSession(
     next(error);
   } finally {
     if (db) db.close();
+  }
+}
+
+/**
+ * GET /api/test-monitor/production-calls/sessions/:sessionId/appointments
+ * Extract booking details from session observations and optionally verify via NexHealth
+ */
+export async function getSessionAppointments(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  let db: BetterSqlite3.Database | null = null;
+
+  try {
+    const { sessionId } = req.params;
+    const { configId, verify } = req.query;
+    const parsedConfigId = configId ? parseInt(configId as string) : null;
+
+    db = getTestAgentDbWritable();
+
+    // Determine which tool names to use for this config/tenant
+    const tools = parsedConfigId
+      ? getToolNamesForConfig(db, parsedConfigId)
+      : getDefaultToolNames();
+    const tenantId = parsedConfigId ? getTenantIdForConfig(db, parsedConfigId) : 1;
+
+    // Only Chord (tenant 5) uses NexHealth — this feature is Chord-specific
+    if (tenantId !== 5) {
+      res.json({ success: true, data: { appointments: [], tenant: 'ortho', message: 'Appointment extraction not available for this tenant' } });
+      return;
+    }
+
+    // Check cache first — return cached verified data if available (skip if verify=true to force re-verify)
+    if (verify !== 'true') {
+      const cached = db.prepare(
+        `SELECT appointments_json, verified_at FROM session_appointment_cache WHERE session_id = ? AND config_id IS ?`
+      ).get(sessionId, parsedConfigId) as any;
+
+      if (cached) {
+        try {
+          const cachedAppointments = JSON.parse(cached.appointments_json);
+          res.json({
+            success: true,
+            data: {
+              appointments: cachedAppointments,
+              sessionId,
+              tenant: 'chord',
+              verifiedAt: cached.verified_at,
+              cached: true,
+            },
+          });
+          return;
+        } catch {
+          // Corrupted cache — fall through to re-extract
+        }
+      }
+    }
+
+    // Fetch scheduling tool observations for this session
+    const schedulingToolPlaceholders = tools.schedulingTools.map(() => '?').join(', ');
+    const rows = db.prepare(`
+      SELECT pto.observation_id, pto.name, pto.output, pto.input, pto.started_at, pto.type
+      FROM production_trace_observations pto
+      JOIN production_traces pt ON pto.trace_id = pt.trace_id
+      WHERE pt.session_id = ?
+        AND (
+          (pto.name IN (${schedulingToolPlaceholders}) AND pto.output IS NOT NULL)
+          OR (pto.type = 'GENERATION' AND (
+            pto.output LIKE '%"Child1_appointmentId":%'
+            OR pto.output LIKE '%"Child2_appointmentId":%'
+          ))
+        )
+      ORDER BY pto.started_at ASC
+    `).all(sessionId, ...tools.schedulingTools) as any[];
+
+    const appointments: Array<{
+      appointmentId: string | null;
+      patientId: string | null;
+      patientName: string | null;
+      patientEmail?: string | null;
+      patientPhone?: string | null;
+      patientDob?: string | null;
+      providerId: string | null;
+      providerName?: string | null;
+      startTime: string | null;
+      endTime: string | null;
+      appointmentTypeName?: string | null;
+      operatoryId?: string | null;
+      operatoryName?: string | null;
+      locationId?: string | null;
+      locationName?: string | null;
+      locationAddress?: string | null;
+      locationPhone?: string | null;
+      timezone?: string | null;
+      note?: string | null;
+      status: 'booked' | 'confirmed' | 'cancelled' | 'unknown';
+      source: 'observation' | 'nexhealth_live';
+      observationId: string;
+      childLabel?: string;
+    }> = [];
+
+    for (const row of rows) {
+      try {
+        const output = typeof row.output === 'string' ? JSON.parse(row.output) : row.output;
+        if (!output) continue;
+
+        // Handle direct scheduling tool output (NexHealth response)
+        if (tools.schedulingTools.includes(row.name)) {
+          const outputStr = typeof row.output === 'string' ? row.output : JSON.stringify(output);
+
+          // Check for NexHealth K8 pattern: appointment object with patient_id, provider_id, start_time
+          if (outputStr.includes('"patient_id":') && outputStr.includes('"provider_id":') && outputStr.includes('"start_time":')) {
+            // Could be nested in different shapes — try to find the appointment object
+            let apptObj: any = null;
+            if (output.id && output.patient_id) {
+              apptObj = output;
+            } else if (output.appointment) {
+              apptObj = output.appointment;
+            } else if (output.data) {
+              apptObj = output.data;
+            } else if (typeof output === 'string') {
+              try { apptObj = JSON.parse(output); } catch {}
+            }
+
+            // Also search for nested text content
+            if (!apptObj) {
+              const textContent = typeof output === 'string' ? output : (output.text || output.content || outputStr);
+              const idMatch = String(textContent).match(/"id"\s*:\s*(\d+)/);
+              const patMatch = String(textContent).match(/"patient_id"\s*:\s*(\d+)/);
+              const provMatch = String(textContent).match(/"provider_id"\s*:\s*(\d+)/);
+              const startMatch = String(textContent).match(/"start_time"\s*:\s*"([^"]+)"/);
+              if (idMatch && patMatch && provMatch && startMatch) {
+                apptObj = {
+                  id: idMatch[1],
+                  patient_id: patMatch[1],
+                  provider_id: provMatch[1],
+                  start_time: startMatch[1],
+                };
+                const endMatch = String(textContent).match(/"end_time"\s*:\s*"([^"]+)"/);
+                if (endMatch) apptObj.end_time = endMatch[1];
+              }
+            }
+
+            if (apptObj && (apptObj.id || apptObj.patient_id)) {
+              appointments.push({
+                appointmentId: String(apptObj.id || ''),
+                patientId: String(apptObj.patient_id || ''),
+                patientName: null,
+                providerId: String(apptObj.provider_id || ''),
+                providerName: apptObj.provider_name || null,
+                startTime: apptObj.start_time || null,
+                endTime: apptObj.end_time || null,
+                appointmentTypeName: apptObj.appointment_type_name || apptObj.appointmentTypeName || null,
+                operatoryId: apptObj.operatory_id ? String(apptObj.operatory_id) : null,
+                locationId: apptObj.location_id ? String(apptObj.location_id) : null,
+                timezone: apptObj.timezone || null,
+                note: apptObj.note || null,
+                status: apptObj.cancelled ? 'cancelled' : apptObj.confirmed ? 'confirmed' : 'booked',
+                source: 'observation',
+                observationId: row.observation_id,
+              });
+            }
+          }
+
+          // Check for appointmentId field
+          if (output.appointmentId && output.appointmentId !== 'null') {
+            const existing = appointments.find(a => a.appointmentId === String(output.appointmentId));
+            if (!existing) {
+              appointments.push({
+                appointmentId: String(output.appointmentId),
+                patientId: String(output.patientId || ''),
+                patientName: output.patientName || output.childName || null,
+                providerId: String(output.providerId || ''),
+                startTime: output.startTime || output.start_time || null,
+                endTime: null,
+                status: 'booked',
+                source: 'observation',
+                observationId: row.observation_id,
+              });
+            }
+          }
+        }
+
+        // Handle GENERATION output with sibling booking payload
+        if (row.type === 'GENERATION') {
+          const outputStr = typeof row.output === 'string' ? row.output : JSON.stringify(output);
+          for (const childNum of [1, 2, 3]) {
+            const idKey = `Child${childNum}_appointmentId`;
+            const nameKey = `Child${childNum}_childName`;
+            const idMatch = outputStr.match(new RegExp(`"${idKey}"\\s*:\\s*(\\d+)`));
+            if (idMatch) {
+              const nameMatch = outputStr.match(new RegExp(`"${nameKey}"\\s*:\\s*"([^"]+)"`));
+              const existing = appointments.find(a => a.appointmentId === idMatch[1]);
+              if (!existing) {
+                appointments.push({
+                  appointmentId: idMatch[1],
+                  patientId: null,
+                  patientName: nameMatch ? nameMatch[1] : null,
+                  providerId: null,
+                  startTime: null,
+                  endTime: null,
+                  status: 'booked',
+                  source: 'observation',
+                  observationId: row.observation_id,
+                  childLabel: `Child ${childNum}`,
+                });
+              }
+            }
+          }
+        }
+      } catch (parseErr) {
+        // Skip malformed observations
+        continue;
+      }
+    }
+
+    // Enrich from patient tool observations: locationBehaviors (clinic info) + patient demographics
+    {
+      const patientToolPlaceholders = tools.patientTools.map(() => '?').join(', ');
+      const patientObs = db.prepare(`
+        SELECT pto.output FROM production_trace_observations pto
+        JOIN production_traces pt ON pto.trace_id = pt.trace_id
+        WHERE pt.session_id = ? AND pto.name IN (${patientToolPlaceholders}) AND pto.output IS NOT NULL
+        ORDER BY pto.started_at ASC
+      `).all(sessionId, ...tools.patientTools) as any[];
+
+      let clinicName: string | null = null;
+      let clinicAddress: string | null = null;
+      let clinicPhone: string | null = null;
+
+      for (const pObs of patientObs) {
+        try {
+          const pOut = typeof pObs.output === 'string' ? JSON.parse(pObs.output) : pObs.output;
+          if (!pOut) continue;
+          const pStr = typeof pObs.output === 'string' ? pObs.output : JSON.stringify(pOut);
+
+          // Extract locationBehaviors (office info) — appears as { locationBehaviors: { office_name, address_line1, ... } }
+          if (pOut.locationBehaviors) {
+            const lb = pOut.locationBehaviors;
+            clinicName = lb.office_name || null;
+            clinicAddress = lb.address_line1 || null;
+            clinicPhone = lb.office_phone || null;
+          }
+
+          // Extract patient demographics from arrays — match by patient_id
+          if (Array.isArray(pOut)) {
+            for (const patient of pOut) {
+              if (!patient || !patient.id) continue;
+              for (const appt of appointments) {
+                if (appt.patientId && String(patient.id) === appt.patientId) {
+                  if (!appt.patientName && (patient.first_name || patient.last_name)) {
+                    appt.patientName = [patient.first_name, patient.last_name].filter(Boolean).join(' ');
+                  }
+                  if (!appt.patientEmail) appt.patientEmail = patient.email || null;
+                  if (!appt.patientPhone) appt.patientPhone = patient.phone_number || patient.cell_phone_number || null;
+                  if (!appt.patientDob) appt.patientDob = patient.date_of_birth || null;
+                }
+              }
+            }
+          } else if (!Array.isArray(pOut) && pStr.includes('"first_name"')) {
+            // Single patient object or nested — try regex fallback
+            for (const appt of appointments) {
+              if (!appt.patientName && appt.patientId) {
+                if (pStr.includes(`"id":${appt.patientId}`) || pStr.includes(`"id": ${appt.patientId}`)) {
+                  const nameMatch = pStr.match(/"first_name"\s*:\s*"([^"]+)"/);
+                  const lastMatch = pStr.match(/"last_name"\s*:\s*"([^"]+)"/);
+                  if (nameMatch) {
+                    appt.patientName = lastMatch ? `${nameMatch[1]} ${lastMatch[1]}` : nameMatch[1];
+                  }
+                }
+              }
+            }
+          }
+        } catch {}
+      }
+
+      // Apply clinic info to all appointments
+      if (clinicName || clinicAddress || clinicPhone) {
+        for (const appt of appointments) {
+          if (!appt.locationName && clinicName) appt.locationName = clinicName;
+          if (!appt.locationAddress && clinicAddress) appt.locationAddress = clinicAddress;
+          if (!appt.locationPhone && clinicPhone) appt.locationPhone = clinicPhone;
+        }
+      }
+    }
+
+    // Optional NexHealth live verification + enrichment
+    let verifiedAppointments = appointments;
+    if (verify === 'true' && appointments.length > 0) {
+      try {
+        const { getPatientAppointments, getPatient, getLocation } = await import('../services/nexhealthProxy');
+        const patientIds = [...new Set(appointments.filter(a => a.patientId).map(a => a.patientId!))];
+
+        // 1. Verify appointments and enrich from live appointment data
+        for (const patientId of patientIds) {
+          try {
+            const liveAppts = await getPatientAppointments(patientId);
+            for (const appt of verifiedAppointments) {
+              if (appt.patientId !== patientId) continue;
+              const match = liveAppts.find((la: any) =>
+                String(la.id) === appt.appointmentId ||
+                (la.start_time && appt.startTime && new Date(la.start_time).getTime() === new Date(appt.startTime).getTime())
+              );
+              if (match) {
+                appt.endTime = match.end_time || appt.endTime;
+                appt.status = match.cancelled ? 'cancelled' : match.confirmed ? 'confirmed' : 'booked';
+                if (!appt.appointmentId && match.id) appt.appointmentId = String(match.id);
+                appt.appointmentTypeName = match.appointment_type_name || appt.appointmentTypeName || null;
+                appt.operatoryId = match.operatory_id ? String(match.operatory_id) : appt.operatoryId || null;
+                appt.source = 'nexhealth_live';
+              }
+            }
+          } catch (patErr: any) {
+            console.warn(`[getSessionAppointments] Failed to verify patient ${patientId}:`, patErr.message);
+          }
+        }
+
+        // 2. Enrich patient demographics (name, email, phone, DOB)
+        for (const patientId of patientIds) {
+          try {
+            const patient = await getPatient(patientId);
+            if (!patient) continue;
+            const fullName = patient.name
+              || [patient.first_name, patient.last_name].filter(Boolean).join(' ')
+              || null;
+            for (const appt of verifiedAppointments) {
+              if (appt.patientId !== patientId) continue;
+              if (fullName) appt.patientName = fullName;
+              appt.patientEmail = patient.email || null;
+              appt.patientPhone = patient.phone_number || null;
+              appt.patientDob = patient.date_of_birth || patient.bio?.date_of_birth || null;
+            }
+          } catch (patErr: any) {
+            console.warn(`[getSessionAppointments] Failed to fetch patient ${patientId}:`, patErr.message);
+          }
+        }
+
+        // 3. Enrich location + operatory names
+        // Collect unique operatory IDs to resolve names
+        const operatoryIds = [...new Set(verifiedAppointments.filter(a => a.operatoryId).map(a => a.operatoryId!))];
+        if (operatoryIds.length > 0 || verifiedAppointments.some(a => !a.locationName)) {
+          try {
+            const location = await getLocation(); // default prod location
+            if (location) {
+              const locName = location.name || null;
+              const locId = location.id ? String(location.id) : null;
+              const operatoryMap = new Map<string, string>();
+              if (Array.isArray(location.operatories)) {
+                for (const op of location.operatories) {
+                  if (op.id && op.name) operatoryMap.set(String(op.id), op.name);
+                }
+              }
+              for (const appt of verifiedAppointments) {
+                if (!appt.locationName && locName) {
+                  appt.locationName = locName;
+                  appt.locationId = appt.locationId || locId;
+                }
+                if (appt.operatoryId && !appt.operatoryName) {
+                  appt.operatoryName = operatoryMap.get(appt.operatoryId) || null;
+                }
+              }
+            }
+          } catch (locErr: any) {
+            console.warn('[getSessionAppointments] Failed to fetch location:', locErr.message);
+          }
+        }
+      } catch (importErr: any) {
+        console.warn('[getSessionAppointments] NexHealth verification failed:', importErr.message);
+      }
+
+      // Save verified results to cache
+      if (verifiedAppointments.length > 0) {
+        try {
+          const verifiedAt = new Date().toISOString();
+          db!.prepare(`
+            INSERT INTO session_appointment_cache (session_id, config_id, appointments_json, verified_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(session_id, config_id) DO UPDATE SET
+              appointments_json = excluded.appointments_json,
+              verified_at = excluded.verified_at
+          `).run(sessionId, parsedConfigId, JSON.stringify(verifiedAppointments), verifiedAt);
+        } catch (cacheErr: any) {
+          console.warn('[getSessionAppointments] Failed to cache verified appointments:', cacheErr.message);
+        }
+      }
+    }
+
+    res.json({
+      success: true,
+      data: {
+        appointments: verifiedAppointments,
+        sessionId,
+        tenant: 'chord',
+        verifiedAt: verify === 'true' ? new Date().toISOString() : undefined,
+        cached: false,
+      },
+    });
+  } catch (error) {
+    next(error);
+  } finally {
+    if (db) db.close();
+  }
+}
+
+/**
+ * GET /api/test-monitor/patient/:patientId/appointments
+ *
+ * Fetch all NexHealth appointments for a given patient ID.
+ * Returns appointments sorted by start_time descending (newest first).
+ * Enriches with operatory names from the location data.
+ */
+export async function getPatientAllAppointments(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { patientId } = req.params;
+    if (!patientId) {
+      res.status(400).json({ success: false, error: 'patientId is required' });
+      return;
+    }
+
+    const { getPatientAppointments, getLocation } = await import('../services/nexhealthProxy');
+
+    const liveAppts = await getPatientAppointments(patientId);
+
+    // Build operatory name map from location data
+    let operatoryMap = new Map<string, string>();
+    let locationName: string | null = null;
+    let locationAddress: string | null = null;
+    let locationPhone: string | null = null;
+    try {
+      const location = await getLocation();
+      if (location) {
+        locationName = location.name || null;
+        const parts = [location.address, location.city, location.state, location.zip_code].filter(Boolean);
+        locationAddress = parts.length > 0 ? parts.join(', ') : null;
+        locationPhone = location.phone_number || null;
+        if (Array.isArray(location.operatories)) {
+          for (const op of location.operatories) {
+            if (op.id && op.name) operatoryMap.set(String(op.id), op.name);
+          }
+        }
+      }
+    } catch {
+      // location enrichment is optional
+    }
+
+    // Map to a consistent shape
+    const appointments = liveAppts.map((la: any) => ({
+      appointmentId: la.id ? String(la.id) : null,
+      patientId: la.patient_id ? String(la.patient_id) : patientId,
+      providerId: la.provider_id ? String(la.provider_id) : null,
+      startTime: la.start_time || null,
+      endTime: la.end_time || null,
+      appointmentTypeName: la.appointment_type_name || null,
+      operatoryId: la.operatory_id ? String(la.operatory_id) : null,
+      operatoryName: la.operatory_id ? (operatoryMap.get(String(la.operatory_id)) || null) : null,
+      locationName,
+      locationAddress,
+      locationPhone,
+      status: la.cancelled ? 'cancelled' : la.confirmed ? 'confirmed' : 'booked',
+      createdAt: la.created_at || null,
+    }));
+
+    // Sort newest first
+    appointments.sort((a: any, b: any) => {
+      if (!a.startTime && !b.startTime) return 0;
+      if (!a.startTime) return 1;
+      if (!b.startTime) return -1;
+      return new Date(b.startTime).getTime() - new Date(a.startTime).getTime();
+    });
+
+    res.json({
+      success: true,
+      data: {
+        patientId,
+        appointments,
+        total: appointments.length,
+      },
+    });
+  } catch (error) {
+    next(error);
   }
 }
 
@@ -10797,7 +11355,7 @@ export async function executeReplay(
   next: NextFunction
 ): Promise<void> {
   try {
-    const { toolName, action, input, originalObservationId } = req.body;
+    const { toolName, action, input, originalObservationId, tenantId } = req.body;
 
     // Validate required fields
     if (!toolName || typeof toolName !== 'string') {
@@ -10824,13 +11382,14 @@ export async function executeReplay(
       return;
     }
 
-    console.log(`[Replay] Executing replay - tool: ${toolName}, action: ${action}, observationId: ${originalObservationId || 'N/A'}`);
+    console.log(`[Replay] Executing replay - tool: ${toolName}, action: ${action}, tenantId: ${tenantId || 1}, observationId: ${originalObservationId || 'N/A'}`);
 
     const result = await replayService.executeReplay({
       toolName,
       action,
       input,
       originalObservationId,
+      tenantId: tenantId ? Number(tenantId) : undefined,
     });
 
     if (result.success) {

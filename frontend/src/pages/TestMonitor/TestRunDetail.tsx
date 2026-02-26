@@ -80,7 +80,8 @@ import {
 } from '../../store/slices/testMonitorSlice';
 import { subscribeToTestRun, subscribeToExecution, type TestRunStreamEvent, type ExecutionStreamEvent } from '../../services/api/testMonitorApi';
 import * as testMonitorApi from '../../services/api/testMonitorApi';
-import { getAppSettings, getTestEnvironmentPresets } from '../../services/api/appSettingsApi';
+import { getAppSettings, getLangfuseConfigs, getTestEnvironmentPresets } from '../../services/api/appSettingsApi';
+import type { LangfuseConfigProfile } from '../../types/appSettings.types';
 import type { TestResult } from '../../types/testMonitor.types';
 import type { TestEnvironmentPresetWithNames } from '../../types/appSettings.types';
 
@@ -122,7 +123,8 @@ export function TestRunDetail() {
   const [applyingBatch, setApplyingBatch] = useState(false);
 
   // Langfuse configuration
-  const [langfuseProjectId, setLangfuseProjectId] = useState<string | undefined>(undefined);
+  const [langfuseConfigs, setLangfuseConfigs] = useState<LangfuseConfigProfile[]>([]);
+  const [globalLangfuseProjectId, setGlobalLangfuseProjectId] = useState<string | undefined>(undefined);
 
   // Environment filter state
   const [environmentPresets, setEnvironmentPresets] = useState<TestEnvironmentPresetWithNames[]>([]);
@@ -327,15 +329,19 @@ export function TestRunDetail() {
     dispatch(fetchPromptFiles());
   }, [dispatch]);
 
-  // Fetch Langfuse project ID for session URLs and environment presets
+  // Fetch Langfuse configs and global project ID for session URLs, and environment presets
   useEffect(() => {
     getAppSettings()
       .then(settings => {
         if (settings.langfuseProjectId?.value) {
-          setLangfuseProjectId(settings.langfuseProjectId.value);
+          setGlobalLangfuseProjectId(settings.langfuseProjectId.value);
         }
       })
       .catch(err => console.warn('Failed to fetch app settings:', err));
+
+    getLangfuseConfigs()
+      .then(cfgs => setLangfuseConfigs(cfgs))
+      .catch(err => console.warn('Failed to fetch Langfuse configs:', err));
 
     // Fetch environment presets for filter dropdown
     getTestEnvironmentPresets()
@@ -910,7 +916,8 @@ export function TestRunDetail() {
               runId={selectedTest?.runId}
               dbId={selectedTest?.id}
               langfuseTraceId={selectedTest?.langfuseTraceId}
-              langfuseProjectId={langfuseProjectId}
+              langfuseHost={langfuseConfigs.find(c => c.id === selectedRun?.langfuseConfigId)?.host}
+              langfuseProjectId={langfuseConfigs.find(c => c.id === selectedRun?.langfuseConfigId)?.projectId || globalLangfuseProjectId}
               flowiseSessionId={selectedTest?.flowiseSessionId}
               isLive={isViewingLiveTest || false}
             />

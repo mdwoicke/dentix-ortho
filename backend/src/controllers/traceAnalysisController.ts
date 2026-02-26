@@ -2622,6 +2622,123 @@ function getToolCallDetail(tc: InvestigationToolCall): string {
   return JSON.stringify(tc.output).substring(0, 60);
 }
 
+/** Compact date: "02/25/2026" or "2026-02-25" → "2/25" */
+function shortenDate(dateStr: string): string {
+  if (!dateStr || typeof dateStr !== 'string') return '';
+  // MM/DD/YYYY
+  const slashMatch = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/\d{4}/);
+  if (slashMatch) return `${parseInt(slashMatch[1])}/${parseInt(slashMatch[2])}`;
+  // YYYY-MM-DD
+  const isoMatch = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoMatch) return `${parseInt(isoMatch[2])}/${parseInt(isoMatch[3])}`;
+  return dateStr.substring(0, 5);
+}
+
+/** Compact time: "3/17/2026 9:50:00 AM" or ISO → "9:50am" */
+function formatShortTime(timeStr: string): string {
+  if (!timeStr || typeof timeStr !== 'string') return '';
+  // "M/D/YYYY H:MM:SS AM/PM" or "H:MM AM/PM" (seconds optional)
+  const usMatch = timeStr.match(/(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)/i);
+  if (usMatch) {
+    return `${parseInt(usMatch[1])}:${usMatch[2]}${usMatch[3].toLowerCase()}`;
+  }
+  // ISO "2026-03-17T09:50:00" — extract HH:MM and convert to 12h
+  const isoMatch = timeStr.match(/T(\d{2}):(\d{2})/);
+  if (isoMatch) {
+    let h = parseInt(isoMatch[1]);
+    const suffix = h >= 12 ? 'pm' : 'am';
+    if (h > 12) h -= 12;
+    if (h === 0) h = 12;
+    return `${h}:${isoMatch[2]}${suffix}`;
+  }
+  return '';
+}
+
+/** Extract caller-provided context from tool call input for request arrows */
+function getToolCallRequestDetail(tc: InvestigationToolCall): string {
+  if (!tc.input || typeof tc.input !== 'object') return '';
+
+  if (tc.action === 'slots' || tc.action === 'grouped_slots') {
+    const parts: string[] = [];
+    // Ortho: startDate/endDate, Chord: searchStartDate/searchEndDate
+    const start = shortenDate(tc.input.startDate || tc.input.searchStartDate || '');
+    const end = shortenDate(tc.input.endDate || tc.input.searchEndDate || '');
+    if (start && end) parts.push(`${start}-${end}`);
+    else if (start) parts.push(`from ${start}`);
+    if (tc.action === 'grouped_slots' && tc.input.numberOfPatients && tc.input.numberOfPatients > 1) {
+      parts.push(`${tc.input.numberOfPatients} kids`);
+    }
+    return parts.join(', ');
+  }
+
+  if (tc.action === 'book_child' || tc.action === 'book') {
+    // children[] array form (Ortho grouped booking)
+    if (Array.isArray(tc.input.children) && tc.input.children.length > 0) {
+      const child = tc.input.children[0];
+      const name = child.firstName || child.childFirstName || child.childName || '';
+      const rawTime = child.startTime || '';
+      const rawDate = child.appointmentDate || '';
+      const date = shortenDate(rawTime || rawDate);
+      const time = formatShortTime(rawTime || (child.appointmentTime ? `1/1/2000 ${child.appointmentTime}` : ''));
+      const timePart = date && time ? `${date} ${time}` : time || date;
+      return name && timePart ? `${name}, ${timePart}` : name || timePart;
+    }
+    // flat form — Ortho: childName/firstName + startTime, Chord: childFirstName + appointmentDate/appointmentTime
+    const name = tc.input.childFirstName || tc.input.childName || tc.input.firstName || '';
+    const rawTime = tc.input.startTime || '';
+    const rawDate = tc.input.appointmentDate || '';
+    const date = shortenDate(rawTime || rawDate);
+    const time = formatShortTime(rawTime || (tc.input.appointmentTime ? `1/1/2000 ${tc.input.appointmentTime}` : ''));
+    const timePart = date && time ? `${date} ${time}` : time || date;
+    return name && timePart ? `${name}, ${timePart}` : name || timePart;
+  }
+
+  if (tc.action === 'create') {
+    const first = tc.input.patientFirstName || tc.input.firstName || '';
+    const last = tc.input.patientLastName || tc.input.lastName || '';
+    return [first, last].filter(Boolean).join(' ');
+  }
+
+  if (tc.action === 'escalation') {
+    return (tc.input.reason || tc.input.transferReason || tc.input.escalationIntent || '').substring(0, 30);
+  }
+
+  if (tc.action === 'lookup') {
+    if (tc.input.phoneNumber) {
+      const ph = String(tc.input.phoneNumber);
+      return `ph: ***${ph.slice(-4)}`;
+    }
+    if (tc.input.filter) return String(tc.input.filter).substring(0, 20);
+    return '';
+  }
+
+  if (tc.action === 'cancel') {
+    const id = tc.input.appointmentGUID || tc.input.appointmentId || '';
+    return id ? `appt ${String(id).substring(0, 8)}...` : '';
+  }
+
+  if (tc.action === 'get_existing' || tc.action === 'reschedule') {
+    const parts: string[] = [];
+    const id = tc.input.appointmentGUID || tc.input.appointmentId || tc.input.patientGUID || '';
+    if (id) parts.push(`appt ${String(id).substring(0, 8)}...`);
+    if (tc.action === 'reschedule' && tc.input.newStartTime) {
+      const date = shortenDate(tc.input.newStartTime);
+      const time = formatShortTime(tc.input.newStartTime);
+      parts.push(date && time ? `${date} ${time}` : time || date);
+    }
+    return parts.join(', ');
+  }
+
+  // appointments action — show patient ID if present
+  if (tc.action === 'appointments') {
+    const id = tc.input.patientId || tc.input.patientGUID || '';
+    return id ? `patient ${String(id).substring(0, 10)}` : '';
+  }
+
+  // clinic_info, CurrentDateTime — no context needed
+  return '';
+}
+
 function detectRecommendedFixes(r: InvestigationResult): RecommendedFix[] {
   const fixes: RecommendedFix[] = [];
   const errorToolCalls = r.toolCalls.filter(tc => tc.isError);
@@ -2776,6 +2893,11 @@ function detectRecommendedFixes(r: InvestigationResult): RecommendedFix[] {
   return fixes;
 }
 
+function escapeTableCell(text: string): string {
+  // Escape pipe characters and newlines that break markdown table syntax
+  return text.replace(/\|/g, '\\|').replace(/\n/g, ' ');
+}
+
 function formatRecommendedFixesMarkdown(fixes: RecommendedFix[]): string {
   if (fixes.length === 0) return '';
 
@@ -2814,8 +2936,8 @@ function formatRecommendedFixesMarkdown(fixes: RecommendedFix[]): string {
     for (const fix of group) {
       globalIdx++;
       const sevLabel = fix.severity === 'Critical' ? '**Critical**' : fix.severity;
-      const status = fix.fixApplied ? `✅ ${fix.fixApplied}` : '⬚ Open';
-      lines.push(`| ${globalIdx} | ${sevLabel} | ${fix.issue} | ${fix.recommendation} | ${status} |`);
+      const status = fix.fixApplied ? `✅ ${escapeTableCell(fix.fixApplied)}` : '⬚ Open';
+      lines.push(`| ${globalIdx} | ${sevLabel} | ${escapeTableCell(fix.issue)} | ${escapeTableCell(fix.recommendation)} | ${status} |`);
     }
     lines.push('');
   }
@@ -3019,13 +3141,14 @@ function formatInvestigationMarkdown(r: InvestigationResult): string {
   lines.push('');
   lines.push(`**Result: ${r.toolCalls.length} tool calls, ${r.bookingToolCallCount === 0 ? 'none are bookings' : `${r.bookingToolCallCount} booking(s)`}:**`);
   lines.push('');
-  lines.push('| # | Tool | Action | Level | Key Output |');
-  lines.push('|---|------|--------|-------|------------|');
+  lines.push('| # | Tool | Action | Request Context | Level | Key Output |');
+  lines.push('|---|------|--------|-----------------|-------|------------|');
   for (const tc of r.toolCalls) {
     const level = tc.isError ? '**ERROR**' : tc.level;
     const detail = getToolCallDetail(tc);
+    const reqContext = getToolCallRequestDetail(tc);
     const actionDisplay = (tc.action === tc.name || tc.name === 'CurrentDateTime' || tc.name === 'current_date_time') ? '—' : `\`${tc.action}\``;
-    lines.push(`| ${tc.index} | \`${tc.name}\` | ${actionDisplay} | ${level} | ${detail} |`);
+    lines.push(`| ${tc.index} | \`${tc.name}\` | ${actionDisplay} | ${escapeTableCell(reqContext) || '—'} | ${level} | ${escapeTableCell(detail)} |`);
   }
   lines.push('');
   if (r.bookingToolCallCount === 0 && r.toolCalls.length > 0) {
@@ -3150,16 +3273,21 @@ function formatInvestigationMarkdown(r: InvestigationResult): string {
 
   for (const tc of r.toolCalls) {
     const toolLabel = tc.action !== tc.name ? tc.action : tc.name;
-    // Sanitize label for Mermaid (remove quotes, special chars)
-    const safeLabel = toolLabel.replace(/['"<>]/g, '');
+    // Sanitize label for Mermaid (remove quotes, special chars including # and ;)
+    const safeLabel = toolLabel.replace(/['"<>#;]/g, '');
     const detail = getToolCallDetail(tc);
-    const safeDetail = detail.replace(/['"<>]/g, '').replace(/\n/g, ' ');
+    const safeDetail = detail.replace(/['"<>#;]/g, '').replace(/\n/g, ' ');
     const shortDetail = safeDetail.length > 35 ? safeDetail.substring(0, 32) + '...' : safeDetail;
+    // Build request label with caller context
+    const reqContext = getToolCallRequestDetail(tc);
+    const safeReqContext = reqContext.replace(/['"<>#;]/g, '').replace(/\n/g, ' ');
+    const shortReqContext = safeReqContext.length > 30 ? safeReqContext.substring(0, 27) + '...' : safeReqContext;
+    const requestLabel = shortReqContext ? `${safeLabel} (${shortReqContext})` : safeLabel;
     if (tc.isError) {
-      flowLines.push(`    L->>T: ${safeLabel}`);
+      flowLines.push(`    L->>T: ${requestLabel}`);
       flowLines.push(`    T--xL: ERROR`);
     } else {
-      flowLines.push(`    L->>T: ${safeLabel}`);
+      flowLines.push(`    L->>T: ${requestLabel}`);
       flowLines.push(`    T-->>L: ${shortDetail}`);
     }
   }
@@ -3336,6 +3464,361 @@ export const getInvestigationReport = async (req: Request, res: Response): Promi
         sessionId: result.sessionId,
       },
     });
+  } catch (err: any) {
+    db.close();
+    res.status(500).json({ error: err.message });
+  }
+};
+
+
+// ── Call Lookup by Arbitrary ID ────────────────────────────────────
+
+interface CallLookupResult {
+  found: boolean;
+  searchId: string;
+  idType: string | null;
+  traceId: string | null;
+  langfuseSessionId: string | null;
+  formattedSessionId: string | null;
+  configId: number | null;
+  configName: string | null;
+  timestamp: string | null;
+  phone: string | null;
+  callSummary: Record<string, unknown> | null;
+  booking: Record<string, unknown> | null;
+  toolCalls: Array<Record<string, unknown>>;
+  sessionStats: Record<string, unknown> | null;
+  allSessionIds: string[];
+}
+
+/**
+ * Parse the PAYLOAD JSON from a trace output string.
+ */
+function parsePayloadFromOutput(output: string | null): Record<string, unknown> | null {
+  if (!output) return null;
+  const outputStr = typeof output === 'string' ? output : JSON.stringify(output);
+  const payloadMatch = outputStr.match(/PAYLOAD:\s*(\{[\s\S]*\})\s*$/);
+  if (!payloadMatch) return null;
+  try {
+    return JSON.parse(payloadMatch[1]);
+  } catch {
+    return null;
+  }
+}
+
+interface LangfuseTrace {
+  id: string;
+  sessionId: string;
+  timestamp: string;
+  userId: string;
+  output: unknown;
+  [key: string]: unknown;
+}
+
+/**
+ * Search for an ID in Langfuse trace content via API.
+ */
+async function searchLangfuseForId(
+  id: string,
+  configs: Array<{ id: number; name: string; host: string; public_key: string; secret_key: string }>,
+  daysBack: number
+): Promise<{ traceId: string; sessionId: string; timestamp: string; phone: string; configId: number; configName: string; idType: string; output: string | null } | null> {
+  const fromDate = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000).toISOString();
+
+  for (const config of configs) {
+    const auth = Buffer.from(config.public_key + ':' + config.secret_key).toString('base64');
+    const headers = { 'Authorization': 'Basic ' + auth };
+    const host = config.host.replace(/\/$/, '');
+
+    // Try as trace ID
+    try {
+      const r = await fetch(`${host}/api/public/traces/${id}`, { headers });
+      if (r.ok) {
+        const trace = await r.json() as LangfuseTrace;
+        return {
+          traceId: trace.id, sessionId: trace.sessionId, timestamp: trace.timestamp,
+          phone: trace.userId, configId: config.id, configName: config.name,
+          idType: 'trace_id', output: typeof trace.output === 'string' ? trace.output : JSON.stringify(trace.output),
+        };
+      }
+    } catch { /* continue */ }
+
+    // Try as session ID
+    try {
+      const r = await fetch(`${host}/api/public/traces?sessionId=${encodeURIComponent(id)}&limit=50&orderBy=timestamp.desc`, { headers });
+      if (r.ok) {
+        const d = await r.json() as { data?: LangfuseTrace[] };
+        if (d.data?.length) {
+          const t = d.data[0];
+          return {
+            traceId: t.id, sessionId: id, timestamp: t.timestamp,
+            phone: t.userId, configId: config.id, configName: config.name,
+            idType: 'session_id', output: typeof t.output === 'string' ? t.output : JSON.stringify(t.output),
+          };
+        }
+      }
+    } catch { /* continue */ }
+
+    // Content search through recent traces
+    let page = 1;
+    while (page <= 40) {
+      try {
+        const url = `${host}/api/public/traces?fromTimestamp=${fromDate}&limit=100&page=${page}&orderBy=timestamp.desc`;
+        const r = await fetch(url, { headers });
+        if (!r.ok) break;
+        const d = await r.json() as { data?: LangfuseTrace[] };
+        if (!d.data?.length) break;
+
+        for (const trace of d.data) {
+          const str = JSON.stringify(trace);
+          if (str.includes(id)) {
+            // Determine ID type from context
+            const idx = str.indexOf(id);
+            const before = str.substring(Math.max(0, idx - 150), idx);
+            const escapedMatch = before.match(/\\"(\w+)\\":\s*\\"?\s*$/);
+            const directMatch = before.match(/"(\w+)"\s*:\s*"?\s*$/);
+            let idType = 'content_match';
+            if (escapedMatch) idType = escapedMatch[1];
+            else if (directMatch) idType = directMatch[1];
+            else {
+              const words = before.match(/(\w+)/g)?.filter(w => w.length > 2 && !/^\d+$/.test(w));
+              if (words?.length) idType = words[words.length - 1];
+            }
+
+            return {
+              traceId: trace.id, sessionId: trace.sessionId, timestamp: trace.timestamp,
+              phone: trace.userId, configId: config.id, configName: config.name,
+              idType, output: typeof trace.output === 'string' ? trace.output : JSON.stringify(trace.output),
+            };
+          }
+        }
+        page++;
+        await new Promise(r => setTimeout(r, 100));
+      } catch { break; }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * GET /api/trace-analysis/call-lookup/:id
+ *
+ * Searches Langfuse for a call by any ID (location_config_id, trace ID,
+ * session ID, phone, appointment ID, etc.) and returns the formatted
+ * session ID, booking details, and all related trace info.
+ *
+ * Query params:
+ *   ?configs=8,9  — Langfuse config IDs (default: 8,9 for Chord)
+ *   ?days=30      — How far back to search (default: 30)
+ */
+export const callLookup = async (req: Request, res: Response): Promise<void> => {
+  const { id } = req.params;
+  const configParam = (req.query.configs as string) || '8,9';
+  const daysBack = parseInt((req.query.days as string) || '30', 10);
+  const configIds = configParam.split(',').map(Number);
+
+  const db = getDb();
+
+  try {
+    const result: CallLookupResult = {
+      found: false, searchId: id, idType: null, traceId: null,
+      langfuseSessionId: null, formattedSessionId: null,
+      configId: null, configName: null, timestamp: null, phone: null,
+      callSummary: null, booking: null, toolCalls: [], sessionStats: null,
+      allSessionIds: [],
+    };
+
+    // Step 1: Check local DB first (fast path)
+    const localTrace = db.prepare(`
+      SELECT trace_id, session_id, original_session_id, user_id, started_at, langfuse_config_id, output
+      FROM production_traces
+      WHERE trace_id = ? OR original_session_id = ?
+      LIMIT 1
+    `).get(id, id) as any;
+
+    if (localTrace) {
+      result.found = true;
+      result.idType = localTrace.trace_id === id ? 'trace_id' : 'session_id';
+      result.traceId = localTrace.trace_id;
+      result.langfuseSessionId = localTrace.original_session_id;
+      result.formattedSessionId = localTrace.session_id;
+      result.timestamp = localTrace.started_at;
+      result.phone = localTrace.user_id;
+      result.configId = localTrace.langfuse_config_id;
+
+      const configRow = db.prepare('SELECT name FROM langfuse_configs WHERE id = ?').get(localTrace.langfuse_config_id) as any;
+      result.configName = configRow?.name || null;
+
+      // Parse call summary from output
+      const payload = parsePayloadFromOutput(localTrace.output);
+      if (payload) {
+        const cs = (payload as any).Call_Summary || payload;
+        result.callSummary = cs;
+      }
+    }
+
+    // Step 2: Search local DB for ID in trace content
+    if (!result.found) {
+      // Search by phone
+      const phoneClean = id.replace(/[^0-9+]/g, '');
+      if (phoneClean.length >= 10) {
+        const byPhone = db.prepare(`
+          SELECT trace_id, session_id, original_session_id, user_id, started_at, langfuse_config_id, output
+          FROM production_traces
+          WHERE user_id LIKE ? AND langfuse_config_id IN (${configIds.map(() => '?').join(',')})
+          ORDER BY started_at DESC LIMIT 1
+        `).get(`%${phoneClean}%`, ...configIds) as any;
+        if (byPhone) {
+          result.found = true;
+          result.idType = 'phone';
+          result.traceId = byPhone.trace_id;
+          result.langfuseSessionId = byPhone.original_session_id;
+          result.formattedSessionId = byPhone.session_id;
+          result.timestamp = byPhone.started_at;
+          result.phone = byPhone.user_id;
+          result.configId = byPhone.langfuse_config_id;
+          const configRow = db.prepare('SELECT name FROM langfuse_configs WHERE id = ?').get(byPhone.langfuse_config_id) as any;
+          result.configName = configRow?.name || null;
+          const payload = parsePayloadFromOutput(byPhone.output);
+          if (payload) result.callSummary = (payload as any).Call_Summary || payload;
+        }
+      }
+    }
+
+    // Step 3: Search local DB output fields for the ID
+    if (!result.found) {
+      const byContent = db.prepare(`
+        SELECT trace_id, session_id, original_session_id, user_id, started_at, langfuse_config_id, output
+        FROM production_traces
+        WHERE output LIKE ? AND langfuse_config_id IN (${configIds.map(() => '?').join(',')})
+        ORDER BY started_at DESC LIMIT 1
+      `).get(`%${id}%`, ...configIds) as any;
+
+      if (byContent) {
+        result.found = true;
+        result.traceId = byContent.trace_id;
+        result.langfuseSessionId = byContent.original_session_id;
+        result.formattedSessionId = byContent.session_id;
+        result.timestamp = byContent.started_at;
+        result.phone = byContent.user_id;
+        result.configId = byContent.langfuse_config_id;
+        const configRow = db.prepare('SELECT name FROM langfuse_configs WHERE id = ?').get(byContent.langfuse_config_id) as any;
+        result.configName = configRow?.name || null;
+
+        // Determine ID type from output context
+        const outputStr = byContent.output || '';
+        const idx = outputStr.indexOf(id);
+        if (idx !== -1) {
+          const before = outputStr.substring(Math.max(0, idx - 100), idx);
+          const keyMatch = before.match(/"(\w+)"\s*:\s*"?\s*$/);
+          result.idType = keyMatch ? keyMatch[1] : 'content_match';
+        } else {
+          result.idType = 'content_match';
+        }
+
+        const payload = parsePayloadFromOutput(byContent.output);
+        if (payload) result.callSummary = (payload as any).Call_Summary || payload;
+      }
+    }
+
+    // Step 4: If still not found locally, search Langfuse API
+    if (!result.found) {
+      const configs = db.prepare(
+        `SELECT id, name, host, public_key, secret_key FROM langfuse_configs WHERE id IN (${configIds.map(() => '?').join(',')})`
+      ).all(...configIds) as any[];
+
+      const langfuseResult = await searchLangfuseForId(id, configs, daysBack);
+      if (langfuseResult) {
+        result.found = true;
+        result.traceId = langfuseResult.traceId;
+        result.langfuseSessionId = langfuseResult.sessionId;
+        result.timestamp = langfuseResult.timestamp;
+        result.phone = langfuseResult.phone;
+        result.configId = langfuseResult.configId;
+        result.configName = langfuseResult.configName;
+        result.idType = langfuseResult.idType;
+
+        const payload = parsePayloadFromOutput(langfuseResult.output);
+        if (payload) result.callSummary = (payload as any).Call_Summary || payload;
+
+        // Try to find formatted session ID from local DB
+        const localMatch = db.prepare(
+          'SELECT session_id FROM production_traces WHERE trace_id = ? OR original_session_id = ? LIMIT 1'
+        ).get(langfuseResult.traceId, langfuseResult.sessionId) as any;
+        result.formattedSessionId = localMatch?.session_id || null;
+      }
+    }
+
+    if (!result.found) {
+      db.close();
+      res.status(404).json({ error: `ID "${id}" not found`, data: result });
+      return;
+    }
+
+    // Step 5: Enrich with booking details and tool calls from observations
+    if (result.formattedSessionId) {
+      const toolObs = db.prepare(`
+        SELECT o.name, o.type, o.input, o.output, o.started_at, o.latency_ms, o.level, o.status_message
+        FROM production_trace_observations o
+        JOIN production_traces t ON o.trace_id = t.trace_id
+        WHERE t.session_id = ?
+          AND (o.name LIKE '%schedul%' OR o.name LIKE '%chord%' OR o.name LIKE '%patient%'
+               OR o.name LIKE '%Escalation%' OR o.name LIKE '%handleEscalation%'
+               OR o.name = 'CurrentDateTime')
+        ORDER BY o.started_at ASC
+      `).all(result.formattedSessionId) as any[];
+
+      for (const obs of toolObs) {
+        const entry: Record<string, unknown> = {
+          tool: obs.name, type: obs.type, timestamp: obs.started_at,
+          latencyMs: obs.latency_ms, level: obs.level,
+        };
+
+        try { entry.input = JSON.parse(obs.input); } catch { entry.input = obs.input; }
+        try {
+          const output = JSON.parse(obs.output);
+          entry.output = output;
+
+          // Extract booking confirmation
+          if (output?.id && output?.start_time && output?.provider_id) {
+            result.booking = {
+              appointmentId: output.id, patientId: output.patient_id,
+              providerId: output.provider_id, providerName: output.provider_name,
+              startTime: output.start_time, endTime: output.end_time,
+              operatoryId: output.operatory_id, locationId: output.location_id,
+              confirmed: output.confirmed, cancelled: output.cancelled,
+              timezone: output.timezone, dayOfWeek: output.day_of_week,
+              note: output.note, createdAt: output.created_at,
+            };
+          }
+        } catch { entry.output = obs.output; }
+
+        result.toolCalls.push(entry);
+      }
+
+      // Session stats
+      const sessionInfo = db.prepare(
+        'SELECT * FROM production_sessions WHERE session_id = ?'
+      ).get(result.formattedSessionId) as any;
+      if (sessionInfo) {
+        result.sessionStats = {
+          traceCount: sessionInfo.trace_count, totalCost: sessionInfo.total_cost,
+          totalLatencyMs: sessionInfo.total_latency_ms,
+          hasBooking: sessionInfo.has_successful_booking,
+          hasTransfer: sessionInfo.has_transfer, errorCount: sessionInfo.error_count,
+        };
+      }
+    }
+
+    // Collect all session IDs
+    const sids = new Set<string>();
+    if (result.formattedSessionId) sids.add(result.formattedSessionId);
+    if (result.langfuseSessionId) sids.add(result.langfuseSessionId);
+    result.allSessionIds = [...sids];
+
+    db.close();
+    res.json({ data: result });
   } catch (err: any) {
     db.close();
     res.status(500).json({ error: err.message });

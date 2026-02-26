@@ -76,9 +76,21 @@ interface LangfuseObservation {
     output?: number;
     total?: number;
   };
+  usageDetails?: Record<string, number>;  // e.g. { input: 1495, input_cache_read: 14080, output: 925 }
   calculatedTotalCost?: number;
   level?: string;
   statusMessage?: string;
+}
+
+/**
+ * Extract cache read tokens from observation usageDetails.
+ * Langfuse field name varies by provider.
+ */
+function extractCacheReadTokens(obs: LangfuseObservation): number | null {
+  const d = obs.usageDetails;
+  if (!d) return null;
+  const val = d.input_cache_read ?? d.cache_read_input_tokens ?? d.input_cached_tokens ?? null;
+  return val && val > 0 ? val : null;
 }
 
 // ============================================================================
@@ -101,6 +113,20 @@ export class LangfuseTraceService {
     // Ensure has_order column exists on production_sessions (for Dominos order tracking)
     try {
       this.db.exec(`ALTER TABLE production_sessions ADD COLUMN has_order INTEGER DEFAULT 0`);
+    } catch {
+      // Column already exists, ignore
+    }
+
+    // Ensure location_name column exists on production_sessions
+    try {
+      this.db.exec(`ALTER TABLE production_sessions ADD COLUMN location_name TEXT`);
+    } catch {
+      // Column already exists, ignore
+    }
+
+    // Ensure usage_cache_read_tokens column exists on production_trace_observations
+    try {
+      this.db.exec(`ALTER TABLE production_trace_observations ADD COLUMN usage_cache_read_tokens INTEGER`);
     } catch {
       // Column already exists, ignore
     }
@@ -464,8 +490,8 @@ export class LangfuseTraceService {
             observation_id, trace_id, parent_observation_id, type, name, model,
             input, output, metadata_json, started_at, ended_at,
             completion_start_time, latency_ms, usage_input_tokens,
-            usage_output_tokens, usage_total_tokens, cost, level, status_message
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            usage_output_tokens, usage_total_tokens, usage_cache_read_tokens, cost, level, status_message
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           obs.id,
           traceId,
@@ -483,6 +509,7 @@ export class LangfuseTraceService {
           obs.usage?.input || null,
           obs.usage?.output || null,
           obs.usage?.total || null,
+          extractCacheReadTokens(obs),
           obs.calculatedTotalCost || null,
           obs.level || 'DEFAULT',
           obs.statusMessage || null
@@ -581,6 +608,109 @@ export class LangfuseTraceService {
         )
       WHERE session_id = ? AND langfuse_config_id = ?
     `).run(sessionId, configId, sessionId, configId, sessionId, configId, sessionId, configId, sessionId, configId);
+
+    // Extract location_name from clinic_info tool observations
+    // Filter by tool names (patient tools) and SPAN type to avoid matching wrapper spans
+    // Also match "tool-" prefixed variants (e.g., "tool-chord_ortho_patient")
+    const patientToolNames = [
+      ...tools.patientTools,
+      ...tools.patientTools.map((t: string) => `tool-${t}`),
+    ];
+    let locationResolved = false;
+
+    // Strategy 1: clinic_info tool call output (most reliable)
+    const clinicObs = this.db.prepare(`
+      SELECT pto.output FROM production_trace_observations pto
+      JOIN production_traces pt ON pto.trace_id = pt.trace_id
+      WHERE pt.session_id = ? AND pt.langfuse_config_id = ?
+        AND pto.input LIKE '%"action":"clinic_info"%'
+        AND pto.type = 'SPAN'
+        AND pto.name IN (${sqlInList(patientToolNames)})
+      LIMIT 1
+    `).get(sessionId, configId) as any;
+
+    if (clinicObs?.output) {
+      try {
+        const output = JSON.parse(clinicObs.output);
+        const locationName =
+          output?.locationBehaviors?.office_name ||  // Chord/NexHealth K8
+          output?.locationInfo?.name ||              // Chord alt
+          output?.locationName ||                    // direct field
+          // Ortho: locations[] array from Cloud9 API
+          (Array.isArray(output?.locations) && output.locations[0]?.LocationPrintedName) ||
+          (Array.isArray(output?.locations) && output.locations[0]?.LocationName) ||
+          output?.name ||                            // fallback
+          null;
+        if (locationName) {
+          this.db.prepare(`UPDATE production_sessions SET location_name = ? WHERE session_id = ? AND langfuse_config_id = ?`)
+            .run(locationName, sessionId, configId);
+          locationResolved = true;
+        }
+      } catch { /* ignore parse errors */ }
+    }
+
+    // Strategy 2: Match provider_name from tool outputs against known locations
+    // When clinic_info wasn't called (short calls, existing patient flows),
+    // appointment/booking data often contains provider_name with embedded location
+    if (!locationResolved) {
+      try {
+        // Build a map of known locations from other sessions in this config
+        const knownLocations = this.db.prepare(`
+          SELECT DISTINCT location_name FROM production_sessions
+          WHERE langfuse_config_id = ? AND location_name IS NOT NULL
+        `).all(configId) as { location_name: string }[];
+
+        if (knownLocations.length > 0) {
+          // Look for provider_name in any tool SPAN output (appointments, bookings, etc.)
+          const allToolNames = [...tools.all, ...tools.all.map((t: string) => `tool-${t}`)];
+          const providerObs = this.db.prepare(`
+            SELECT pto.output FROM production_trace_observations pto
+            JOIN production_traces pt ON pto.trace_id = pt.trace_id
+            WHERE pt.session_id = ? AND pt.langfuse_config_id = ?
+              AND pto.type = 'SPAN'
+              AND pto.name IN (${sqlInList(allToolNames)})
+              AND pto.output LIKE '%"provider_name"%'
+            LIMIT 3
+          `).all(sessionId, configId) as { output: string }[];
+
+          // Extract provider_names and try to match against known locations
+          for (const obs of providerObs) {
+            try {
+              const output = JSON.parse(obs.output);
+              const providers: string[] = [];
+              if (Array.isArray(output)) {
+                output.forEach((item: any) => { if (item?.provider_name) providers.push(item.provider_name); });
+              } else if (output?.provider_name) {
+                providers.push(output.provider_name);
+              } else if (output?.data?.appt?.provider_name) {
+                providers.push(output.data.appt.provider_name);
+              }
+
+              // Match provider_name against known locations using normalized comparison
+              // e.g., "NEW PDA-Allegheny" contains "PDA" + "Allegheny" → matches "PDA Allegheny"
+              for (const provName of providers) {
+                const provNorm = provName.toLowerCase().replace(/[-_]/g, ' ');
+                for (const loc of knownLocations) {
+                  // Normalize location: "PDA Allegheny" → "pda allegheny"
+                  const locNorm = loc.location_name.toLowerCase().replace(/[-_]/g, ' ');
+                  // Check if all significant words of the location appear in provider_name
+                  const locWords = locNorm.split(/\s+/).filter(w => w.length > 2);
+                  const allMatch = locWords.every(word => provNorm.includes(word));
+                  if (allMatch && locWords.length >= 2) {
+                    this.db.prepare(`UPDATE production_sessions SET location_name = ? WHERE session_id = ? AND langfuse_config_id = ?`)
+                      .run(loc.location_name, sessionId, configId);
+                    locationResolved = true;
+                    break;
+                  }
+                }
+                if (locationResolved) break;
+              }
+            } catch { /* ignore parse errors */ }
+            if (locationResolved) break;
+          }
+        }
+      } catch { /* ignore fallback errors */ }
+    }
   }
 
   /**
@@ -958,8 +1088,8 @@ export class LangfuseTraceService {
             observation_id, trace_id, parent_observation_id, type, name, model,
             input, output, metadata_json, started_at, ended_at,
             completion_start_time, latency_ms, usage_input_tokens,
-            usage_output_tokens, usage_total_tokens, cost, level, status_message
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            usage_output_tokens, usage_total_tokens, usage_cache_read_tokens, cost, level, status_message
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           obs.id,
           traceId,
@@ -977,6 +1107,7 @@ export class LangfuseTraceService {
           obs.usage?.input || null,
           obs.usage?.output || null,
           obs.usage?.total || null,
+          extractCacheReadTokens(obs),
           obs.calculatedTotalCost || null,
           obs.level || 'DEFAULT',
           obs.statusMessage || null
@@ -1108,8 +1239,8 @@ export class LangfuseTraceService {
               observation_id, trace_id, parent_observation_id, type, name, model,
               input, output, metadata_json, started_at, ended_at,
               completion_start_time, latency_ms, usage_input_tokens,
-              usage_output_tokens, usage_total_tokens, cost, level, status_message
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              usage_output_tokens, usage_total_tokens, usage_cache_read_tokens, cost, level, status_message
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `).run(
             obs.id,
             traceData.id,
@@ -1127,6 +1258,7 @@ export class LangfuseTraceService {
             obs.usage?.input || null,
             obs.usage?.output || null,
             obs.usage?.total || null,
+            extractCacheReadTokens(obs),
             obs.calculatedTotalCost || null,
             obs.level || 'DEFAULT',
             obs.statusMessage || null
@@ -1756,8 +1888,8 @@ export class LangfuseTraceService {
               observation_id, trace_id, parent_observation_id, type, name, model,
               input, output, metadata_json, started_at, ended_at,
               completion_start_time, latency_ms, usage_input_tokens,
-              usage_output_tokens, usage_total_tokens, cost, level, status_message
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              usage_output_tokens, usage_total_tokens, usage_cache_read_tokens, cost, level, status_message
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `).run(
             obs.id,
             trace_id,
@@ -1775,6 +1907,7 @@ export class LangfuseTraceService {
             obs.usage?.input || null,
             obs.usage?.output || null,
             obs.usage?.total || null,
+            extractCacheReadTokens(obs),
             obs.calculatedTotalCost || null,
             obs.level || 'DEFAULT',
             obs.statusMessage || null

@@ -41,6 +41,11 @@ import type {
   ReplayRequest,
   ReplayResponse,
   ReplayEndpoints,
+  HarnessRequest,
+  HarnessResponse,
+  HarnessVariantInfo,
+  HarnessCompareRequest,
+  HarnessCompareResponse,
   CacheHealthResponse,
   CacheOperationResponse,
   TierSlotsResponse,
@@ -1628,6 +1633,98 @@ export async function rebuildProductionSessions(configId?: number): Promise<{ se
 }
 
 // ============================================================================
+// SESSION APPOINTMENT DATA API
+// ============================================================================
+
+export interface SessionAppointment {
+  appointmentId: string | null;
+  patientId: string | null;
+  patientName: string | null;
+  patientEmail?: string | null;
+  patientPhone?: string | null;
+  patientDob?: string | null;
+  providerId: string | null;
+  providerName?: string | null;
+  startTime: string | null;
+  endTime: string | null;
+  appointmentTypeName?: string | null;
+  operatoryId?: string | null;
+  operatoryName?: string | null;
+  locationId?: string | null;
+  locationName?: string | null;
+  locationAddress?: string | null;
+  locationPhone?: string | null;
+  timezone?: string | null;
+  note?: string | null;
+  status: 'booked' | 'confirmed' | 'cancelled' | 'unknown';
+  source: 'observation' | 'nexhealth_live';
+  observationId?: string;
+  childLabel?: string;
+}
+
+export interface SessionAppointmentsResponse {
+  appointments: SessionAppointment[];
+  sessionId: string;
+  tenant: string;
+  message?: string;
+  verifiedAt?: string;
+  cached?: boolean;
+}
+
+/**
+ * Get extracted appointment/booking data from session observations.
+ * Only returns data for Chord tenant sessions.
+ * Pass verify=true to also validate against NexHealth live data.
+ */
+export async function getSessionAppointments(
+  sessionId: string,
+  configId?: number,
+  verify?: boolean
+): Promise<SessionAppointmentsResponse> {
+  const params = new URLSearchParams();
+  if (configId) params.append('configId', configId.toString());
+  if (verify) params.append('verify', 'true');
+
+  const queryString = params.toString();
+  const url = `/test-monitor/production-calls/sessions/${encodeURIComponent(sessionId)}/appointments${queryString ? `?${queryString}` : ''}`;
+  const response = await get<TestMonitorApiResponse<SessionAppointmentsResponse>>(url);
+  return response.data;
+}
+
+export interface PatientAppointment {
+  appointmentId: string | null;
+  patientId: string;
+  providerId: string | null;
+  startTime: string | null;
+  endTime: string | null;
+  appointmentTypeName: string | null;
+  operatoryId: string | null;
+  operatoryName: string | null;
+  locationName: string | null;
+  locationAddress: string | null;
+  locationPhone: string | null;
+  status: 'booked' | 'confirmed' | 'cancelled' | 'unknown';
+  createdAt: string | null;
+}
+
+export interface PatientAppointmentsResponse {
+  patientId: string;
+  appointments: PatientAppointment[];
+  total: number;
+}
+
+/**
+ * Get all NexHealth appointments for a patient.
+ */
+export async function getPatientAllAppointments(
+  patientId: string
+): Promise<PatientAppointmentsResponse> {
+  const url = `/test-monitor/patient/${encodeURIComponent(patientId)}/appointments`;
+  const response = await get<TestMonitorApiResponse<PatientAppointmentsResponse>>(url);
+  return response.data;
+}
+
+// ============================================================================
 // TRACE INSIGHTS API
 // ============================================================================
 
@@ -2022,6 +2119,38 @@ export async function executeReplay(request: ReplayRequest): Promise<ReplayRespo
 export async function getReplayEndpoints(): Promise<ReplayEndpoints> {
   const response = await get<TestMonitorApiResponse<ReplayEndpoints>>('/test-monitor/replay/endpoints');
   return response.data;
+}
+
+// ============================================================================
+// TOOL HARNESS API (VM-based execution of actual tool JavaScript)
+// ============================================================================
+
+/**
+ * Execute a tool in the VM harness (runs real tool JS in Node.js VM)
+ */
+export async function executeHarnessReplay(request: HarnessRequest): Promise<HarnessResponse> {
+  const response = await post<HarnessResponse>('/test-monitor/replay/harness', request);
+  return response;
+}
+
+/**
+ * Get available tool variants with version metadata
+ */
+export async function getHarnessVariants(tenantId?: number): Promise<HarnessVariantInfo[]> {
+  const params = new URLSearchParams();
+  if (tenantId) params.append('tenantId', tenantId.toString());
+  const queryString = params.toString();
+  const url = `/test-monitor/replay/harness/variants${queryString ? `?${queryString}` : ''}`;
+  const response = await get<TestMonitorApiResponse<HarnessVariantInfo[]>>(url);
+  return response.data;
+}
+
+/**
+ * Compare the same input across two tool variants
+ */
+export async function compareHarnessVariants(request: HarnessCompareRequest): Promise<HarnessCompareResponse> {
+  const response = await post<HarnessCompareResponse>('/test-monitor/replay/harness/compare', request);
+  return response;
 }
 
 // ============================================================================
@@ -2610,6 +2739,40 @@ export async function investigateSessionBooking(sessionId: string): Promise<Inve
 export async function getInvestigationReport(sessionId: string): Promise<{ markdown: string; classification: string; sessionId: string }> {
   const response = await get<TestMonitorApiResponse<{ markdown: string; classification: string; sessionId: string }>>(
     `/trace-analysis/${encodeURIComponent(sessionId)}/investigate/report`
+  );
+  return response.data;
+}
+
+// ── Call Lookup ────────────────────────────────────────────────
+
+export interface CallLookupResult {
+  found: boolean;
+  searchId: string;
+  idType: string | null;
+  traceId: string | null;
+  langfuseSessionId: string | null;
+  formattedSessionId: string | null;
+  configId: number | null;
+  configName: string | null;
+  timestamp: string | null;
+  phone: string | null;
+  callSummary: Record<string, unknown> | null;
+  booking: Record<string, unknown> | null;
+  toolCalls: Array<Record<string, unknown>>;
+  sessionStats: Record<string, unknown> | null;
+  allSessionIds: string[];
+}
+
+/**
+ * Lookup a call by any ID (location_config_id, trace ID, session ID, phone, etc.)
+ */
+export async function callLookup(id: string, options?: { configs?: string; days?: number }): Promise<CallLookupResult> {
+  const params = new URLSearchParams();
+  if (options?.configs) params.append('configs', options.configs);
+  if (options?.days) params.append('days', String(options.days));
+  const qs = params.toString();
+  const response = await get<TestMonitorApiResponse<CallLookupResult>>(
+    `/trace-analysis/call-lookup/${encodeURIComponent(id)}${qs ? `?${qs}` : ''}`
   );
   return response.data;
 }

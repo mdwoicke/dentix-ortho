@@ -624,7 +624,9 @@ export default function DominosCallTracing() {
   const [selectedConfigId, setSelectedConfigId] = useState<number | null>(null);
   const [configsLoaded, setConfigsLoaded] = useState(false);
   const [configError, setConfigError] = useState('');
-  const [langfuseProjectId, setLangfuseProjectId] = useState<string | undefined>();
+  const [globalLangfuseProjectId, setGlobalLangfuseProjectId] = useState<string | undefined>();
+  // Per-config project ID takes precedence over global
+  const langfuseProjectId = configs.find(c => c.id === selectedConfigId)?.projectId || globalLangfuseProjectId;
 
   // Session list state
   const [sessions, setSessions] = useState<ProductionSession[]>([]);
@@ -679,13 +681,13 @@ export default function DominosCallTracing() {
     })();
   }, []);
 
-  // Load Langfuse project ID from settings
+  // Load global Langfuse project ID from settings (fallback)
   useEffect(() => {
     (async () => {
       try {
         const settings = await getAppSettings();
         if ((settings as any).langfuseProjectId) {
-          setLangfuseProjectId((settings as any).langfuseProjectId);
+          setGlobalLangfuseProjectId((settings as any).langfuseProjectId);
         }
       } catch { /* optional */ }
     })();

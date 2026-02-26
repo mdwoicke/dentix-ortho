@@ -70,6 +70,7 @@ export function usePlaybackAnimation({
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [stepProgress, setStepProgress] = useState(0); // 0-1 progress within current step
+  const [hasUserInteracted, setHasUserInteracted] = useState(false);
   const [speed, setSpeed] = useState<PlaybackSpeed>(1);
 
   // Animation frame reference
@@ -141,6 +142,11 @@ export function usePlaybackAnimation({
 
   const completedNodeIds = useMemo(() => {
     const completed = new Set<string>();
+    // Before user interacts with playback, show all nodes at full opacity
+    if (!hasUserInteracted) {
+      nodes.forEach(node => completed.add(node.id));
+      return completed;
+    }
     nodes.forEach(node => {
       if (node.startMs + node.durationMs < traceTimeMs) {
         completed.add(node.id);
@@ -151,7 +157,7 @@ export function usePlaybackAnimation({
       completed.add(events[i].nodeId);
     }
     return completed;
-  }, [nodes, traceTimeMs, events, currentStepIndex]);
+  }, [nodes, traceTimeMs, events, currentStepIndex, hasUserInteracted]);
 
   // Can step forward/backward
   const canStepForward = currentStepIndex < totalSteps - 1 || stepProgress < 1;
@@ -232,6 +238,7 @@ export function usePlaybackAnimation({
       switch (e.key) {
         case ' ':
           e.preventDefault();
+          setHasUserInteracted(true);
           setIsPlaying(prev => !prev);
           break;
         case 'ArrowLeft':
@@ -271,6 +278,7 @@ export function usePlaybackAnimation({
 
   // Control functions
   const play = useCallback(() => {
+    setHasUserInteracted(true);
     // If at the end, restart from beginning
     if (currentStepIndex >= totalSteps - 1 && stepProgress >= 1) {
       setCurrentStepIndex(0);
@@ -284,6 +292,7 @@ export function usePlaybackAnimation({
   }, []);
 
   const stepForward = useCallback(() => {
+    setHasUserInteracted(true);
     setIsPlaying(false);
     if (currentStepIndex < totalSteps - 1) {
       setCurrentStepIndex(prev => prev + 1);
@@ -294,6 +303,7 @@ export function usePlaybackAnimation({
   }, [currentStepIndex, totalSteps]);
 
   const stepBackward = useCallback(() => {
+    setHasUserInteracted(true);
     setIsPlaying(false);
     if (currentStepIndex > 0) {
       setCurrentStepIndex(prev => prev - 1);
@@ -304,18 +314,21 @@ export function usePlaybackAnimation({
   }, [currentStepIndex]);
 
   const jumpToStart = useCallback(() => {
+    setHasUserInteracted(true);
     setIsPlaying(false);
     setCurrentStepIndex(0);
     setStepProgress(0);
   }, []);
 
   const jumpToEnd = useCallback(() => {
+    setHasUserInteracted(true);
     setIsPlaying(false);
     setCurrentStepIndex(totalSteps - 1);
     setStepProgress(1);
   }, [totalSteps]);
 
   const jumpToTime = useCallback((timeMs: number) => {
+    setHasUserInteracted(true);
     // Convert visualization time to step index
     const targetStep = stepDurationMs > 0 ? Math.floor(timeMs / stepDurationMs) : 0;
     const targetProgress = stepDurationMs > 0 ? (timeMs % stepDurationMs) / stepDurationMs : 0;
@@ -324,12 +337,14 @@ export function usePlaybackAnimation({
   }, [stepDurationMs, totalSteps]);
 
   const jumpToStep = useCallback((stepIndex: number) => {
+    setHasUserInteracted(true);
     setIsPlaying(false);
     setCurrentStepIndex(Math.max(0, Math.min(totalSteps - 1, stepIndex)));
     setStepProgress(0);
   }, [totalSteps]);
 
   const jumpToProgress = useCallback((percent: number) => {
+    setHasUserInteracted(true);
     // Clamp percent to 0-1 range
     const clampedPercent = Math.max(0, Math.min(1, percent));
     // Calculate target step and progress within that step

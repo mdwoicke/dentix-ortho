@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import * as testMonitorController from '../controllers/testMonitorController';
 import * as prodTestRecordController from '../controllers/prodTestRecordController';
+import * as toolHarnessController from '../controllers/toolHarnessController';
 
 /**
  * Test Monitor Routes
@@ -417,6 +418,22 @@ router.post('/replay/flowise', testMonitorController.replayThroughFlowise);
 router.post('/replay/cloud9-direct', testMonitorController.testCloud9Direct);
 
 // ============================================================================
+// TOOL HARNESS ROUTES (VM-based execution of actual tool JavaScript)
+// ============================================================================
+
+// POST /api/test-monitor/replay/harness - Execute tool in VM harness
+router.post('/replay/harness', toolHarnessController.executeHarnessReplay);
+
+// GET /api/test-monitor/replay/harness/variants - List available variants with versions
+router.get('/replay/harness/variants', toolHarnessController.getHarnessVariants);
+
+// POST /api/test-monitor/replay/harness/validate - Syntax-check tool code without executing
+router.post('/replay/harness/validate', toolHarnessController.validateHarnessCode);
+
+// POST /api/test-monitor/replay/harness/compare - Run same input through 2 variants, diff results
+router.post('/replay/harness/compare', toolHarnessController.compareHarnessVariants);
+
+// ============================================================================
 // QUEUE ACTIVITY ROUTES
 // ============================================================================
 
@@ -576,6 +593,12 @@ router.post('/production-calls/sessions/rebuild', testMonitorController.rebuildP
 
 // POST /api/test-monitor/production-calls/sessions/:sessionId/refresh - Re-fetch observations and recompute flags
 router.post('/production-calls/sessions/:sessionId/refresh', testMonitorController.refreshProductionSession);
+
+// GET /api/test-monitor/production-calls/sessions/:sessionId/appointments - Get extracted appointment data
+router.get('/production-calls/sessions/:sessionId/appointments', testMonitorController.getSessionAppointments);
+
+// GET /api/test-monitor/patient/:patientId/appointments - Get all NexHealth appointments for a patient
+router.get('/patient/:patientId/appointments', testMonitorController.getPatientAllAppointments);
 
 // GET /api/test-monitor/production-calls/sessions/:sessionId - Get single session with all traces
 router.get('/production-calls/sessions/:sessionId', testMonitorController.getProductionSession);

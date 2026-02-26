@@ -61,6 +61,8 @@ export interface ApiCall {
   toolName: string;
   requestPayload?: Record<string, any>;
   responsePayload?: Record<string, any>;
+  errorMessage?: string;
+  level?: string;
   status?: string;
   durationMs?: number;
   timestamp: string;
@@ -1047,6 +1049,7 @@ export interface ProductionTraceObservation {
     input: number | null;
     output: number | null;
     total: number | null;
+    cacheRead: number | null;
   };
   cost: number | null;
   level: string;
@@ -1136,6 +1139,7 @@ export interface ProductionSession {
   hasOrder?: boolean;
   patientNames?: string | null;
   patientGuids?: Array<{ name: string; guid: string }> | null;
+  locationName?: string | null;
 }
 
 /**
@@ -1220,6 +1224,7 @@ export interface ReplayRequest {
   action: string;
   input: Record<string, unknown>;
   originalObservationId?: string;
+  tenantId?: number; // 1 = Ortho (Cloud9), 5 = Chord (NexHealth)
 }
 
 /**
@@ -1328,6 +1333,98 @@ export interface TraceInsightsResponse {
       count: number;
     }>;
   };
+}
+
+// ============================================================================
+// TOOL HARNESS TYPES (VM-based execution)
+// ============================================================================
+
+/**
+ * Individual HTTP call captured by the harness instrumented fetch
+ */
+export interface HarnessDebugCall {
+  id: number;
+  endpoint: string;
+  method: string;
+  requestBody: unknown;
+  status: number | null;
+  durationMs: number | null;
+  response: unknown;
+  error: string | null;
+  startTime: string;
+}
+
+/**
+ * Request to execute a tool in the VM harness
+ */
+export interface HarnessRequest {
+  toolName: string;
+  action: string;
+  input: Record<string, unknown>;
+  variant?: 'production' | 'sandbox_a' | 'sandbox_b';
+  tenantId?: number;
+  varsConfig?: {
+    $vars?: { c1mg_uui?: string; sessionId?: string; chatId?: string; apiEndPointURL?: string };
+    $flow?: { sessionId?: string; chatId?: string; chatflowId?: string; input?: string };
+  };
+  observationId?: string;
+  dryRun?: boolean;
+}
+
+/**
+ * Response from the VM harness execution
+ */
+export interface HarnessResponse {
+  success: boolean;
+  data?: {
+    response: unknown;
+    durationMs: number;
+    endpoint: string;
+    statusCode: number;
+    timestamp: string;
+    toolVersion?: string;
+    preCallLogs: string[];
+    debugCalls: HarnessDebugCall[];
+    variant: string;
+  };
+  error?: string;
+}
+
+/**
+ * Variant metadata for the harness variants listing
+ */
+export interface HarnessVariantInfo {
+  variant: string;
+  toolType: string;
+  version: string | null;
+  lastUpdated: string | null;
+  tenantId: number;
+  source: 'filesystem' | 'database';
+}
+
+/**
+ * Request to compare two variants
+ */
+export interface HarnessCompareRequest {
+  toolName: string;
+  action: string;
+  input: Record<string, unknown>;
+  variantA?: 'production' | 'sandbox_a' | 'sandbox_b';
+  variantB?: 'production' | 'sandbox_a' | 'sandbox_b';
+  tenantId?: number;
+  varsConfig?: HarnessRequest['varsConfig'];
+  observationId?: string;
+}
+
+/**
+ * Response from comparing two variants
+ */
+export interface HarnessCompareResponse {
+  success: boolean;
+  results: {
+    variant: string;
+    response: HarnessResponse;
+  }[];
 }
 
 // ============================================================================

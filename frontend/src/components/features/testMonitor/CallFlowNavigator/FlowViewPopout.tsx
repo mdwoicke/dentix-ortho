@@ -141,6 +141,7 @@ interface FlowViewPopoutProps {
   flowData: FlowData;
   totalDurationMs: number;
   langfuseHost?: string;
+  langfuseProjectId?: string;
   traceId?: string;
   sessionId?: string;
 }
@@ -193,6 +194,7 @@ interface NodeDetailSidebarProps {
   node: FlowNode | null;
   onClose: () => void;
   langfuseHost?: string;
+  langfuseProjectId?: string;
   traceId?: string;
 }
 
@@ -205,7 +207,7 @@ function isReplayableNode(node: FlowNode): boolean {
 // Base URL for Node-RED endpoints
 const NODERED_BASE_URL = 'https://c1-aicoe-nodered-lb.prod.c1conversations.io/FabricWorkflow/api/chord';
 
-// Endpoint map matching the actual tool scripts
+// Endpoint map matching the actual tool scripts - Ortho (Cloud9)
 const TOOL_ENDPOINTS: Record<string, Record<string, string>> = {
   chord_ortho_patient: {
     lookup: `${NODERED_BASE_URL}/ortho-prd/getPatientByFilter`,
@@ -224,10 +226,45 @@ const TOOL_ENDPOINTS: Record<string, Record<string, string>> = {
   },
 };
 
+// Chord (NexHealth) endpoints - NO /ortho-prd/ prefix
+const CHORD_TOOL_ENDPOINTS: Record<string, Record<string, string>> = {
+  chord_patient_v07_stage: {
+    lookup: `${NODERED_BASE_URL}/getPatientByPhoneNum`,
+    get: `${NODERED_BASE_URL}/getPatient`,
+    create: `${NODERED_BASE_URL}/createPatient`,
+    appointments: `${NODERED_BASE_URL}/getPatientAppts`,
+    clinic_info: `${NODERED_BASE_URL}/getLocation`,
+    edit_insurance: `${NODERED_BASE_URL}/editPatientInsurance`,
+    confirm_appointment: `${NODERED_BASE_URL}/confirmAppt`,
+  },
+  chord_scheduling_v08: {
+    slots: `${NODERED_BASE_URL}/getApptSlots`,
+    grouped_slots: `${NODERED_BASE_URL}/getGroupedApptSlots`,
+    book_child: `${NODERED_BASE_URL}/createAppt`,
+    cancel: `${NODERED_BASE_URL}/cancelAppt`,
+  },
+};
+
+// Known Chord tool name patterns (from toolNameResolver.ts)
+const CHORD_PATIENT_TOOL_NAMES = ['chord_patient_v07_stage'];
+const CHORD_SCHEDULING_TOOL_NAMES = ['chord_scheduling_v08', 'chord_scheduling_v07_dev'];
+
+// Helper to detect if a node belongs to Chord tenant based on its original tool name
+// The original Langfuse tool name is stored in node.subtitle (obs.name), not node.label
+// (node.label is a shortened display name like "Patient Tool")
+function isChordNode(node: FlowNode): boolean {
+  const subtitle = node.subtitle || '';
+  const label = node.label || '';
+  const searchStr = subtitle + ' ' + label;
+  return CHORD_PATIENT_TOOL_NAMES.some(n => searchStr.includes(n))
+    || CHORD_SCHEDULING_TOOL_NAMES.some(n => searchStr.includes(n));
+}
+
 // Helper to extract tool name and action from node
-function extractToolInfo(node: FlowNode): { toolName: string; action: string; endpoint: string } | null {
+function extractToolInfo(node: FlowNode): { toolName: string; action: string; endpoint: string; tenantId?: number } | null {
   const name = node.label?.toLowerCase() || '';
   const type = node.type?.toLowerCase() || '';
+  const isChord = isChordNode(node);
 
   // PRIORITY 1: Try to extract action from node.data.input (most reliable)
   if (node.data?.input && typeof node.data.input === 'object') {
@@ -238,6 +275,14 @@ function extractToolInfo(node: FlowNode): { toolName: string; action: string; en
       // Patient tool actions
       const patientActions = ['lookup', 'get', 'create', 'appointments', 'clinic_info', 'edit_insurance', 'confirm_appointment'];
       if (patientActions.includes(action)) {
+        if (isChord) {
+          return {
+            toolName: 'chord_patient_v07_stage',
+            action,
+            endpoint: CHORD_TOOL_ENDPOINTS.chord_patient_v07_stage[action] || `${NODERED_BASE_URL}/${action}`,
+            tenantId: 5,
+          };
+        }
         return {
           toolName: 'chord_ortho_patient',
           action,
@@ -248,6 +293,14 @@ function extractToolInfo(node: FlowNode): { toolName: string; action: string; en
       // Scheduling tool actions
       const schedulingActions = ['slots', 'grouped_slots', 'book_child', 'cancel'];
       if (schedulingActions.includes(action)) {
+        if (isChord) {
+          return {
+            toolName: 'chord_scheduling_v08',
+            action,
+            endpoint: CHORD_TOOL_ENDPOINTS.chord_scheduling_v08[action] || `${NODERED_BASE_URL}/${action}`,
+            tenantId: 5,
+          };
+        }
         return {
           toolName: 'schedule_appointment_ortho',
           action,
@@ -259,49 +312,62 @@ function extractToolInfo(node: FlowNode): { toolName: string; action: string; en
 
   // PRIORITY 2: Map node names/types to tool names and actions
   if (name.includes('patient') || type.includes('patient')) {
-    if (name.includes('lookup') || name.includes('filter')) {
-      return { toolName: 'chord_ortho_patient', action: 'lookup', endpoint: TOOL_ENDPOINTS.chord_ortho_patient.lookup };
+    const endpoints = isChord ? CHORD_TOOL_ENDPOINTS.chord_patient_v07_stage : TOOL_ENDPOINTS.chord_ortho_patient;
+    const toolName = isChord ? 'chord_patient_v07_stage' : 'chord_ortho_patient';
+    const tenantId = isChord ? 5 : undefined;
+
+    if (name.includes('lookup') || name.includes('filter') || name.includes('phone')) {
+      return { toolName, action: 'lookup', endpoint: endpoints.lookup, tenantId };
     }
     if (name.includes('create')) {
-      return { toolName: 'chord_ortho_patient', action: 'create', endpoint: TOOL_ENDPOINTS.chord_ortho_patient.create };
+      return { toolName, action: 'create', endpoint: endpoints.create, tenantId };
     }
     if (name.includes('appt') || name.includes('appointment')) {
-      return { toolName: 'chord_ortho_patient', action: 'appointments', endpoint: TOOL_ENDPOINTS.chord_ortho_patient.appointments };
+      return { toolName, action: 'appointments', endpoint: endpoints.appointments, tenantId };
     }
     if (name.includes('clinic') || name.includes('location')) {
-      return { toolName: 'chord_ortho_patient', action: 'clinic_info', endpoint: TOOL_ENDPOINTS.chord_ortho_patient.clinic_info };
+      return { toolName, action: 'clinic_info', endpoint: endpoints.clinic_info, tenantId };
     }
     if (name.includes('insurance')) {
-      return { toolName: 'chord_ortho_patient', action: 'edit_insurance', endpoint: TOOL_ENDPOINTS.chord_ortho_patient.edit_insurance };
+      return { toolName, action: 'edit_insurance', endpoint: endpoints.edit_insurance, tenantId };
     }
     if (name.includes('confirm')) {
-      return { toolName: 'chord_ortho_patient', action: 'confirm_appointment', endpoint: TOOL_ENDPOINTS.chord_ortho_patient.confirm_appointment };
+      return { toolName, action: 'confirm_appointment', endpoint: endpoints.confirm_appointment, tenantId };
     }
-    return { toolName: 'chord_ortho_patient', action: 'get', endpoint: TOOL_ENDPOINTS.chord_ortho_patient.get };
+    return { toolName, action: 'get', endpoint: endpoints.get, tenantId };
   }
 
   if (name.includes('schedule') || name.includes('appt') || name.includes('slot') || type.includes('schedule')) {
+    const endpoints = isChord ? CHORD_TOOL_ENDPOINTS.chord_scheduling_v08 : TOOL_ENDPOINTS.schedule_appointment_ortho;
+    const toolName = isChord ? 'chord_scheduling_v08' : 'schedule_appointment_ortho';
+    const tenantId = isChord ? 5 : undefined;
+
     if (name.includes('grouped') || name.includes('group')) {
-      return { toolName: 'schedule_appointment_ortho', action: 'grouped_slots', endpoint: TOOL_ENDPOINTS.schedule_appointment_ortho.grouped_slots };
+      return { toolName, action: 'grouped_slots', endpoint: endpoints.grouped_slots, tenantId };
     }
     if (name.includes('slot') || name.includes('available')) {
-      return { toolName: 'schedule_appointment_ortho', action: 'slots', endpoint: TOOL_ENDPOINTS.schedule_appointment_ortho.slots };
+      return { toolName, action: 'slots', endpoint: endpoints.slots, tenantId };
     }
     if (name.includes('book') || name.includes('create')) {
-      return { toolName: 'schedule_appointment_ortho', action: 'book_child', endpoint: TOOL_ENDPOINTS.schedule_appointment_ortho.book_child };
+      return { toolName, action: 'book_child', endpoint: endpoints.book_child, tenantId };
     }
     if (name.includes('cancel')) {
-      return { toolName: 'schedule_appointment_ortho', action: 'cancel', endpoint: TOOL_ENDPOINTS.schedule_appointment_ortho.cancel };
+      return { toolName, action: 'cancel', endpoint: endpoints.cancel, tenantId };
     }
   }
 
   return null;
 }
 
-function NodeDetailSidebar({ node, onClose, langfuseHost, traceId }: NodeDetailSidebarProps) {
+function NodeDetailSidebar({ node, onClose, langfuseHost, langfuseProjectId, traceId }: NodeDetailSidebarProps) {
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [expandedPanel, setExpandedPanel] = useState<'input' | 'output' | null>(null);
   const [showReplayPanel, setShowReplayPanel] = useState(false);
+
+  // Reset replay panel when selected node changes so stale data isn't shown
+  useEffect(() => {
+    setShowReplayPanel(false);
+  }, [node?.id]);
 
   // Check if this node supports replay
   const toolInfo = node ? extractToolInfo(node) : null;
@@ -412,6 +478,12 @@ function NodeDetailSidebar({ node, onClose, langfuseHost, traceId }: NodeDetailS
                     <div className="text-xs text-gray-500 dark:text-gray-400">Output Tokens</div>
                     <div className="text-sm font-medium text-gray-900 dark:text-gray-100">{node.data.tokens.output?.toLocaleString() || '0'}</div>
                   </div>
+                  {node.data.tokens.cacheRead != null && node.data.tokens.cacheRead > 0 && (
+                    <div>
+                      <div className="text-xs text-cyan-500 dark:text-cyan-400">Cache Read</div>
+                      <div className="text-sm font-medium text-cyan-600 dark:text-cyan-400">{node.data.tokens.cacheRead.toLocaleString()}</div>
+                    </div>
+                  )}
                 </>
               )}
             </div>
@@ -513,11 +585,11 @@ function NodeDetailSidebar({ node, onClose, langfuseHost, traceId }: NodeDetailS
         )}
 
         {/* External Links */}
-        {(langfuseHost && node.data.observationId) && (
+        {(langfuseHost && langfuseProjectId && node.data.observationId) && (
           <div className="px-6 py-4">
             <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Links</h4>
             <a
-              href={`${langfuseHost}/project/*/traces/${traceId}?observation=${node.data.observationId}`}
+              href={`${langfuseHost}/project/${langfuseProjectId}/traces/${traceId}?observation=${node.data.observationId}`}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-2 text-sm text-blue-600 dark:text-blue-400 hover:underline"
@@ -603,16 +675,17 @@ function NodeDetailSidebar({ node, onClose, langfuseHost, traceId }: NodeDetailS
         </div>
       )}
 
-      {/* Replay Panel Modal */}
-      {canReplay && toolInfo && (
+      {/* Replay Panel Modal - only mount when shown so state resets per node */}
+      {canReplay && toolInfo && showReplayPanel && (
         <ReplayPanel
-          isOpen={showReplayPanel}
+          isOpen={true}
           onClose={() => setShowReplayPanel(false)}
           toolName={toolInfo.toolName}
           action={toolInfo.action}
           endpoint={toolInfo.endpoint}
           initialInput={node.data.input as Record<string, unknown>}
           observationId={node.data.observationId}
+          tenantId={toolInfo.tenantId}
         />
       )}
     </div>
@@ -709,6 +782,7 @@ export function FlowViewPopout({
   flowData,
   totalDurationMs,
   langfuseHost,
+  langfuseProjectId,
   traceId,
   sessionId,
 }: FlowViewPopoutProps) {
@@ -718,6 +792,10 @@ export function FlowViewPopout({
   const [showSearch, setShowSearch] = useState(false);
   const [currentSearchMatchIndex, setCurrentSearchMatchIndex] = useState(0);
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Detect if this trace is from Chord tenant (uses NexHealth, not Cloud9)
+  const isChordTrace = useMemo(() => flowData.nodes.some(isChordNode), [flowData.nodes]);
+  const l1Label = isChordTrace ? 'NexHealth' : 'Cloud9';
 
   // Playback animation - uses fixed visualization duration for smooth viewing
   const {
@@ -867,288 +945,7 @@ export function FlowViewPopout({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center">
-      <div className="w-[95vw] h-[90vh] bg-white dark:bg-gray-900 rounded-2xl shadow-2xl flex flex-col overflow-hidden">
-        {/* Header */}
-        <div className="flex-shrink-0 px-6 py-4 border-b border-gray-200 dark:border-gray-700 bg-gradient-to-r from-gray-50 to-white dark:from-gray-800 dark:to-gray-900">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-3 px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-xl text-white">
-                <Icons.Phone />
-                <span className="font-bold text-sm uppercase tracking-wide">Call Flow Navigator</span>
-              </div>
-              {sessionId && (
-                <span className="text-sm text-gray-500 dark:text-gray-400 font-mono">
-                  {sessionId}
-                </span>
-              )}
-            </div>
-
-            {/* Metrics - only show those with data */}
-            <div className="flex items-center gap-2">
-              <MetricPill icon={<Icons.Clock />} label="Duration" value={formatDuration(totalDurationMs)} />
-              {flowData.totalCost > 0 && (
-                <MetricPill
-                  icon={<Icons.Dollar />}
-                  label="Cost"
-                  value={`$${flowData.totalCost.toFixed(4)}`}
-                  color="success"
-                />
-              )}
-              {flowData.apiCallCount > 0 && (
-                <MetricPill icon={<Icons.Server />} label="API Calls" value={flowData.apiCallCount} />
-              )}
-              {flowData.tokenUsage.total > 0 && (
-                <MetricPill
-                  icon={<Icons.Chip />}
-                  label="Tokens"
-                  value={flowData.tokenUsage.total.toLocaleString()}
-                  subValue={`${flowData.tokenUsage.input.toLocaleString()} / ${flowData.tokenUsage.output.toLocaleString()}`}
-                />
-              )}
-              {flowData.errorCount > 0 && (
-                <MetricPill
-                  icon={<Icons.XCircle />}
-                  label="Errors"
-                  value={flowData.errorCount}
-                  color="error"
-                  onClick={jumpToError}
-                />
-              )}
-              {flowData.bottleneckCount > 0 && (
-                <MetricPill
-                  icon={<Icons.Flame />}
-                  label="Bottlenecks"
-                  value={flowData.bottleneckCount}
-                  color="warning"
-                  onClick={jumpToBottleneck}
-                />
-              )}
-            </div>
-
-            <button
-              onClick={onClose}
-              className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
-            >
-              <Icons.X />
-            </button>
-          </div>
-
-          {/* Playback Controls */}
-          <div className="flex items-center gap-4 mt-4">
-            <div className="flex items-center gap-1 bg-gray-100 dark:bg-gray-800 rounded-lg p-1">
-              <button
-                onClick={jumpToStart}
-                className="p-2 text-gray-600 dark:text-gray-400 hover:bg-white dark:hover:bg-gray-700 rounded-lg transition-colors"
-                title="Jump to start (Home)"
-              >
-                <Icons.SkipBack />
-              </button>
-              <button
-                onClick={stepBackward}
-                disabled={!canStepBackward}
-                className={cn(
-                  "p-2 rounded-lg transition-colors",
-                  canStepBackward
-                    ? "text-gray-600 dark:text-gray-400 hover:bg-white dark:hover:bg-gray-700"
-                    : "text-gray-300 dark:text-gray-600 cursor-not-allowed"
-                )}
-                title="Previous step (←)"
-              >
-                <Icons.ChevronLeft />
-              </button>
-              <button
-                onClick={isPlaying ? pause : play}
-                className="p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-                title={isPlaying ? 'Pause (Space)' : 'Play (Space)'}
-              >
-                {isPlaying ? <Icons.Pause /> : <Icons.Play />}
-              </button>
-              <button
-                onClick={stepForward}
-                disabled={!canStepForward}
-                className={cn(
-                  "p-2 rounded-lg transition-colors",
-                  canStepForward
-                    ? "text-gray-600 dark:text-gray-400 hover:bg-white dark:hover:bg-gray-700"
-                    : "text-gray-300 dark:text-gray-600 cursor-not-allowed"
-                )}
-                title="Next step (→)"
-              >
-                <Icons.ChevronRight />
-              </button>
-              <button
-                onClick={jumpToEnd}
-                className="p-2 text-gray-600 dark:text-gray-400 hover:bg-white dark:hover:bg-gray-700 rounded-lg transition-colors"
-                title="Jump to end (End)"
-              >
-                <Icons.SkipForward />
-              </button>
-            </div>
-
-            <div className="flex items-center gap-1 text-sm">
-              <span className="text-gray-500 dark:text-gray-400">Speed:</span>
-              {([0.5, 1, 2, 4] as const).map((s) => (
-                <button
-                  key={s}
-                  onClick={() => setSpeed(s)}
-                  className={cn(
-                    'px-2 py-1 rounded text-sm font-medium transition-colors',
-                    speed === s
-                      ? 'bg-blue-600 text-white'
-                      : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'
-                  )}
-                >
-                  {s}x
-                </button>
-              ))}
-            </div>
-
-            {/* Step counter */}
-            <div className="flex items-center gap-2 px-3 py-1.5 bg-indigo-100 dark:bg-indigo-900/30 rounded-lg">
-              <span className="text-sm font-bold text-indigo-700 dark:text-indigo-300">
-                Step {currentStepIndex + 1}
-              </span>
-              <span className="text-xs text-indigo-500 dark:text-indigo-400">
-                of {totalSteps}
-              </span>
-            </div>
-
-            <div className="flex-1 flex items-center gap-3">
-              {/* Animated progress bar - clickable for scrubbing */}
-              <div
-                className="flex-1 h-3 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden relative cursor-pointer group"
-                onClick={(e) => {
-                  const rect = e.currentTarget.getBoundingClientRect();
-                  const percent = (e.clientX - rect.left) / rect.width;
-                  jumpToProgress(percent);
-                }}
-                title="Click to seek"
-              >
-                <div
-                  className={cn(
-                    "h-full transition-all duration-100 relative",
-                    "bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500"
-                  )}
-                  style={{ width: `${visualizationDurationMs > 0 ? (currentTimeMs / visualizationDurationMs) * 100 : 0}%` }}
-                >
-                  {/* Animated pulse at the leading edge */}
-                  <div className={cn(
-                    "absolute right-0 top-0 bottom-0 w-4 bg-white/30",
-                    isPlaying && "animate-pulse"
-                  )} />
-                </div>
-                {/* Step markers */}
-                {totalSteps > 1 && totalSteps <= 30 && (
-                  <div className="absolute inset-0 flex pointer-events-none">
-                    {Array.from({ length: totalSteps - 1 }, (_, i) => (
-                      <div
-                        key={i}
-                        className="flex-1 border-r border-gray-300 dark:border-gray-600"
-                      />
-                    ))}
-                  </div>
-                )}
-                {/* Hover indicator */}
-                <div className="absolute inset-0 bg-white/0 group-hover:bg-white/10 transition-colors pointer-events-none" />
-              </div>
-              <span className="text-sm font-mono text-gray-600 dark:text-gray-400 min-w-[140px] text-right">
-                {formatDuration(currentTimeMs)} / {formatDuration(visualizationDurationMs)}
-              </span>
-            </div>
-
-            {/* Search Controls */}
-            <div className="flex items-center gap-1 border-l border-gray-200 dark:border-gray-700 pl-3 ml-2">
-              <button
-                onClick={() => {
-                  setShowSearch(!showSearch);
-                  if (!showSearch) {
-                    setTimeout(() => searchInputRef.current?.focus(), 100);
-                  }
-                }}
-                className={cn(
-                  'p-1.5 rounded-lg transition-colors',
-                  showSearch
-                    ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300'
-                    : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'
-                )}
-                title="Search nodes (Ctrl+F)"
-              >
-                <Icons.Search />
-              </button>
-
-              {showSearch && (
-                <div className="flex items-center gap-1 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg overflow-hidden">
-                  <input
-                    ref={searchInputRef}
-                    type="text"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search nodes..."
-                    className="px-2 py-1 text-xs bg-transparent outline-none w-32 text-gray-900 dark:text-gray-100 placeholder-gray-400"
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        if (e.shiftKey) {
-                          jumpToPreviousSearchMatch();
-                        } else {
-                          jumpToNextSearchMatch();
-                        }
-                      }
-                      if (e.key === 'Escape') {
-                        setShowSearch(false);
-                        setSearchQuery('');
-                      }
-                    }}
-                  />
-                  {searchQuery && searchMatchingNodes.length > 0 && (
-                    <>
-                      <span className="text-[10px] text-gray-500 dark:text-gray-400 px-1 whitespace-nowrap">
-                        {currentSearchMatchIndex + 1}/{searchMatchingNodes.length}
-                      </span>
-                      <button
-                        onClick={jumpToPreviousSearchMatch}
-                        className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 hover:text-gray-700 dark:hover:text-gray-200 transition-colors"
-                        title="Previous match (Shift+Enter)"
-                      >
-                        <Icons.ChevronLeft />
-                      </button>
-                      <button
-                        onClick={jumpToNextSearchMatch}
-                        className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 hover:text-gray-700 dark:hover:text-gray-200 transition-colors"
-                        title="Next match (Enter)"
-                      >
-                        <Icons.ChevronRight />
-                      </button>
-                    </>
-                  )}
-                  {searchQuery && searchMatchingNodes.length === 0 && (
-                    <span className="text-[10px] text-gray-400 px-2">No matches</span>
-                  )}
-                  {searchQuery && (
-                    <button
-                      onClick={() => setSearchQuery('')}
-                      className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
-                      title="Clear search"
-                    >
-                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                      </svg>
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-
-            <button
-              onClick={() => setShowShortcutsHelp(true)}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
-              title="Show keyboard shortcuts"
-            >
-              <Icons.QuestionMark />
-              <span className="hidden sm:inline">Shortcuts</span>
-            </button>
-          </div>
-        </div>
-
+      <div className="w-[95vw] h-[90vh] bg-white dark:bg-gray-900 rounded-2xl shadow-2xl flex flex-col overflow-hidden relative">
         {/* Main Content */}
         <div className="flex-1 flex overflow-hidden">
           {/* Data Pipeline View */}
@@ -1165,6 +962,7 @@ export function FlowViewPopout({
               flowDebug={flowData._debug}
               searchMatchingNodeIds={searchMatchingNodeIds}
               focusedSearchNodeId={currentSearchMatchNodeId}
+              l1Label={l1Label}
             />
           </div>
 
@@ -1174,10 +972,20 @@ export function FlowViewPopout({
               node={selectedNode}
               onClose={() => setSelectedNode(null)}
               langfuseHost={langfuseHost}
+              langfuseProjectId={langfuseProjectId}
               traceId={traceId}
             />
           )}
         </div>
+
+        {/* Close button - bottom right */}
+        <button
+          onClick={onClose}
+          className="absolute bottom-3 right-3 z-10 p-1.5 text-gray-400 hover:text-white bg-gray-800/60 hover:bg-gray-800/90 backdrop-blur-sm rounded-lg transition-colors"
+          title="Close (Esc)"
+        >
+          <Icons.X />
+        </button>
       </div>
 
       {/* Keyboard Shortcuts Help Modal */}

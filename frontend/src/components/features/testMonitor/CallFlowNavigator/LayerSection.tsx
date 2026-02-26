@@ -5,7 +5,7 @@
 
 import { cn } from '../../../../utils/cn';
 import type { FlowLayer, FlowNode } from './types';
-import { LAYER_CONFIG } from './types';
+import { LAYER_CONFIG, getL1Labels } from './types';
 
 // ============================================================================
 // TYPES
@@ -17,6 +17,8 @@ interface LayerSectionProps {
   isActive?: boolean;
   hasError?: boolean;
   className?: string;
+  /** Override for L1 label (e.g., "NexHealth" for Chord, "Cloud9" for Ortho) */
+  l1Label?: string;
 }
 
 // ============================================================================
@@ -29,8 +31,13 @@ export function LayerSection({
   isActive = false,
   hasError = false,
   className,
+  l1Label,
 }: LayerSectionProps) {
   const config = LAYER_CONFIG[layer];
+  // For L1, use tenant-aware label if provided
+  const displayLabel = layer === 'layer1_cloud9' && l1Label
+    ? getL1Labels(l1Label).shortLabel
+    : config.shortLabel;
 
   return (
     <div
@@ -69,7 +76,7 @@ export function LayerSection({
             layer === 'layer1_cloud9' && 'text-green-600 dark:text-green-400',
           ],
         )}>
-          {config.shortLabel}
+          {displayLabel}
         </span>
 
         {/* Dashed line */}

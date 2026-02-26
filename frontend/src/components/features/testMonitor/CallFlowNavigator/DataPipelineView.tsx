@@ -608,14 +608,15 @@ export function DataPipelineView({
     return nodes.filter(n => n.status === 'bottleneck').length;
   }, [nodes]);
 
-  const { totalInputTokens, totalOutputTokens, totalTokens } = useMemo(() => {
-    let inp = 0, out = 0, tot = 0;
+  const { totalInputTokens, totalOutputTokens, totalTokens, totalCacheRead } = useMemo(() => {
+    let inp = 0, out = 0, tot = 0, cache = 0;
     for (const n of nodes) {
       inp += n.data.tokens?.input || 0;
       out += n.data.tokens?.output || 0;
       tot += n.data.tokens?.total || 0;
+      cache += n.data.tokens?.cacheRead || 0;
     }
-    return { totalInputTokens: inp, totalOutputTokens: out, totalTokens: tot };
+    return { totalInputTokens: inp, totalOutputTokens: out, totalTokens: tot, totalCacheRead: cache };
   }, [nodes]);
 
   if (nodes.length === 0) {
@@ -843,25 +844,36 @@ export function DataPipelineView({
             </div>
           )}
 
-          {/* Token count — input / output (total) */}
-          {totalTokens > 0 && (
-            <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-purple-100 dark:bg-purple-900/30" title={`Input: ${totalInputTokens.toLocaleString()} | Output: ${totalOutputTokens.toLocaleString()} | Total: ${totalTokens.toLocaleString()}`}>
-              <Icons.Chip />
-              <span className="text-[10px] font-bold">
-                <span className="text-blue-600 dark:text-blue-400">{totalInputTokens.toLocaleString()}</span>
-                <span className="text-purple-500 dark:text-purple-400"> in / </span>
-                <span className="text-green-600 dark:text-green-400">{totalOutputTokens.toLocaleString()}</span>
-                <span className="text-purple-500 dark:text-purple-400"> out </span>
-                <span className="text-purple-700 dark:text-purple-300">({totalTokens.toLocaleString()})</span>
-              </span>
-            </div>
-          )}
-
-          {/* Estimated cost badge — split input/output rates */}
+          {/* Token count — input / output (charged total) | cached */}
           {totalTokens > 0 && (() => {
-            const inputCost = totalInputTokens * (inputCostPer1k / 1000);
+            const chargedTotal = totalTokens - totalCacheRead;
+            return (
+              <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-purple-100 dark:bg-purple-900/30" title={`Input: ${totalInputTokens.toLocaleString()} | Output: ${totalOutputTokens.toLocaleString()} | Charged: ${chargedTotal.toLocaleString()}${totalCacheRead > 0 ? ` | Cache Read: ${totalCacheRead.toLocaleString()}` : ''}`}>
+                <Icons.Chip />
+                <span className="text-[10px] font-bold">
+                  <span className="text-blue-600 dark:text-blue-400">{totalInputTokens.toLocaleString()}</span>
+                  <span className="text-purple-500 dark:text-purple-400"> in / </span>
+                  <span className="text-green-600 dark:text-green-400">{totalOutputTokens.toLocaleString()}</span>
+                  <span className="text-purple-500 dark:text-purple-400"> out </span>
+                  <span className="text-purple-700 dark:text-purple-300">({chargedTotal.toLocaleString()})</span>
+                  {totalCacheRead > 0 && (
+                    <>
+                      <span className="text-gray-400 dark:text-gray-500"> | </span>
+                      <span className="text-cyan-600 dark:text-cyan-400">{totalCacheRead.toLocaleString()} cached</span>
+                    </>
+                  )}
+                </span>
+              </div>
+            );
+          })()}
+
+          {/* Estimated cost badge — split input/output rates, cache at 10% */}
+          {totalTokens > 0 && (() => {
+            const fullRateInputTokens = totalInputTokens;
+            const cacheCost = totalCacheRead * (inputCostPer1k / 1000) * 0.1;
+            const inputCost = fullRateInputTokens * (inputCostPer1k / 1000);
             const outputCost = totalOutputTokens * (outputCostPer1k / 1000);
-            const totalCost = inputCost + outputCost;
+            const totalCost = inputCost + outputCost + cacheCost;
             return (
               <div className="relative" ref={costEditorRef}>
                 <button
@@ -913,6 +925,9 @@ export function DataPipelineView({
                     <div className="text-[9px] text-gray-400 mt-2 pt-1.5 border-t border-gray-200 dark:border-gray-700 space-y-0.5">
                       <div>Input: <span className="text-blue-500">${inputCost.toFixed(4)}</span> ({totalInputTokens.toLocaleString()} tok)</div>
                       <div>Output: <span className="text-green-500">${outputCost.toFixed(4)}</span> ({totalOutputTokens.toLocaleString()} tok)</div>
+                      {totalCacheRead > 0 && (
+                        <div>Cache: <span className="text-cyan-500">${cacheCost.toFixed(4)}</span> ({totalCacheRead.toLocaleString()} tok @ 10%)</div>
+                      )}
                       <div className="font-bold text-gray-600 dark:text-gray-300">Total: ${totalCost.toFixed(4)}</div>
                     </div>
                   </div>

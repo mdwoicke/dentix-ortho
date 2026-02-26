@@ -1167,6 +1167,7 @@ export class Database {
         usage_input_tokens INTEGER,
         usage_output_tokens INTEGER,
         usage_total_tokens INTEGER,
+        usage_cache_read_tokens INTEGER,
         cost REAL,
         level TEXT,
         status_message TEXT,

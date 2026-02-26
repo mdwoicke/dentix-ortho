@@ -186,8 +186,10 @@ export function MetricsBar({
         <MetricCard
           icon={<Icons.Chip />}
           label="Tokens"
-          value={tokenUsage.total.toLocaleString()}
-          subValue={`(${tokenUsage.input.toLocaleString()} in / ${tokenUsage.output.toLocaleString()} out)`}
+          value={(tokenUsage.total - (tokenUsage.cacheRead || 0)).toLocaleString()}
+          subValue={tokenUsage.cacheRead > 0
+            ? `(${tokenUsage.input.toLocaleString()} in / ${tokenUsage.output.toLocaleString()} out | ${tokenUsage.cacheRead.toLocaleString()} cached)`
+            : `(${tokenUsage.input.toLocaleString()} in / ${tokenUsage.output.toLocaleString()} out)`}
           color="default"
         />
 

@@ -122,6 +122,7 @@ export function CallFlowNavigator({
   traceDurationMs,
   bottleneckThresholdMs = 2000,
   langfuseHost,
+  langfuseProjectId,
   traceId,
 }: CallFlowNavigatorProps) {
   const [isPopoutOpen, setIsPopoutOpen] = useState(false);
@@ -290,6 +291,7 @@ export function CallFlowNavigator({
         flowData={flowData}
         totalDurationMs={totalDurationMs}
         langfuseHost={langfuseHost}
+        langfuseProjectId={langfuseProjectId}
         traceId={traceId}
       />
     </>

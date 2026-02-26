@@ -1,12 +1,17 @@
 /**
  * ============================================================================
  * CHORD DSO PATIENT - Unified Patient & Clinic Tool (Node Red Version)
- * Version: v13 | Updated: 2026-01-28
+ * Version: v14 | Updated: 2026-02-25
  * ============================================================================
  * Consolidates: lookup, get, create, appointments, clinic_info, edit_insurance, confirm_appointment
  *
  * This version calls Node Red endpoints instead of Cloud9 directly.
  * All Cloud9 XML/SOAP logic is handled by Node Red.
+ *
+ * v14: PII MASKING DETECTION - Catch masked phone numbers before hitting Node-RED
+ *     - lookup.validate() rejects phoneNumber matching /^[*Xx]+$/
+ *     - Returns helpful llm_guidance directing LLM to search by name instead
+ *     - Prevents wasted API call and confusing error for the LLM
  *
  * v13: Updated DEFAULT_PROVIDER_GUID to Dr. Troy McCartney (0f588ace-e0bf-44ba-b8ef-be8cbb63153b)
  *
@@ -45,7 +50,7 @@
 
 const fetch = require('node-fetch');
 
-const TOOL_VERSION = 'v12';
+const TOOL_VERSION = 'v14';
 
 // v5: API Call Tracking for debugging - enables Call Flow Navigator visualization
 const _debug_calls = [];
@@ -136,6 +141,20 @@ const ACTIONS = {
         validate: (params) => {
             if (!params.phoneNumber && !params.filter) {
                 throw new Error("phoneNumber or filter is required for 'lookup' action");
+            }
+            // v14: PII masking detection - catch masked phone numbers before API call
+            if (params.phoneNumber && /^[\\*Xx]+$/.test(params.phoneNumber.trim())) {
+                throw new Error(JSON.stringify({
+                    success: false,
+                    error: 'PII_MASKED_PHONE',
+                    llm_guidance: {
+                        error_type: 'pii_masked_phone',
+                        voice_response: 'I can look you up by name instead. Could you spell your last name for me?',
+                        action_required: 'search_by_name',
+                        CRITICAL: 'v14: The phone number appears to be PII-masked (e.g., "***"). Do NOT retry with the same value. Ask the caller for their name and use filter parameter instead of phoneNumber.',
+                        example: { action: 'lookup', filter: 'LastName, FirstName' }
+                    }
+                }));
             }
         },
         successLog: 'Patient lookup completed'

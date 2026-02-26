@@ -131,7 +131,7 @@ function CollapsibleSection({ title, icon, defaultOpen = true, children, onCopy 
 /**
  * NodeDetailPanel Component
  */
-export function NodeDetailPanel({ node, onClose, langfuseHost, traceId }: NodeDetailPanelProps) {
+export function NodeDetailPanel({ node, onClose, langfuseHost, langfuseProjectId, traceId }: NodeDetailPanelProps) {
   if (!node) return null;
 
   const handleCopy = async (text: string) => {
@@ -142,8 +142,8 @@ export function NodeDetailPanel({ node, onClose, langfuseHost, traceId }: NodeDe
     }
   };
 
-  const langfuseUrl = langfuseHost && traceId && node.data.observationId
-    ? `${langfuseHost}/trace/${traceId}?observation=${node.data.observationId}`
+  const langfuseUrl = langfuseHost && langfuseProjectId && traceId && node.data.observationId
+    ? `${langfuseHost}/project/${langfuseProjectId}/traces/${traceId}?observation=${node.data.observationId}`
     : null;
 
   return (
@@ -243,6 +243,17 @@ export function NodeDetailPanel({ node, onClose, langfuseHost, traceId }: NodeDe
                 </div>
               </div>
             </div>
+            {node.data.tokens.cacheRead != null && node.data.tokens.cacheRead > 0 && (
+              <div className="mt-2 px-3 py-1.5 bg-cyan-50 dark:bg-cyan-900/20 rounded text-sm flex items-center justify-between">
+                <span className="text-cyan-700 dark:text-cyan-300 font-medium">Cache Read</span>
+                <span className="font-semibold text-cyan-600 dark:text-cyan-400">
+                  {node.data.tokens.cacheRead.toLocaleString()}
+                  <span className="text-xs text-cyan-500 dark:text-cyan-500 ml-1">
+                    ({node.data.tokens.total ? Math.round((node.data.tokens.cacheRead / node.data.tokens.total) * 100) : 0}% of total)
+                  </span>
+                </span>
+              </div>
+            )}
           </CollapsibleSection>
         )}
 
@@ -310,14 +321,14 @@ export function NodeDetailPanel({ node, onClose, langfuseHost, traceId }: NodeDe
           </CollapsibleSection>
         )}
 
-        {/* Error/Status Message */}
-        {node.data.statusMessage && (
+        {/* Error Details */}
+        {(node.data.errorMessage || node.data.statusMessage) && (
           <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
             <div className="text-xs font-medium text-red-700 dark:text-red-300 uppercase mb-1">
-              Status Message
+              Error Details
             </div>
-            <div className="text-sm text-red-600 dark:text-red-400">
-              {node.data.statusMessage}
+            <div className="text-sm text-red-600 dark:text-red-400 break-words">
+              {node.data.errorMessage || node.data.statusMessage}
             </div>
           </div>
         )}

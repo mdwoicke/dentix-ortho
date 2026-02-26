@@ -260,17 +260,38 @@ export function SkillSelector({
         {/* Input Fields */}
         {selectedSkill && selectedSkill.inputs.length > 0 && (
           <div className="space-y-4">
-            <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300">
-              Parameters
-            </h4>
+            <div>
+              <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                Parameters
+              </h4>
+              {(() => {
+                const reqCount = selectedSkill.inputs.filter(i => i.required).length;
+                const optCount = selectedSkill.inputs.length - reqCount;
+                return (
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                    {reqCount > 0 && <span>{reqCount} required</span>}
+                    {reqCount > 0 && optCount > 0 && <span>, </span>}
+                    {optCount > 0 && <span>{optCount} optional</span>}
+                  </p>
+                );
+              })()}
+            </div>
             {selectedSkill.inputs.map(input => (
               <div key={input.name}>
                 <label
                   htmlFor={input.name}
-                  className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+                  className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
                 >
                   {input.label}
-                  {input.required && <span className="text-red-500 ml-1">*</span>}
+                  {input.required ? (
+                    <span className="text-xs font-medium px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400">
+                      Required
+                    </span>
+                  ) : (
+                    <span className="text-xs font-medium px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400">
+                      Optional
+                    </span>
+                  )}
                 </label>
                 {renderInput(input)}
                 {input.description && (

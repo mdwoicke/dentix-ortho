@@ -25,9 +25,12 @@ import {
   getProductionTraces,
   importProductionTraces,
   refreshProductionSession,
+  getSessionAppointments,
+  getPatientAllAppointments,
 } from '../../services/api/testMonitorApi';
-import type { MonitoringResult } from '../../services/api/testMonitorApi';
+import type { MonitoringResult, SessionAppointment, PatientAppointment } from '../../services/api/testMonitorApi';
 import { getLangfuseConfigs, getAppSettings } from '../../services/api/appSettingsApi';
+import { copyToClipboard } from '../../utils/clipboard';
 import type {
   ImportHistoryEntry,
   ProductionSession,
@@ -153,6 +156,12 @@ const Icons = {
     </svg>
   ),
 };
+
+/** Truncate session ID: conv_9_+15551234567_1770134504775 => conv_9_+15551234567 */
+function truncateSessionId(sessionId: string): string {
+  const match = sessionId.match(/^(conv_\d+_.+?)_\d{10,}$/);
+  return match ? match[1] : sessionId;
+}
 
 // ============================================================================
 // TIMEZONE CONSTANTS
@@ -296,13 +305,14 @@ function formatSpanDuration(seconds: number | null): string {
 interface TraceModalProps {
   traceId: string;
   timezone: string;
+  langfuseHost?: string;
   langfuseProjectId?: string;
   onClose: () => void;
 }
 
 type TraceModalTab = 'transcript' | 'performance' | 'flow';
 
-function TraceModal({ traceId, timezone, langfuseProjectId, onClose }: TraceModalProps) {
+function TraceModal({ traceId, timezone, langfuseHost, langfuseProjectId, onClose }: TraceModalProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [traceDetail, setTraceDetail] = useState<ProductionTraceDetail | null>(null);
@@ -367,9 +377,9 @@ function TraceModal({ traceId, timezone, langfuseProjectId, onClose }: TraceModa
                     {formatDuration(traceDetail.trace.latencyMs)}
                   </span>
                 )}
-                {traceDetail.trace.langfuseHost && (
+                {langfuseHost && langfuseProjectId && (
                   <a
-                    href={`${traceDetail.trace.langfuseHost}/trace/${traceDetail.trace.traceId}`}
+                    href={`${langfuseHost}/project/${langfuseProjectId}/traces/${traceDetail.trace.traceId}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="flex items-center gap-1 text-blue-600 hover:underline"
@@ -462,7 +472,7 @@ function TraceModal({ traceId, timezone, langfuseProjectId, onClose }: TraceModa
               loading={false}
               dbId={traceDetail.trace.id}
               langfuseTraceId={traceDetail.trace.traceId}
-              langfuseHost={traceDetail.trace.langfuseHost}
+              langfuseHost={langfuseHost}
               langfuseProjectId={langfuseProjectId}
               flowiseSessionId={traceDetail.trace.sessionId || undefined}
             />
@@ -485,7 +495,8 @@ function TraceModal({ traceId, timezone, langfuseProjectId, onClose }: TraceModa
               traceStartTime={traceDetail.trace.startedAt}
               traceDurationMs={traceDetail.trace.latencyMs || undefined}
               bottleneckThresholdMs={2000}
-              langfuseHost={traceDetail.trace.langfuseHost}
+              langfuseHost={langfuseHost}
+              langfuseProjectId={langfuseProjectId}
               traceId={traceDetail.trace.traceId}
             />
           )}
@@ -537,10 +548,412 @@ function TraceModal({ traceId, timezone, langfuseProjectId, onClose }: TraceModa
 // SESSION MODAL COMPONENT
 // ============================================================================
 
+/** Compact booking summary card shown in SessionModal header area */
+function BookingSummaryCard({ sessionId, configId }: { sessionId: string; configId?: number }) {
+  const [appointments, setAppointments] = useState<SessionAppointment[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [verifying, setVerifying] = useState(false);
+  const [verified, setVerified] = useState(false);
+  const [verifiedAt, setVerifiedAt] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function fetchAppointments() {
+      try {
+        setLoading(true);
+        const result = await getSessionAppointments(sessionId, configId);
+        if (!cancelled) {
+          setAppointments(result.appointments || []);
+          // If backend returned cached verified data, mark as already verified
+          if (result.cached && result.verifiedAt) {
+            setVerified(true);
+            setVerifiedAt(result.verifiedAt);
+          }
+        }
+      } catch (err: any) {
+        if (!cancelled) setError(err.message || 'Failed to load appointment data');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    fetchAppointments();
+    return () => { cancelled = true; };
+  }, [sessionId, configId]);
+
+  const handleVerify = async () => {
+    try {
+      setVerifying(true);
+      const result = await getSessionAppointments(sessionId, configId, true);
+      setAppointments(result.appointments || []);
+      setVerified(true);
+      setVerifiedAt(result.verifiedAt || new Date().toISOString());
+    } catch (err: any) {
+      setError(err.message || 'Verification failed');
+    } finally {
+      setVerifying(false);
+    }
+  };
+
+  if (loading) return null; // Don't show anything while loading
+  if (error || appointments.length === 0) return null; // Don't show if no appointments
+
+  const statusColors: Record<string, string> = {
+    booked: 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300',
+    confirmed: 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300',
+    cancelled: 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300',
+    unknown: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400',
+  };
+
+  return (
+    <>
+      <div className="mx-6 mt-3 mb-1 border border-green-200 dark:border-green-800 rounded-lg bg-green-50/50 dark:bg-green-900/20">
+        <div className="px-4 py-3">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <svg className="w-4 h-4 text-green-600 dark:text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span className="text-sm font-semibold text-green-700 dark:text-green-300">
+                Booking{appointments.length > 1 ? 's' : ''} Detected
+              </span>
+              <span className="text-xs text-gray-500 dark:text-gray-400">
+                ({appointments.length} appointment{appointments.length > 1 ? 's' : ''})
+              </span>
+            </div>
+            {!verified && (
+              <button
+                onClick={handleVerify}
+                disabled={verifying}
+                className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md transition-colors bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50"
+              >
+                {verifying ? (
+                  <>
+                    <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    Verifying...
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                    </svg>
+                    Verify with NexHealth
+                  </>
+                )}
+              </button>
+            )}
+            {verified && (
+              <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400" title={verifiedAt ? `Verified ${new Date(verifiedAt).toLocaleString()}` : undefined}>
+                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+                Verified{verifiedAt ? ` ${new Date(verifiedAt).toLocaleDateString()}` : ''}
+              </span>
+            )}
+          </div>
+
+          <div className="space-y-3">
+            {appointments.map((appt, idx) => (
+              <div key={appt.appointmentId || idx} className="rounded-md bg-white/60 dark:bg-gray-800/40 border border-gray-100 dark:border-gray-700/50 px-3 py-2">
+                {/* Row 1: Patient + Status */}
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                  {appt.childLabel && (
+                    <span className="px-1.5 py-0.5 rounded bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300 font-medium">{appt.childLabel}</span>
+                  )}
+                  {appt.patientName && (
+                    <span className="text-gray-900 dark:text-white font-semibold text-sm">{appt.patientName}</span>
+                  )}
+                  <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${statusColors[appt.status] || statusColors.unknown}`}>
+                    {appt.status}
+                  </span>
+                  {appt.source === 'nexhealth_live' && (
+                    <span className="text-xs text-blue-500 dark:text-blue-400 italic">live</span>
+                  )}
+                </div>
+
+                {/* Row 2: Date/Time + Appointment Type */}
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1.5 text-xs text-gray-600 dark:text-gray-300">
+                  {appt.startTime && (
+                    <span className="flex items-center gap-1">
+                      <svg className="w-3.5 h-3.5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                      {new Date(appt.startTime).toLocaleString('en-US', {
+                        weekday: 'short', month: 'short', day: 'numeric', year: 'numeric',
+                        hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
+                      })}
+                      {appt.endTime && (
+                        <span className="text-gray-400"> — {new Date(appt.endTime).toLocaleTimeString('en-US', {
+                          hour: 'numeric', minute: '2-digit',
+                        })}</span>
+                      )}
+                    </span>
+                  )}
+                  {appt.appointmentTypeName && (
+                    <span className="px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300">
+                      {appt.appointmentTypeName}
+                    </span>
+                  )}
+                </div>
+
+                {/* Row 3: Location + Address + Operatory + Provider */}
+                {(appt.locationName || appt.operatoryName || appt.providerName || appt.locationAddress) && (
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    {appt.locationName && (
+                      <span className="flex items-center gap-1 font-medium text-gray-700 dark:text-gray-300">
+                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                        {appt.locationName}
+                      </span>
+                    )}
+                    {appt.locationAddress && (
+                      <span>{appt.locationAddress}</span>
+                    )}
+                    {appt.locationPhone && (
+                      <span className="flex items-center gap-1">
+                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" /></svg>
+                        {appt.locationPhone}
+                      </span>
+                    )}
+                    {appt.operatoryName && (
+                      <span className="flex items-center gap-1">
+                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg>
+                        {appt.operatoryName}
+                      </span>
+                    )}
+                    {appt.providerName && (
+                      <span className="flex items-center gap-1">
+                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
+                        {appt.providerName}
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {/* Row 3b: Appointment note (e.g. "Schedule by AI - Insurance info") */}
+                {appt.note && (
+                  <div className="mt-1 text-xs text-gray-400 dark:text-gray-500 italic truncate" title={appt.note}>
+                    {appt.note}
+                  </div>
+                )}
+
+                {/* Row 4: IDs + Patient contact */}
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1 text-xs text-gray-400 dark:text-gray-500">
+                  {appt.patientId && (
+                    <span>Patient: <button className="font-mono hover:text-blue-500 transition-colors" onClick={() => navigator.clipboard.writeText(appt.patientId!)} title="Click to copy">{appt.patientId}</button></span>
+                  )}
+                  {appt.appointmentId && (
+                    <span>Appt: <button className="font-mono hover:text-blue-500 transition-colors" onClick={() => navigator.clipboard.writeText(appt.appointmentId!)} title="Click to copy">{appt.appointmentId}</button></span>
+                  )}
+                  {appt.operatoryId && !appt.operatoryName && (
+                    <span>Operatory: <span className="font-mono">{appt.operatoryId}</span></span>
+                  )}
+                  {appt.patientEmail && (
+                    <span className="flex items-center gap-1">
+                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
+                      {appt.patientEmail}
+                    </span>
+                  )}
+                  {appt.patientPhone && (
+                    <span className="flex items-center gap-1">
+                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" /></svg>
+                      {appt.patientPhone}
+                    </span>
+                  )}
+                  {appt.patientDob && (
+                    <span>DOB: {new Date(appt.patientDob).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Other appointments for the same patient(s) */}
+      <PatientOtherAppointments appointments={appointments} />
+    </>
+  );
+}
+
+/** Collapsible section showing other appointments tied to the same patient(s) */
+function PatientOtherAppointments({ appointments }: { appointments: SessionAppointment[] }) {
+  const [otherAppts, setOtherAppts] = useState<PatientAppointment[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [fetched, setFetched] = useState(false);
+
+  // Get unique patient IDs from the booking card appointments
+  const patientIds = [...new Set(appointments.filter(a => a.patientId).map(a => a.patientId!))];
+  // Collect appointment IDs from this call to exclude them
+  const thisCallApptIds = new Set(appointments.filter(a => a.appointmentId).map(a => a.appointmentId!));
+
+  const fetchOtherAppointments = async () => {
+    if (fetched || patientIds.length === 0) return;
+    setLoading(true);
+    try {
+      const results: PatientAppointment[] = [];
+      for (const pid of patientIds) {
+        const resp = await getPatientAllAppointments(pid);
+        for (const appt of resp.appointments) {
+          // Exclude appointments from this call
+          if (appt.appointmentId && thisCallApptIds.has(appt.appointmentId)) continue;
+          results.push(appt);
+        }
+      }
+      setOtherAppts(results);
+    } catch {
+      // silently fail - this is supplementary info
+    } finally {
+      setLoading(false);
+      setFetched(true);
+    }
+  };
+
+  const handleToggle = () => {
+    const next = !expanded;
+    setExpanded(next);
+    if (next && !fetched) fetchOtherAppointments();
+  };
+
+  if (patientIds.length === 0) return null;
+
+  const statusColors: Record<string, string> = {
+    booked: 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300',
+    confirmed: 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300',
+    cancelled: 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300',
+    unknown: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400',
+  };
+
+  return (
+    <div className="mx-6 mb-1 border border-gray-200 dark:border-gray-700 rounded-lg bg-gray-50/50 dark:bg-gray-800/30">
+      <button
+        onClick={handleToggle}
+        className="w-full px-4 py-2.5 flex items-center justify-between text-xs hover:bg-gray-100 dark:hover:bg-gray-700/50 rounded-lg transition-colors"
+      >
+        <div className="flex items-center gap-2">
+          <svg className="w-3.5 h-3.5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+          </svg>
+          <span className="font-medium text-gray-600 dark:text-gray-300">
+            Other Patient Appointments
+          </span>
+          {fetched && (
+            <span className="px-1.5 py-0.5 rounded-full bg-gray-200 dark:bg-gray-600 text-gray-600 dark:text-gray-300 text-xs">
+              {otherAppts.length}
+            </span>
+          )}
+        </div>
+        <svg
+          className={`w-4 h-4 text-gray-400 transition-transform ${expanded ? 'rotate-180' : ''}`}
+          fill="none" viewBox="0 0 24 24" stroke="currentColor"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {expanded && (
+        <div className="px-4 pb-3">
+          {loading && (
+            <div className="flex items-center gap-2 text-xs text-gray-400 py-2">
+              <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              Loading appointments...
+            </div>
+          )}
+
+          {fetched && otherAppts.length === 0 && (
+            <div className="text-xs text-gray-400 dark:text-gray-500 py-2">
+              No other appointments found for this patient.
+            </div>
+          )}
+
+          {fetched && otherAppts.length > 0 && (
+            <div className="space-y-2">
+              {otherAppts.map((appt, idx) => {
+                const isPast = appt.startTime && new Date(appt.startTime) < new Date();
+                return (
+                  <div
+                    key={appt.appointmentId || idx}
+                    className={`rounded-md border px-3 py-2 ${
+                      isPast
+                        ? 'bg-gray-50 dark:bg-gray-800/30 border-gray-100 dark:border-gray-700/40 opacity-70'
+                        : 'bg-white/60 dark:bg-gray-800/40 border-gray-100 dark:border-gray-700/50'
+                    }`}
+                  >
+                    {/* Date + Status + Type */}
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                      {appt.startTime && (
+                        <span className="flex items-center gap-1 text-gray-600 dark:text-gray-300">
+                          <svg className="w-3.5 h-3.5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                          </svg>
+                          {new Date(appt.startTime).toLocaleString('en-US', {
+                            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric',
+                            hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
+                          })}
+                          {appt.endTime && (
+                            <span className="text-gray-400"> — {new Date(appt.endTime).toLocaleTimeString('en-US', {
+                              hour: 'numeric', minute: '2-digit',
+                            })}</span>
+                          )}
+                        </span>
+                      )}
+                      <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${statusColors[appt.status] || statusColors.unknown}`}>
+                        {appt.status}
+                      </span>
+                      {appt.appointmentTypeName && (
+                        <span className="px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300">
+                          {appt.appointmentTypeName}
+                        </span>
+                      )}
+                      {isPast && (
+                        <span className="text-gray-400 italic">past</span>
+                      )}
+                    </div>
+
+                    {/* Location + Operatory */}
+                    {(appt.locationName || appt.operatoryName) && (
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-xs text-gray-500 dark:text-gray-400">
+                        {appt.locationName && (
+                          <span className="flex items-center gap-1">
+                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                            {appt.locationName}
+                          </span>
+                        )}
+                        {appt.operatoryName && (
+                          <span className="flex items-center gap-1">
+                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg>
+                            {appt.operatoryName}
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Appointment ID */}
+                    {appt.appointmentId && (
+                      <div className="mt-1 text-xs text-gray-400 dark:text-gray-500">
+                        Appt: <button className="font-mono hover:text-blue-500 transition-colors" onClick={() => navigator.clipboard.writeText(appt.appointmentId!)} title="Click to copy">{appt.appointmentId}</button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface SessionModalProps {
   sessionId: string;
   configId?: number;
   timezone: string;
+  langfuseHost?: string;
   langfuseProjectId?: string;
   onClose: () => void;
   onRefresh?: (session: ProductionSession) => void;
@@ -548,7 +961,7 @@ interface SessionModalProps {
 
 type SessionModalTab = 'transcript' | 'performance' | 'flow' | 'traces';
 
-function SessionModal({ sessionId, configId, timezone, langfuseProjectId, onClose, onRefresh }: SessionModalProps) {
+function SessionModal({ sessionId, configId, timezone, langfuseHost, langfuseProjectId, onClose, onRefresh }: SessionModalProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sessionDetail, setSessionDetail] = useState<ProductionSessionDetailResponse | null>(null);
@@ -709,9 +1122,9 @@ function SessionModal({ sessionId, configId, timezone, langfuseProjectId, onClos
                     {formatCost(sessionDetail.session.totalCost)}
                   </span>
                 )}
-                {sessionDetail.session.langfuseHost && langfuseProjectId && sessionDetail.traces.length > 0 && (
+                {langfuseHost && langfuseProjectId && sessionDetail.traces.length > 0 && (
                   <a
-                    href={`${sessionDetail.session.langfuseHost}/project/${langfuseProjectId}/traces/${sessionDetail.traces[0].traceId}`}
+                    href={`${langfuseHost}/project/${langfuseProjectId}/traces/${sessionDetail.traces[0].traceId}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-2 px-3 py-1.5 bg-orange-50 dark:bg-orange-900/30 hover:bg-orange-100 dark:hover:bg-orange-900/50 border border-orange-200 dark:border-orange-700 rounded-lg font-mono text-sm text-orange-700 dark:text-orange-300 transition-colors"
@@ -778,6 +1191,11 @@ function SessionModal({ sessionId, configId, timezone, langfuseProjectId, onClos
             </button>
           </div>
         </div>
+
+        {/* Booking Summary Card - only for Chord sessions with successful bookings */}
+        {sessionDetail && sessionDetail.session.hasSuccessfulBooking && (
+          <BookingSummaryCard sessionId={sessionId} configId={configId} />
+        )}
 
         {/* Tab Navigation */}
         {sessionDetail && (
@@ -869,7 +1287,7 @@ function SessionModal({ sessionId, configId, timezone, langfuseProjectId, onClos
               transcript={sessionDetail.transcript}
               apiCalls={sessionDetail.apiCalls}
               loading={false}
-              langfuseHost={sessionDetail.session.langfuseHost}
+              langfuseHost={langfuseHost}
               langfuseProjectId={langfuseProjectId}
               flowiseSessionId={sessionDetail.session.sessionId}
             />
@@ -892,7 +1310,8 @@ function SessionModal({ sessionId, configId, timezone, langfuseProjectId, onClos
               traceStartTime={sessionDetail.session.firstTraceAt}
               traceDurationMs={sessionDetail.session.totalLatencyMs || undefined}
               bottleneckThresholdMs={2000}
-              langfuseHost={sessionDetail.session.langfuseHost}
+              langfuseHost={langfuseHost}
+              langfuseProjectId={langfuseProjectId}
               traceId={sessionDetail.traces[0]?.traceId}
             />
           )}
@@ -1042,12 +1461,17 @@ export default function CallTracePage() {
   const [dispositionFilter, setDispositionFilter] = useState<DispositionFilter>(null);
   const [dispositionLabel, setDispositionLabel] = useState<string | null>(null);
 
+  // Copy session ID feedback
+  const [copiedSessionId, setCopiedSessionId] = useState<string | null>(null);
+
   // Insights cache state (persists when switching tabs)
   const [cachedInsights, setCachedInsights] = useState<TraceInsightsResponse | null>(null);
   const [cachedInsightsLastDays, setCachedInsightsLastDays] = useState<number>(7);
 
-  // Langfuse project ID (for URL linking)
-  const [langfuseProjectId, setLangfuseProjectId] = useState<string | undefined>(undefined);
+  // Langfuse project ID (for URL linking) - global fallback from app settings
+  const [globalLangfuseProjectId, setGlobalLangfuseProjectId] = useState<string | undefined>(undefined);
+  // Per-config project ID takes precedence over global
+  const langfuseProjectId = configs.find(c => c.id === selectedConfigId)?.projectId || globalLangfuseProjectId;
 
   // Auto-refresh state
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState<boolean>(getStoredAutoRefreshEnabled);
@@ -1149,12 +1573,12 @@ export default function CallTracePage() {
     }
   }, [location.search, location.key, setSearchParams]);
 
-  // Fetch Langfuse project ID from app settings (for URL linking)
+  // Fetch global Langfuse project ID from app settings (fallback for URL linking)
   useEffect(() => {
     getAppSettings()
       .then(settings => {
         if (settings.langfuseProjectId?.value) {
-          setLangfuseProjectId(settings.langfuseProjectId.value);
+          setGlobalLangfuseProjectId(settings.langfuseProjectId.value);
         }
       })
       .catch(err => console.warn('Failed to fetch app settings:', err));
@@ -2166,6 +2590,9 @@ export default function CallTracePage() {
                     Session
                   </th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    Location
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                     First Message
                   </th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
@@ -2197,7 +2624,7 @@ export default function CallTracePage() {
               <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                 {!hasImported ? (
                   <tr>
-                    <td colSpan={10} className="px-4 py-12 text-center">
+                    <td colSpan={11} className="px-4 py-12 text-center">
                       <div className="flex flex-col items-center gap-3 text-gray-500 dark:text-gray-400">
                         <Icons.Download />
                         <div className="text-lg font-medium">Select a date and run Import to load data</div>
@@ -2207,13 +2634,13 @@ export default function CallTracePage() {
                   </tr>
                 ) : loading && sessions.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="px-4 py-8 text-center">
+                    <td colSpan={11} className="px-4 py-8 text-center">
                       <Spinner size="lg" />
                     </td>
                   </tr>
                 ) : sessions.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="px-4 py-8 text-center text-gray-500 dark:text-gray-400">
+                    <td colSpan={11} className="px-4 py-8 text-center text-gray-500 dark:text-gray-400">
                       No conversations found. Try adjusting the date range or import more traces.
                     </td>
                   </tr>
@@ -2225,7 +2652,27 @@ export default function CallTracePage() {
                       onClick={() => setSelectedSessionId(session.sessionId)}
                     >
                       <td className="px-4 py-3 text-sm font-mono text-gray-900 dark:text-white">
-                        {session.sessionId}
+                        <div className="flex items-center gap-1">
+                          <span title={session.sessionId} className="truncate">
+                            {truncateSessionId(session.sessionId)}
+                          </span>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              copyToClipboard(session.sessionId).then(() => {
+                                setCopiedSessionId(session.sessionId);
+                                setTimeout(() => setCopiedSessionId(null), 2000);
+                              }).catch(() => {});
+                            }}
+                            className="flex-shrink-0 p-0.5 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 rounded"
+                            title="Copy full session ID"
+                          >
+                            {copiedSessionId === session.sessionId ? <Icons.Check /> : <Icons.Copy />}
+                          </button>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 max-w-[200px] truncate" title={session.locationName || undefined}>
+                        {session.locationName || '-'}
                       </td>
                       <td className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 max-w-xs truncate" title={session.inputPreview || undefined}>
                         {session.inputPreview || '-'}
@@ -2685,6 +3132,7 @@ export default function CallTracePage() {
         <TraceModal
           traceId={selectedTraceId}
           timezone={timezone}
+          langfuseHost={configs.find(c => c.id === selectedConfigId)?.host}
           langfuseProjectId={langfuseProjectId}
           onClose={() => setSelectedTraceId(null)}
         />
@@ -2696,6 +3144,7 @@ export default function CallTracePage() {
           sessionId={selectedSessionId}
           configId={selectedConfigId || undefined}
           timezone={timezone}
+          langfuseHost={configs.find(c => c.id === selectedConfigId)?.host}
           langfuseProjectId={langfuseProjectId}
           onClose={() => setSelectedSessionId(null)}
           onRefresh={(updatedSession) => {

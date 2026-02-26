@@ -151,6 +151,8 @@ export const STORAGE_KEYS = {
   DOMINOS_CHAT_MESSAGES: 'dentix_dominos_chat_messages',
   DOMINOS_CHAT_SESSION_ID: 'dentix_dominos_chat_session_id',
   DOMINOS_CHAT_SOURCE: 'dentix_dominos_chat_source',
+  FLOW_COST_PER_1K_INPUT: 'dentix_flow_cost_per_1k_input',
+  FLOW_COST_PER_1K_OUTPUT: 'dentix_flow_cost_per_1k_output',
 } as const;
 
 /**

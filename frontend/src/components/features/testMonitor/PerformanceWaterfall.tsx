@@ -662,6 +662,25 @@ export function PerformanceWaterfall({
                           </div>
                         </div>
 
+                        {/* Error Details */}
+                        {(entry.errorMessage || entry.level === 'ERROR') && (
+                          <div className="rounded border border-red-300 dark:border-red-700 overflow-hidden">
+                            <div className="px-3 py-1.5 bg-red-50 dark:bg-red-900/30 border-b border-red-300 dark:border-red-700">
+                              <span className="text-xs font-medium text-red-700 dark:text-red-300 uppercase flex items-center gap-1">
+                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                                </svg>
+                                Error Details
+                              </span>
+                            </div>
+                            <div className="p-2 bg-red-50/50 dark:bg-red-900/10 max-h-40 overflow-auto">
+                              <pre className="text-xs font-mono text-red-600 dark:text-red-400 whitespace-pre-wrap break-words">
+                                {entry.errorMessage || 'Tool execution failed (no error message available)'}
+                              </pre>
+                            </div>
+                          </div>
+                        )}
+
                         {/* Status indicator */}
                         {entry.status && (
                           <div className={cn(

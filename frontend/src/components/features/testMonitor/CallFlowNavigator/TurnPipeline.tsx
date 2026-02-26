@@ -159,6 +159,7 @@ interface TurnPipelineProps {
   showFullIO?: boolean;
   searchMatchingNodeIds?: Set<string>;
   focusedSearchNodeId?: string | null;
+  l1Label?: string;
 }
 
 // ============================================================================
@@ -173,6 +174,7 @@ export function TurnPipeline({
   showFullIO = true,
   searchMatchingNodeIds = new Set(),
   focusedSearchNodeId = null,
+  l1Label,
 }: TurnPipelineProps) {
   const hasFlowise = turn.layerNodes.flowise.length > 0;
   const hasTools = turn.layerNodes.tools.length > 0;
@@ -378,12 +380,13 @@ export function TurnPipeline({
           />
         )}
 
-        {/* LAYER 1: CLOUD9 */}
+        {/* LAYER 1: API (Cloud9/NexHealth) */}
         {hasCloud9 && (
           <LayerSection
             layer="layer1_cloud9"
             isActive={turn.layerNodes.cloud9.some(n => activeNodeIds.has(n.id))}
             hasError={turn.layerNodes.cloud9.some(n => n.status === 'error')}
+            l1Label={l1Label}
           >
             {turn.layerNodes.cloud9.map(node => (
               <PipelineNode

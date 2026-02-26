@@ -118,6 +118,8 @@ export interface LangfuseConfigProfile {
   secretKey?: string;
   hasSecretKey: boolean;
   isDefault: boolean;
+  /** Langfuse project ID for constructing trace URLs */
+  projectId?: string | null;
   createdAt: string;
   updatedAt: string;
   /** Whether this is a sandbox Langfuse config (from ab_sandboxes table) */

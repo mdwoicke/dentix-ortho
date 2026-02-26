@@ -54,7 +54,7 @@ export interface FlowNode {
     input?: unknown;
     output?: unknown;
     model?: string;
-    tokens?: { input: number | null; output: number | null; total: number | null };
+    tokens?: { input: number | null; output: number | null; total: number | null; cacheRead: number | null };
     cost?: number | null;
     errorMessage?: string;
     statusMessage?: string;
@@ -131,6 +131,7 @@ export interface FlowData {
     input: number;
     output: number;
     total: number;
+    cacheRead: number;
   };
   // Debug info
   _debug?: {
@@ -195,6 +196,7 @@ export interface CallFlowNavigatorProps {
   traceDurationMs?: number;
   bottleneckThresholdMs?: number;
   langfuseHost?: string;
+  langfuseProjectId?: string;
   traceId?: string;
 }
 
@@ -230,6 +232,7 @@ export interface MetricsBarProps {
     input: number;
     output: number;
     total: number;
+    cacheRead: number;
   };
   onJumpToError?: () => void;
   onJumpToBottleneck?: () => void;
@@ -269,6 +272,7 @@ export interface NodeDetailPanelProps {
   node: FlowNode | null;
   onClose: () => void;
   langfuseHost?: string;
+  langfuseProjectId?: string;
   traceId?: string;
 }
 
@@ -552,3 +556,16 @@ export const LAYER_CONFIG: Record<FlowLayer, {
     order: 1,
   },
 };
+
+/**
+ * Get the display label for the L1 (API) layer based on tenant context.
+ * Chord uses NexHealth; Ortho (default) uses Cloud9.
+ */
+export function getL1Labels(l1Label?: string): { label: string; shortLabel: string; description: string } {
+  const name = l1Label || 'Cloud9';
+  return {
+    label: `Layer 1: ${name}`,
+    shortLabel: `L1 ${name}`,
+    description: `Direct ${name} API calls`,
+  };
+}

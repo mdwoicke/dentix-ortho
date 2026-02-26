@@ -277,6 +277,20 @@ export function DetailedReportPage() {
     // Clone the report content and convert Mermaid SVGs to static images
     const clone = reportRef.current.cloneNode(true) as HTMLElement;
 
+    // Force all SVG text elements to dark color (overrides mermaid inline styles)
+    clone.querySelectorAll('svg text').forEach((el) => {
+      const htmlEl = el as SVGTextElement;
+      // Skip white text on dark actor boxes (Caller, LLM, Tools)
+      const parent = htmlEl.closest('.actor');
+      if (parent) return;
+      htmlEl.style.fill = '#111';
+      htmlEl.style.fontWeight = '600';
+      htmlEl.setAttribute('fill', '#111');
+    });
+    clone.querySelectorAll('svg line, svg .messageLine0, svg .messageLine1').forEach((el) => {
+      (el as SVGElement).style.stroke = '#333';
+    });
+
     // Collect all stylesheets from the current page for the print window
     const styles = Array.from(document.styleSheets)
       .map((ss) => {
@@ -316,6 +330,36 @@ export function DetailedReportPage() {
     table { border-collapse: collapse; width: 100%; }
     td, th { border: 1px solid #d1d5db; padding: 6px 10px; text-align: left; }
     svg { max-width: 100%; height: auto; }
+    /* Mermaid diagram — force all text dark for print legibility */
+    svg text {
+      fill: #111 !important;
+      color: #111 !important;
+      font-weight: 600 !important;
+      opacity: 1 !important;
+    }
+    svg text[fill] { fill: #111 !important; }
+    svg .messageText, svg .sequenceNumber,
+    svg .labelText, svg .loopText, svg .noteText {
+      fill: #111 !important;
+      font-weight: 600 !important;
+    }
+    svg line, svg .messageLine0, svg .messageLine1 {
+      stroke: #333 !important;
+      stroke-width: 1.5px !important;
+    }
+    svg .actor-line { stroke: #555 !important; }
+    svg .note rect, svg .activation0 { stroke: #333 !important; }
+    svg path, svg .edgePath path, svg .flowchart-link {
+      stroke: #444 !important;
+    }
+    svg .node rect, svg .node circle, svg .node polygon {
+      stroke: #333 !important;
+      stroke-width: 1.5px !important;
+    }
+    svg .nodeLabel, svg .edgeLabel, svg .label {
+      fill: #111 !important;
+      font-weight: 600 !important;
+    }
     details { break-inside: avoid; }
     details[open] summary { border-bottom: 1px solid #e5e7eb; margin-bottom: 0.5rem; }
     .dark, [class*="dark:"] { color: black !important; background: white !important; }
@@ -493,6 +537,28 @@ export function DetailedReportPage() {
           .detailed-report-markdown th { color: #555 !important; background: #f3f4f6 !important; }
           .detailed-report-markdown code { background: #f3f4f6 !important; color: #1a1a1a !important; }
           .detailed-report-markdown blockquote { border-color: #d97706 !important; background: #fffbeb !important; }
+          /* Mermaid SVG text — darker & bolder for print */
+          .detailed-report-markdown svg text,
+          .detailed-report-markdown svg .nodeLabel,
+          .detailed-report-markdown svg .edgeLabel,
+          .detailed-report-markdown svg .label {
+            fill: #111 !important;
+            color: #111 !important;
+            font-weight: 600 !important;
+          }
+          .detailed-report-markdown svg .node rect,
+          .detailed-report-markdown svg .node circle,
+          .detailed-report-markdown svg .node polygon,
+          .detailed-report-markdown svg .node .label-container {
+            stroke: #333 !important;
+            stroke-width: 1.5px !important;
+          }
+          .detailed-report-markdown svg .edgePath path,
+          .detailed-report-markdown svg .flowchart-link {
+            stroke: #444 !important;
+            stroke-width: 1.5px !important;
+          }
+          .detailed-report-markdown svg marker path { fill: #444 !important; }
           /* Page breaks before major sections */
           .detailed-report-markdown h2 { page-break-before: auto; }
           /* Remove shadows and borders for cleaner print */

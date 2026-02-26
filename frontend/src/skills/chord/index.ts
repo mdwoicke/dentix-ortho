@@ -20,6 +20,7 @@ import { errorSessionsSkill } from './errorSessions';
 import { traceInsightsSkill } from './traceInsights';
 import { promptVersionsSkill } from './promptVersions';
 import { bookingInvestigationSkill } from './bookingInvestigation';
+import { callLookupSkill } from './callLookup';
 import { createAvailableSearchesSkill } from '../shared/availableSearches';
 import type { SkillEntry } from '../dominos/types';
 
@@ -35,6 +36,7 @@ export function setCurrentApiSource(source: string): void {
  * Chord skills — order matters, first match wins.
  */
 const coreSkills: SkillEntry[] = [
+  callLookupSkill,       // "lookup {id}" / "find call {id}" / "search langfuse"
   sessionLookupSkill,    // "show session {id}" — before recentSessions
   callStatsSkill,        // "how many calls today" / "call stats"
   traceInsightsSkill,    // "show insights" / "call analytics"

@@ -33,7 +33,7 @@ export function ProdTestTrackerPage() {
   const [total, setTotal] = useState(0);
   const [stats, setStats] = useState<ProdTestRecordStats | null>(null);
   const [langfuseConfigs, setLangfuseConfigs] = useState<LangfuseConfigResponse[]>([]);
-  const [langfuseProjectId, setLangfuseProjectId] = useState<string | undefined>(undefined);
+  const [globalLangfuseProjectId, setGlobalLangfuseProjectId] = useState<string | undefined>(undefined);
 
   // UI state
   const [loading, setLoading] = useState(true);
@@ -146,12 +146,12 @@ export function ProdTestTrackerPage() {
     loadConfigs();
   }, [loadData, loadConfigs]);
 
-  // Fetch Langfuse project ID from app settings (for URL linking)
+  // Fetch global Langfuse project ID from app settings (fallback for URL linking)
   useEffect(() => {
     getAppSettings()
       .then(settings => {
         if (settings.langfuseProjectId?.value) {
-          setLangfuseProjectId(settings.langfuseProjectId.value);
+          setGlobalLangfuseProjectId(settings.langfuseProjectId.value);
         }
       })
       .catch(err => console.warn('Failed to fetch app settings:', err));
@@ -159,17 +159,16 @@ export function ProdTestTrackerPage() {
 
   // Helper to get Langfuse session URL
   const getLangfuseSessionUrl = useCallback((sessionId: string, configId: number | null | undefined): string | null => {
-    if (!sessionId || !langfuseProjectId) return null;
-    // Find the matching config to get the host
+    if (!sessionId) return null;
+    // Find the matching config to get the host and per-config projectId
     const config = langfuseConfigs.find(c => c.id === configId);
-    if (!config?.host) {
-      // Try to find default config
-      const defaultConfig = langfuseConfigs.find(c => c.isDefault);
-      if (!defaultConfig?.host) return null;
-      return `${defaultConfig.host}/project/${langfuseProjectId}/sessions/${sessionId}`;
-    }
-    return `${config.host}/project/${langfuseProjectId}/sessions/${sessionId}`;
-  }, [langfuseConfigs, langfuseProjectId]);
+    const defaultConfig = langfuseConfigs.find(c => c.isDefault);
+    const resolvedConfig = config?.host ? config : defaultConfig;
+    if (!resolvedConfig?.host) return null;
+    const projectId = resolvedConfig.projectId || globalLangfuseProjectId;
+    if (!projectId) return null;
+    return `${resolvedConfig.host}/project/${projectId}/sessions/${sessionId}`;
+  }, [langfuseConfigs, globalLangfuseProjectId]);
 
   // Handle import (from modal)
   const handleImport = async () => {

@@ -13,6 +13,9 @@ const router = Router();
 // GET /api/trace-analysis/monitoring-results - Filtered monitoring results
 router.get('/monitoring-results', traceAnalysisController.getMonitoringResults);
 
+// GET /api/trace-analysis/call-lookup/:id - Lookup call by any ID
+router.get('/call-lookup/:id', traceAnalysisController.callLookup);
+
 // GET /api/trace-analysis/:sessionId - Full session analysis
 router.get('/:sessionId', traceAnalysisController.analyzeSession);
 

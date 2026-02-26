@@ -29,6 +29,7 @@ export interface ReplayRequest {
   action: string;
   input: Record<string, unknown>;
   originalObservationId?: string;
+  tenantId?: number; // 1 = Ortho (Cloud9), 5 = Chord (NexHealth)
 }
 
 export interface MockHarness {
@@ -78,6 +79,37 @@ const MAX_FUTURE_DAYS = 90;
 const DEFAULT_UUI = '765381306-000000000001030525-SR-000-000000000000DAL130-026DE427|333725|421458314VO|2d411063-3769-4618-86d1-925d3578c112|FSV';
 
 // ============================================================================
+// CHORD (NEXHEALTH) TENANT CONFIG - From tenants/chord/v1/
+// ============================================================================
+
+// Chord UUI uses 77523 (NexHealth locationId) instead of 333725 (Ortho locationId)
+// Node-RED parses the UUI to route to the correct NexHealth practice
+const CHORD_DEFAULT_UUI = '765381306-000000000001030525-SR-000-000000000000DAL130-026DE427|77523|421458314VO|2d411063-3769-4618-86d1-925d3578c112|FSV';
+
+const CHORD_DEFAULT_LOCATION_ID = '77523';       // NexHealth locationIdProd
+const CHORD_DEFAULT_PROVIDER_ID = '223076809';   // NexHealth providerIdProd
+const CHORD_PATIENT_TOOL_VERSION = 'v1-nexhealth';
+const CHORD_SCHEDULING_TOOL_VERSION = 'v1-nexhealth';
+const CHORD_DATE_EXPANSION_TIERS = [30, 60, 90];
+
+function isValidId(value: unknown): boolean {
+  if (!value || typeof value !== 'string') return false;
+  return /^\d+$/.test((value as string).trim());
+}
+
+// Known Chord tool name variants (from toolNameResolver.ts)
+const CHORD_PATIENT_TOOL_NAMES = ['chord_patient_v07_stage'];
+const CHORD_SCHEDULING_TOOL_NAMES = ['chord_scheduling_v08', 'chord_scheduling_v07_dev'];
+
+function isChordTool(toolName: string): boolean {
+  return CHORD_PATIENT_TOOL_NAMES.includes(toolName) || CHORD_SCHEDULING_TOOL_NAMES.includes(toolName);
+}
+
+function isChordPatientTool(toolName: string): boolean {
+  return CHORD_PATIENT_TOOL_NAMES.includes(toolName);
+}
+
+// ============================================================================
 // HELPERS - Ported from tool scripts
 // ============================================================================
 
@@ -103,7 +135,8 @@ function cleanParams(params: Record<string, unknown>): Record<string, unknown> {
       value !== 'None' &&
       value !== 'none' &&
       value !== 'N/A' &&
-      value !== 'n/a'
+      value !== 'n/a' &&
+      value !== '***'  // PII-masked values from Langfuse
     ) {
       cleaned[key] = value;
     }
@@ -243,31 +276,61 @@ function correctDateRange(
  */
 function formatSlotsResponse(data: Record<string, unknown>): Record<string, unknown> {
   if (data && data.slots && Array.isArray(data.slots)) {
-    data.slots = data.slots.map((slot: Record<string, unknown>) => ({
-      displayTime: slot.startTime || slot.StartTime,
-      startTime: slot.startTime || slot.StartTime,
-      scheduleViewGUID: slot.scheduleViewGUID,
-      scheduleColumnGUID: slot.scheduleColumnGUID,
-      appointmentTypeGUID: slot.appointmentTypeGUID,
-      minutes: slot.minutes,
-    }));
+    data.slots = data.slots.map((slot: Record<string, unknown>) => {
+      // NexHealth returns {time, end_time, operatory_id, date, day_of_week}
+      // Ortho/Cloud9 returns {startTime, scheduleViewGUID, scheduleColumnGUID, appointmentTypeGUID, minutes}
+      const isNexHealth = slot.time !== undefined || slot.operatory_id !== undefined;
+      if (isNexHealth) {
+        return {
+          displayTime: slot.time,
+          startTime: slot.time,
+          endTime: slot.end_time,
+          operatoryId: slot.operatory_id,
+          date: slot.date,
+          dayOfWeek: slot.day_of_week,
+        };
+      }
+      return {
+        displayTime: slot.startTime || slot.StartTime,
+        startTime: slot.startTime || slot.StartTime,
+        scheduleViewGUID: slot.scheduleViewGUID,
+        scheduleColumnGUID: slot.scheduleColumnGUID,
+        appointmentTypeGUID: slot.appointmentTypeGUID,
+        minutes: slot.minutes,
+      };
+    });
   }
   if (data && data.groups && Array.isArray(data.groups)) {
-    data.groups = data.groups.map((group: Record<string, unknown>) => ({
-      groupTime: group.slots && Array.isArray(group.slots) && group.slots[0]
-        ? ((group.slots[0] as Record<string, unknown>).startTime || (group.slots[0] as Record<string, unknown>).StartTime)
-        : null,
-      slots: group.slots && Array.isArray(group.slots)
-        ? group.slots.map((slot: Record<string, unknown>) => ({
+    data.groups = data.groups.map((group: Record<string, unknown>) => {
+      const slots = group.slots && Array.isArray(group.slots) ? group.slots : [];
+      const firstSlot = slots[0] as Record<string, unknown> | undefined;
+      return {
+        groupTime: firstSlot
+          ? (firstSlot.time || firstSlot.startTime || firstSlot.StartTime)
+          : null,
+        slots: slots.map((slot: Record<string, unknown>) => {
+          const isNexHealth = slot.time !== undefined || slot.operatory_id !== undefined;
+          if (isNexHealth) {
+            return {
+              displayTime: slot.time,
+              startTime: slot.time,
+              endTime: slot.end_time,
+              operatoryId: slot.operatory_id,
+              date: slot.date,
+              dayOfWeek: slot.day_of_week,
+            };
+          }
+          return {
             displayTime: slot.startTime || slot.StartTime,
             startTime: slot.startTime || slot.StartTime,
             scheduleViewGUID: slot.scheduleViewGUID,
             scheduleColumnGUID: slot.scheduleColumnGUID,
             appointmentTypeGUID: slot.appointmentTypeGUID,
             minutes: slot.minutes,
-          }))
-        : [],
-    }));
+          };
+        }),
+      };
+    });
   }
   delete data.voiceSlots;
   return data;
@@ -492,6 +555,227 @@ const SCHEDULING_ACTIONS: Record<string, SchedulingActionConfig> = {
 };
 
 // ============================================================================
+// CHORD (NEXHEALTH) PATIENT TOOL ACTIONS - From tenants/chord/v1/patient_tool_func.js
+// ============================================================================
+
+interface ChordPatientActionConfig {
+  endpoint: string | ((params: Record<string, unknown>) => string);
+  method: string;
+  buildBody: (params: Record<string, unknown>, uui: string) => Record<string, unknown>;
+  validate: (params: Record<string, unknown>) => void;
+  successLog: string;
+}
+
+const CHORD_PATIENT_ACTIONS: Record<string, ChordPatientActionConfig> = {
+  lookup: {
+    // NexHealth has separate endpoints for phone vs email lookup
+    endpoint: (params: Record<string, unknown>) => {
+      if (params.phoneNumber) return `${BASE_URL}/getPatientByPhoneNum`;
+      if (params.emailAddress || params.filter) return `${BASE_URL}/getPatientByEmail`;
+      return `${BASE_URL}/getPatientByPhoneNum`;
+    },
+    method: 'POST',
+    buildBody: (params, uui) => {
+      const body: Record<string, unknown> = { uui };
+      if (params.phoneNumber) body.phoneNumber = params.phoneNumber;
+      if (params.emailAddress) body.emailAddress = params.emailAddress;
+      if (params.filter) {
+        if (typeof params.filter === 'string' && params.filter.includes('@')) {
+          body.emailAddress = params.filter;
+        } else {
+          body.phoneNumber = params.filter;
+        }
+      }
+      body.locationId = params.locationId || CHORD_DEFAULT_LOCATION_ID;
+      return body;
+    },
+    validate: (params) => {
+      if (!params.phoneNumber && !params.filter && !params.emailAddress) {
+        throw new Error("phoneNumber, emailAddress, or filter is required for 'lookup' action");
+      }
+    },
+    successLog: 'Patient lookup completed',
+  },
+  get: {
+    endpoint: `${BASE_URL}/getPatient`,
+    method: 'POST',
+    buildBody: (params, uui) => ({ uui, patientId: params.patientId }),
+    validate: (params) => {
+      if (!params.patientId) throw new Error("patientId is required for 'get' action");
+    },
+    successLog: 'Patient retrieved successfully',
+  },
+  create: {
+    endpoint: `${BASE_URL}/createPatient`,
+    method: 'POST',
+    buildBody: (params, uui) => {
+      const body: Record<string, unknown> = {
+        uui,
+        patientFirstName: params.patientFirstName,
+        patientLastName: params.patientLastName,
+        birthdayDateTime: params.birthdayDateTime,
+        gender: params.gender,
+        providerId: isValidId(params.providerId) ? params.providerId : CHORD_DEFAULT_PROVIDER_ID,
+        locationId: isValidId(params.locationId) ? params.locationId : CHORD_DEFAULT_LOCATION_ID,
+      };
+      if (params.phoneNumber) body.phoneNumber = params.phoneNumber;
+      if (params.emailAddress) body.emailAddress = params.emailAddress;
+      return body;
+    },
+    validate: (params) => {
+      if (!params.patientFirstName) throw new Error("patientFirstName is required for 'create' action");
+      if (!params.patientLastName) throw new Error("patientLastName is required for 'create' action");
+    },
+    successLog: 'Patient created successfully',
+  },
+  appointments: {
+    endpoint: `${BASE_URL}/getPatientAppts`,
+    method: 'POST',
+    buildBody: (params, uui) => ({ uui, patientId: params.patientId }),
+    validate: (params) => {
+      if (!params.patientId) throw new Error("patientId is required for 'appointments' action");
+    },
+    successLog: 'Patient appointments retrieved',
+  },
+  clinic_info: {
+    endpoint: `${BASE_URL}/getLocation`,
+    method: 'POST',
+    buildBody: (params, uui) => ({
+      uui,
+      locationId: isValidId(params.locationId) ? params.locationId : CHORD_DEFAULT_LOCATION_ID,
+    }),
+    validate: () => {},
+    successLog: 'Clinic info retrieved',
+  },
+  edit_insurance: {
+    endpoint: `${BASE_URL}/editPatientInsurance`,
+    method: 'POST',
+    buildBody: (params, uui) => ({
+      uui,
+      patientId: params.patientId,
+      insuranceProvider: params.insuranceProvider,
+      insuranceGroupId: params.insuranceGroupId,
+      insuranceMemberId: params.insuranceMemberId,
+    }),
+    validate: (params) => {
+      if (!params.patientId) throw new Error("patientId is required for 'edit_insurance' action");
+    },
+    successLog: 'Patient insurance updated successfully',
+  },
+  confirm_appointment: {
+    endpoint: `${BASE_URL}/confirmAppt`,
+    method: 'POST',
+    buildBody: (params, uui) => ({ uui, appointmentId: params.appointmentId }),
+    validate: (params) => {
+      if (!params.appointmentId) throw new Error("appointmentId is required for 'confirm_appointment' action");
+    },
+    successLog: 'Appointment confirmed successfully',
+  },
+};
+
+// ============================================================================
+// CHORD (NEXHEALTH) SCHEDULING TOOL ACTIONS - From tenants/chord/v1/scheduling_tool_func.js
+// ============================================================================
+
+const CHORD_SCHEDULING_ACTIONS: Record<string, SchedulingActionConfig> = {
+  slots: {
+    endpoint: `${BASE_URL}/getApptSlots`,
+    method: 'POST',
+    buildBody: (params, uui) => {
+      const body: Record<string, unknown> = { uui, startDate: params.startDate, endDate: params.endDate };
+      if (params.scheduleViewGUIDs) body.scheduleViewGUIDs = params.scheduleViewGUIDs;
+      // Node-RED DetermineProvider needs isNewPatient + patientDob to select correct NexHealth provider
+      if (params.isNewPatient !== undefined) body.isNewPatient = params.isNewPatient;
+      if (params.patientDob) body.patientDob = params.patientDob;
+      if (params.patientAge) body.patientAge = params.patientAge;
+      if (params.sessionId) body.sessionId = params.sessionId;
+      // Default isNewPatient to true if not specified (new patient = broader provider availability)
+      if (body.isNewPatient === undefined) body.isNewPatient = true;
+      return body;
+    },
+    validate: () => {},
+    successLog: (data) => `Found ${data.count || (Array.isArray(data.slots) ? data.slots.length : 0) || 0} available slots`,
+    usesDateExpansion: true,
+  },
+  grouped_slots: {
+    endpoint: `${BASE_URL}/getGroupedApptSlots`,
+    method: 'POST',
+    buildBody: (params, uui) => {
+      const body: Record<string, unknown> = {
+        uui, startDate: params.startDate, endDate: params.endDate,
+        numberOfPatients: params.numberOfPatients || 1,
+        timeWindowMinutes: params.timeWindowMinutes || 40,
+      };
+      if (params.scheduleViewGUIDs) body.scheduleViewGUIDs = params.scheduleViewGUIDs;
+      // Node-RED DetermineProvider needs isNewPatient + patientDob to select correct NexHealth provider
+      if (params.isNewPatient !== undefined) body.isNewPatient = params.isNewPatient;
+      if (params.patientDob) body.patientDob = params.patientDob;
+      if (params.patientAge) body.patientAge = params.patientAge;
+      if (params.sessionId) body.sessionId = params.sessionId;
+      if (body.isNewPatient === undefined) body.isNewPatient = true;
+      return body;
+    },
+    validate: () => {},
+    successLog: (data) => `Found ${data.totalGroups || (Array.isArray(data.groups) ? data.groups.length : 0) || 0} grouped slot options`,
+    usesDateExpansion: true,
+  },
+  book_child: {
+    endpoint: `${BASE_URL}/createAppt`,
+    method: 'POST',
+    buildBody: (params, uui) => {
+      const body: Record<string, unknown> = {
+        uui,
+        patientId: params.patientId || params.patientGUID,
+        bookingAuthToken: params.bookingAuthToken,
+      };
+      if (params.children && Array.isArray(params.children)) {
+        body.children = params.children;
+      } else {
+        // Support both Ortho field names (startTime, scheduleViewGUID) and
+        // Chord/NexHealth field names (appointmentDate+appointmentTime, operatoryId)
+        if (params.startTime) body.startTime = params.startTime;
+        if (params.appointmentDate) body.appointmentDate = params.appointmentDate;
+        if (params.appointmentTime) body.appointmentTime = params.appointmentTime;
+        if (params.scheduleViewGUID || params.scheduleViewId) {
+          body.scheduleViewGUID = params.scheduleViewGUID || params.scheduleViewId;
+        }
+        if (params.operatoryId) body.operatoryId = params.operatoryId;
+        if (params.scheduleColumnGUID || params.scheduleColumnId) {
+          body.scheduleColumnGUID = params.scheduleColumnGUID || params.scheduleColumnId;
+        }
+        if (params.appointmentTypeGUID || params.appointmentTypeId) {
+          body.appointmentTypeGUID = params.appointmentTypeGUID || params.appointmentTypeId;
+        }
+        if (params.minutes) body.minutes = params.minutes;
+        if (params.childName) body.childName = params.childName;
+        if (params.childFirstName) body.childFirstName = params.childFirstName;
+        if (params.childLastName) body.childLastName = params.childLastName;
+        if (params.childDateOfBirth) body.childDateOfBirth = params.childDateOfBirth;
+      }
+      return body;
+    },
+    validate: (params) => {
+      if (!params.patientId && !params.patientGUID) throw new Error('BOOKING FAILED - Missing patientId');
+      // Accept either startTime (Ortho) or appointmentDate+appointmentTime (Chord/NexHealth)
+      const hasTime = params.startTime || (params.appointmentDate && params.appointmentTime);
+      if (!hasTime && (!params.children || !Array.isArray(params.children))) {
+        throw new Error('BOOKING FAILED - Missing startTime or appointmentDate/appointmentTime');
+      }
+    },
+    successLog: () => 'Appointment booked successfully',
+  },
+  cancel: {
+    endpoint: `${BASE_URL}/cancelAppt`,
+    method: 'POST',
+    buildBody: (params, uui) => ({ uui, appointmentId: params.appointmentId || params.appointmentGUID }),
+    validate: (params) => {
+      if (!params.appointmentId && !params.appointmentGUID) throw new Error('appointmentId required');
+    },
+    successLog: () => 'Appointment cancelled successfully',
+  },
+};
+
+// ============================================================================
 // HTTP REQUEST EXECUTION
 // ============================================================================
 
@@ -578,17 +862,20 @@ async function searchSlotsWithExpansion(
   params: Record<string, unknown>,
   uui: string,
   logs: string[],
-  mockMap?: Record<string, any>
+  mockMap?: Record<string, any>,
+  useChordConfig?: boolean
 ): Promise<{ success: boolean; data: Record<string, unknown>; endpoint: string; statusCode: number }> {
-  const config = SCHEDULING_ACTIONS[action];
+  const actionsMap = useChordConfig ? CHORD_SCHEDULING_ACTIONS : SCHEDULING_ACTIONS;
+  const tiers = useChordConfig ? CHORD_DATE_EXPANSION_TIERS : DATE_EXPANSION_TIERS;
+  const config = actionsMap[action];
   let lastError: string | null = null;
   let searchExpanded = false;
-  let finalExpansionDays = DATE_EXPANSION_TIERS[0];
+  let finalExpansionDays = tiers[0];
   let lastEndpoint = config.endpoint;
   let lastStatusCode = 0;
 
-  for (let tierIndex = 0; tierIndex < DATE_EXPANSION_TIERS.length; tierIndex++) {
-    const expansionDays = DATE_EXPANSION_TIERS[tierIndex];
+  for (let tierIndex = 0; tierIndex < tiers.length; tierIndex++) {
+    const expansionDays = tiers[tierIndex];
     const corrected = correctDateRange(
       params.startDate as string | undefined,
       params.endDate as string | undefined,
@@ -617,12 +904,23 @@ async function searchSlotsWithExpansion(
         continue;
       }
 
-      const data = response.data as Record<string, unknown>;
+      // Chord NexHealth returns slots as a raw array, Ortho returns {slots: [...]}
+      // Normalize: if response is a raw array, wrap it
+      let data: Record<string, unknown>;
+      if (Array.isArray(response.data)) {
+        const arr = response.data as unknown[];
+        data = action === 'slots'
+          ? { slots: arr, count: arr.length }
+          : { groups: arr, totalGroups: arr.length };
+        logs.push(`[v50] Response is raw array (${arr.length} items), normalized to {${action === 'slots' ? 'slots' : 'groups'}: [...]}`);
+      } else {
+        data = response.data as Record<string, unknown>;
+      }
 
       // Check if we got slots/groups
       const hasResults =
-        (action === 'slots' && data.slots && Array.isArray(data.slots) && data.slots.length > 0) ||
-        (action === 'grouped_slots' && data.groups && Array.isArray(data.groups) && data.groups.length > 0);
+        (action === 'slots' && data.slots && Array.isArray(data.slots) && (data.slots as unknown[]).length > 0) ||
+        (action === 'grouped_slots' && data.groups && Array.isArray(data.groups) && (data.groups as unknown[]).length > 0);
 
       if (hasResults) {
         // Add metadata about the search
@@ -654,9 +952,9 @@ async function searchSlotsWithExpansion(
       groups: [],
       count: 0,
       totalGroups: 0,
-      _toolVersion: SCHEDULING_TOOL_VERSION,
+      _toolVersion: useChordConfig ? CHORD_SCHEDULING_TOOL_VERSION : SCHEDULING_TOOL_VERSION,
       _searchExpanded: searchExpanded,
-      _expansionTier: DATE_EXPANSION_TIERS.length - 1,
+      _expansionTier: tiers.length - 1,
       _dateRange: { days: finalExpansionDays },
       _debug_error: lastError || `No slots available after searching ${finalExpansionDays} days`,
       llm_guidance: {
@@ -868,6 +1166,148 @@ async function executeSchedulingTool(
 }
 
 // ============================================================================
+// CHORD PATIENT TOOL EXECUTOR
+// ============================================================================
+
+async function executeChordPatientTool(
+  action: string,
+  params: Record<string, unknown>,
+  logs: string[],
+  mockMap?: Record<string, any>
+): Promise<{ success: boolean; data: unknown; endpoint: string; statusCode: number }> {
+  const config = CHORD_PATIENT_ACTIONS[action];
+  if (!config) {
+    throw new Error(`Invalid Chord action '${action}'. Valid actions: ${Object.keys(CHORD_PATIENT_ACTIONS).join(', ')}`);
+  }
+
+  const uui = (params.uui as string) || CHORD_DEFAULT_UUI;
+  logs.push(`[chord_patient (NexHealth)] Action: ${action}`);
+  logs.push(`[chord_patient (NexHealth)] UUI: ${uui.substring(0, 20)}...`);
+
+  config.validate(params);
+  logs.push(`[chord_patient (NexHealth)] Validation passed`);
+
+  const body = config.buildBody(params, uui);
+  const endpoint = typeof config.endpoint === 'function' ? config.endpoint(params) : config.endpoint;
+  logs.push(`[chord_patient (NexHealth)] Endpoint: ${config.method} ${endpoint}`);
+
+  const response = await executeHttpRequest(endpoint, config.method, body, logs, mockMap);
+
+  if (!response.ok) {
+    const bodyError = checkForError(response.data);
+    throw new Error(bodyError || `HTTP ${response.status}: ${response.statusText}`);
+  }
+
+  const errorMessage = checkForError(response.data);
+  if (errorMessage) {
+    throw new Error(errorMessage);
+  }
+
+  const responseData = response.data as Record<string, unknown>;
+  responseData._toolVersion = CHORD_PATIENT_TOOL_VERSION;
+  logs.push(`[chord_patient (NexHealth)] ${config.successLog}`);
+
+  return { success: true, data: responseData, endpoint, statusCode: response.status };
+}
+
+// ============================================================================
+// CHORD SCHEDULING TOOL EXECUTOR
+// ============================================================================
+
+async function executeChordSchedulingTool(
+  action: string,
+  params: Record<string, unknown>,
+  logs: string[],
+  mockMap?: Record<string, any>
+): Promise<{ success: boolean; data: unknown; endpoint: string; statusCode: number }> {
+  // Normalize K8 parameter names to replay-expected names
+  // K8 uses searchStartDate instead of startDate, operatoryId instead of scheduleViewGUID, etc.
+  if (params.searchStartDate && !params.startDate) {
+    params.startDate = params.searchStartDate;
+    logs.push(`[chord_scheduling] Mapped searchStartDate -> startDate: ${params.startDate}`);
+  }
+  if (params.operatoryId && !params.scheduleViewGUID && !params.scheduleViewId) {
+    params.scheduleViewId = params.operatoryId;
+    logs.push(`[chord_scheduling] Mapped operatoryId -> scheduleViewId: ${params.operatoryId}`);
+  }
+  if (params.childFirstName && !params.childName) {
+    const fullName = params.childLastName
+      ? `${params.childFirstName} ${params.childLastName}`
+      : params.childFirstName;
+    params.childName = fullName;
+  }
+
+  const config = CHORD_SCHEDULING_ACTIONS[action];
+  if (!config) {
+    throw new Error(`Invalid Chord action '${action}'. Valid actions: ${Object.keys(CHORD_SCHEDULING_ACTIONS).join(', ')}`);
+  }
+
+  const uui = (params.uui as string) || CHORD_DEFAULT_UUI;
+  logs.push(`[chord_scheduling (NexHealth)] ${CHORD_SCHEDULING_TOOL_VERSION} - Action: ${action}`);
+
+  // Use progressive expansion for slots/grouped_slots (with Chord tiers)
+  if (config.usesDateExpansion) {
+    const result = await searchSlotsWithExpansion(action as 'slots' | 'grouped_slots', params, uui, logs, mockMap, true);
+
+    if (!result.success) {
+      return result;
+    }
+
+    let data = result.data;
+    logs.push(`[chord_scheduling (NexHealth)] ${config.successLog(data)}`);
+    data = formatSlotsResponse(data);
+
+    if (data.slots && Array.isArray(data.slots) && data.slots.length > MAX_SLOTS_RETURNED) {
+      data.slots = data.slots.slice(0, MAX_SLOTS_RETURNED);
+      data.count = MAX_SLOTS_RETURNED;
+      data._truncated = true;
+    }
+    if (data.groups && Array.isArray(data.groups) && data.groups.length > MAX_SLOTS_RETURNED) {
+      data.groups = data.groups.slice(0, MAX_SLOTS_RETURNED);
+      data.totalGroups = MAX_SLOTS_RETURNED;
+      data._truncated = true;
+    }
+
+    data._toolVersion = CHORD_SCHEDULING_TOOL_VERSION;
+    return { success: true, data, endpoint: result.endpoint, statusCode: result.statusCode };
+  }
+
+  // Non-slot actions (book_child, cancel)
+  try {
+    config.validate(params);
+    logs.push(`[chord_scheduling (NexHealth)] Validation passed`);
+  } catch (e) {
+    if (e instanceof Error && (e.message.includes('BOOKING FAILED') || e.message.includes('Missing'))) {
+      return {
+        success: false,
+        data: { success: false, _toolVersion: CHORD_SCHEDULING_TOOL_VERSION, _debug_error: e.message },
+        endpoint: config.endpoint,
+        statusCode: 400,
+      };
+    }
+    throw e;
+  }
+
+  const body = config.buildBody(params, uui);
+  const response = await executeHttpRequest(config.endpoint, config.method, body, logs, mockMap);
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+  }
+
+  const errorMessage = checkForError(response.data);
+  if (errorMessage) {
+    throw new Error(errorMessage);
+  }
+
+  const data = response.data as Record<string, unknown>;
+  data._toolVersion = CHORD_SCHEDULING_TOOL_VERSION;
+  logs.push(`[chord_scheduling (NexHealth)] ${config.successLog(data)}`);
+
+  return { success: true, data, endpoint: config.endpoint, statusCode: response.status };
+}
+
+// ============================================================================
 // PUBLIC API
 // ============================================================================
 
@@ -875,6 +1315,8 @@ export function getAvailableEndpoints(): Record<string, string[]> {
   return {
     chord_ortho_patient: Object.keys(PATIENT_ACTIONS),
     schedule_appointment_ortho: Object.keys(SCHEDULING_ACTIONS),
+    chord_patient_v07_stage: Object.keys(CHORD_PATIENT_ACTIONS),
+    chord_scheduling_v08: Object.keys(CHORD_SCHEDULING_ACTIONS),
   };
 }
 
@@ -885,6 +1327,15 @@ export function getEndpointForAction(toolName: string, action: string): string |
   if (toolName === 'schedule_appointment_ortho') {
     return SCHEDULING_ACTIONS[action]?.endpoint || null;
   }
+  // Chord tools
+  if (CHORD_PATIENT_TOOL_NAMES.includes(toolName)) {
+    const config = CHORD_PATIENT_ACTIONS[action];
+    if (!config) return null;
+    return typeof config.endpoint === 'function' ? `${BASE_URL}/getPatientByPhoneNum` : config.endpoint;
+  }
+  if (CHORD_SCHEDULING_TOOL_NAMES.includes(toolName)) {
+    return CHORD_SCHEDULING_ACTIONS[action]?.endpoint || null;
+  }
   return null;
 }
 
@@ -892,26 +1343,48 @@ export function getEndpointForAction(toolName: string, action: string): string |
  * Execute a replay request - emulates the full tool script logic
  */
 export async function executeReplay(request: ReplayRequest): Promise<ReplayResponse> {
-  const { toolName, action, input } = request;
+  const { toolName, action, input, tenantId } = request;
   const logs: string[] = [];
   const startTime = Date.now();
 
+  // Determine if this is a Chord tenant request (tenantId=5 or Chord tool name)
+  const isChord = tenantId === 5 || isChordTool(toolName);
+
   // Clean input params like the tools do
   const params = cleanParams(input);
-  logs.push(`[Replay] Tool: ${toolName}, Action: ${action}`);
+  logs.push(`[Replay] Tool: ${toolName}, Action: ${action}, Tenant: ${isChord ? 'Chord (NexHealth)' : 'Ortho (Cloud9)'}`);
   logs.push(`[Replay] Input params: ${JSON.stringify(params, null, 2)}`);
+
+  // Resolve tool version for response metadata
+  const resolveToolVersion = (): string => {
+    if (isChord) {
+      return isChordPatientTool(toolName) || toolName === 'chord_ortho_patient'
+        ? CHORD_PATIENT_TOOL_VERSION : CHORD_SCHEDULING_TOOL_VERSION;
+    }
+    return toolName === 'chord_ortho_patient' ? PATIENT_TOOL_VERSION : SCHEDULING_TOOL_VERSION;
+  };
 
   try {
     let result: { success: boolean; data: unknown; endpoint: string; statusCode: number };
 
-    if (toolName === 'chord_ortho_patient') {
+    if (isChord) {
+      // Chord (NexHealth) tenant - determine if patient or scheduling
+      const isPatient = isChordPatientTool(toolName) || toolName === 'chord_ortho_patient';
+      if (isPatient) {
+        logs.push(`[Replay] Routing to Chord NexHealth patient endpoints (no /ortho-prd/ prefix)`);
+        result = await executeChordPatientTool(action, params, logs);
+      } else {
+        logs.push(`[Replay] Routing to Chord NexHealth scheduling endpoints (no /ortho-prd/ prefix)`);
+        result = await executeChordSchedulingTool(action, params, logs);
+      }
+    } else if (toolName === 'chord_ortho_patient') {
       result = await executePatientTool(action, params, logs);
     } else if (toolName === 'schedule_appointment_ortho') {
       result = await executeSchedulingTool(action, params, logs);
     } else {
       return {
         success: false,
-        error: `Unknown tool: ${toolName}. Available tools: chord_ortho_patient, schedule_appointment_ortho`,
+        error: `Unknown tool: ${toolName}. Available tools: chord_ortho_patient, schedule_appointment_ortho, chord_patient_v07_stage, chord_scheduling_v08`,
       };
     }
 
@@ -925,7 +1398,7 @@ export async function executeReplay(request: ReplayRequest): Promise<ReplayRespo
         endpoint: result.endpoint,
         statusCode: result.statusCode,
         timestamp: new Date().toISOString(),
-        toolVersion: toolName === 'chord_ortho_patient' ? PATIENT_TOOL_VERSION : SCHEDULING_TOOL_VERSION,
+        toolVersion: resolveToolVersion(),
         preCallLogs: logs,
       },
       error: result.success ? undefined : 'Tool execution returned error (see response for details)',
@@ -947,7 +1420,7 @@ export async function executeReplay(request: ReplayRequest): Promise<ReplayRespo
         endpoint: getEndpointForAction(toolName, action) || 'unknown',
         statusCode: 0,
         timestamp: new Date().toISOString(),
-        toolVersion: toolName === 'chord_ortho_patient' ? PATIENT_TOOL_VERSION : SCHEDULING_TOOL_VERSION,
+        toolVersion: resolveToolVersion(),
         preCallLogs: logs,
       },
       error: `Tool execution failed: ${errorMessage}`,
@@ -1048,18 +1521,26 @@ export async function executeMockReplay(
   try {
     let result: { success: boolean; data: unknown; endpoint: string; statusCode: number };
 
-    if (toolName === 'chord_ortho_patient') {
+    const isChord = request.tenantId === 5 || isChordTool(toolName);
+    if (isChord && (isChordPatientTool(toolName) || toolName === 'chord_ortho_patient')) {
+      result = await executeChordPatientTool(action, params, logs, mockMap);
+    } else if (isChord) {
+      result = await executeChordSchedulingTool(action, params, logs, mockMap);
+    } else if (toolName === 'chord_ortho_patient') {
       result = await executePatientTool(action, params, logs, mockMap);
     } else if (toolName === 'schedule_appointment_ortho') {
       result = await executeSchedulingTool(action, params, logs, mockMap);
     } else {
       return {
         success: false,
-        error: `Unknown tool: ${toolName}. Available tools: chord_ortho_patient, schedule_appointment_ortho`,
+        error: `Unknown tool: ${toolName}. Available: chord_ortho_patient, schedule_appointment_ortho, chord_patient_v07_stage, chord_scheduling_v08`,
       };
     }
 
     const durationMs = Date.now() - startTime;
+    const resolvedVersion = isChord
+      ? (isChordPatientTool(toolName) || toolName === 'chord_ortho_patient' ? CHORD_PATIENT_TOOL_VERSION : CHORD_SCHEDULING_TOOL_VERSION)
+      : (toolName === 'chord_ortho_patient' ? PATIENT_TOOL_VERSION : SCHEDULING_TOOL_VERSION);
 
     return {
       success: result.success,
@@ -1069,7 +1550,7 @@ export async function executeMockReplay(
         endpoint: result.endpoint,
         statusCode: result.statusCode,
         timestamp: new Date().toISOString(),
-        toolVersion: toolName === 'chord_ortho_patient' ? PATIENT_TOOL_VERSION : SCHEDULING_TOOL_VERSION,
+        toolVersion: resolvedVersion,
         preCallLogs: logs,
       },
       error: result.success ? undefined : 'Mock replay returned error (see response for details)',
@@ -1078,6 +1559,10 @@ export async function executeMockReplay(
     const durationMs = Date.now() - startTime;
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     logs.push(`[MOCK Replay] ERROR: ${errorMessage}`);
+    const isChord2 = request.tenantId === 5 || isChordTool(toolName);
+    const resolvedVersion2 = isChord2
+      ? (isChordPatientTool(toolName) || toolName === 'chord_ortho_patient' ? CHORD_PATIENT_TOOL_VERSION : CHORD_SCHEDULING_TOOL_VERSION)
+      : (toolName === 'chord_ortho_patient' ? PATIENT_TOOL_VERSION : SCHEDULING_TOOL_VERSION);
 
     return {
       success: false,
@@ -1091,7 +1576,7 @@ export async function executeMockReplay(
         endpoint: getEndpointForAction(toolName, action) || 'unknown',
         statusCode: 0,
         timestamp: new Date().toISOString(),
-        toolVersion: toolName === 'chord_ortho_patient' ? PATIENT_TOOL_VERSION : SCHEDULING_TOOL_VERSION,
+        toolVersion: resolvedVersion2,
         preCallLogs: logs,
       },
       error: `Mock replay failed: ${errorMessage}`,

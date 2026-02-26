@@ -8,6 +8,10 @@
       "Bash(taskkill:*)"
     ]
   },
-  "enabledMcpjsonServers": [],
-  "enableAllProjectMcpServers": false
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "context7",
+    "langfuse-traces",
+    "supermemory-mcp"
+  ]
 }

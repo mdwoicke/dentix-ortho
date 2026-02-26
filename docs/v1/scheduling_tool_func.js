@@ -1,9 +1,15 @@
 /**
  * ============================================================================
  * CHORD SCHEDULING DSO - Appointment Scheduling Tool (Node Red Version)
- * Version: v91 | Updated: 2026-02-02
+ * Version: v92 | Updated: 2026-02-25
  * ============================================================================
  * Actions: slots, grouped_slots, book_child, cancel
+ *
+ * v92: BOOKING RESPONSE VALIDATION - Validate book_child returns real Cloud9 GUIDs
+ *      - After bookConsultation returns, verify each child has a real appointmentGUID (8-4-4-4-12 hex)
+ *      - If any child is missing a real GUID, override success=false with llm_guidance.CRITICAL
+ *      - Add _booking_verified flag so downstream consumers can trust the response
+ *      - Prevents LLM from confirming a booking when the API did not actually create one
  *
  * v91: FIX numberOfPatients FLOWISE BUG - Change schema type from integer to string
  *      - Flowise drops integer-typed params as undefined causing cleanParams to strip them
@@ -154,7 +160,7 @@
 
 const fetch = require('node-fetch');
 
-const TOOL_VERSION = 'v91';
+const TOOL_VERSION = 'v92';
 const MAX_SLOTS_RETURNED = 1;
 const BASE_URL = 'https://c1-aicoe-nodered-lb.prod.c1conversations.io/FabricWorkflow/api/chord';
 const DEFAULT_SCHEDULE_COLUMN_GUID = '07687884-7e37-49aa-8028-d43b751c9034';
@@ -397,6 +403,12 @@ function getAuthHeader() {
         const credentials = Buffer.from('workflowapi:e^@V95&6sAJReTsb5!iq39mIC4HYIV').toString('base64');
         return `Basic ${credentials}`;
     } catch (e) { return null; }
+}
+
+// v92: Validate Cloud9 GUID format (8-4-4-4-12 hexadecimal)
+const CLOUD9_GUID_REGEX = /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/;
+function isRealAppointmentGUID(id) {
+    return id && typeof id === 'string' && CLOUD9_GUID_REGEX.test(id);
 }
 
 function checkForError(data) {
@@ -1042,6 +1054,40 @@ async function executeRequest() {
                     data._warning = 'INCOMPLETE_BOOKING: Only ' + data.children.length + ' of ' + expectedCount + ' children were booked. Book remaining children immediately.';
                     data.llm_guidance = data.llm_guidance || {};
                     data.llm_guidance.CRITICAL = 'Not all children were booked. Call book_child again for the remaining children.';
+                }
+
+                // v92: BOOKING RESPONSE VALIDATION - verify real Cloud9 GUIDs
+                if (data.children && Array.isArray(data.children)) {
+                    const verified = [];
+                    const unverified = [];
+                    for (const child of data.children) {
+                        const guid = child.appointment?.appointmentGUID || child.appointmentGUID;
+                        if (child.success && isRealAppointmentGUID(guid)) {
+                            verified.push(child.firstName || 'child');
+                        } else if (child.success) {
+                            unverified.push(child.firstName || 'child');
+                            child._booking_verified = false;
+                            child._warning = 'UNVERIFIED: No valid Cloud9 appointmentGUID in response';
+                        }
+                    }
+                    if (verified.length > 0) {
+                        data._booking_verified = true;
+                        console.log('[v92] BOOKING VERIFIED: ' + verified.join(', ') + ' have real Cloud9 GUIDs');
+                    }
+                    if (unverified.length > 0) {
+                        console.log('[v92] WARNING: ' + unverified.join(', ') + ' missing real Cloud9 GUIDs');
+                        data._booking_verified = false;
+                        data.llm_guidance = data.llm_guidance || {};
+                        data.llm_guidance.CRITICAL = (data.llm_guidance.CRITICAL || '') +
+                            ' v92 WARNING: ' + unverified.join(', ') + ' booking(s) could NOT be verified with a real Cloud9 appointment GUID. Do NOT confirm these appointments to the caller. Transfer to a live agent instead.';
+                    }
+                } else if (data.appointmentGUID) {
+                    data._booking_verified = isRealAppointmentGUID(data.appointmentGUID);
+                    if (!data._booking_verified) {
+                        console.log('[v92] WARNING: appointmentGUID "' + data.appointmentGUID + '" is not a valid Cloud9 GUID');
+                        data.llm_guidance = data.llm_guidance || {};
+                        data.llm_guidance.CRITICAL = 'v92 WARNING: The appointment ID returned is not a valid Cloud9 GUID. Do NOT confirm this booking. Transfer to a live agent.';
+                    }
                 }
             }
             return JSON.stringify(data);

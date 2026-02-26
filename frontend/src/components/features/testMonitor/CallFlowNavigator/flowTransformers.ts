@@ -212,10 +212,12 @@ function formatNodeLabel(obs: ProductionTraceObservation): string {
   // Shorten common long names
   const name = obs.name;
   if (name.includes('schedule_appointment_ortho')) return 'Schedule Appt';
+  if (name.includes('chord_scheduling_v0')) return 'Schedule Appt';
   if (name.includes('chord_dso_patient')) return 'Patient Tool';
   if (name.includes('chord_ortho_patient')) return 'Patient Tool';
-  if (name.includes('handle_escalation')) return 'Escalation';
-  if (name.includes('current_datetime')) return 'Get DateTime';
+  if (name.includes('chord_patient_v0')) return 'Patient Tool';
+  if (name.includes('handle_escalation') || name.includes('HandleEscalation')) return 'Escalation';
+  if (name.includes('current_datetime') || name === 'CurrentDateTime') return 'Get DateTime';
   if (name.includes('claude-')) return 'LLM Generation';
   if (name.includes('gpt-')) return 'LLM Generation';
 
@@ -401,6 +403,7 @@ export function transformToFlowData(
   let totalTokensInput = 0;
   let totalTokensOutput = 0;
   let totalTokens = 0;
+  let totalCacheRead = 0;
 
   // 1. Add transcript nodes (user inputs, assistant responses)
   transcript.forEach((turn, idx) => {
@@ -461,14 +464,35 @@ export function transformToFlowData(
                     hasOutputError;
 
     // Extract error message from output if available
+    // Try extraction whenever isError is true, not just hasOutputError
     let errorMessage: string | undefined;
-    if (hasOutputError && obs.output) {
+    if (isError && obs.output) {
       try {
-        const outputObj = typeof obs.output === 'string' ? JSON.parse(obs.output) : obs.output;
-        errorMessage = outputObj._debug_error || outputObj.error || outputObj.message || outputObj.errorMessage;
+        if (typeof obs.output === 'string') {
+          // Check if output is a raw error string (e.g., "Error: {...}")
+          if (obs.output.startsWith('Error:') || obs.output.startsWith('error:')) {
+            errorMessage = obs.output;
+          } else {
+            // Try to parse as JSON
+            const outputObj = JSON.parse(obs.output);
+            const extracted = outputObj._debug_error || outputObj.error || outputObj.message || outputObj.errorMessage;
+            errorMessage = typeof extracted === 'object' ? JSON.stringify(extracted) : extracted;
+          }
+        } else {
+          const outputObj = obs.output as Record<string, unknown>;
+          const extracted = outputObj._debug_error || outputObj.error || outputObj.message || outputObj.errorMessage;
+          errorMessage = typeof extracted === 'object' ? JSON.stringify(extracted) : extracted as string | undefined;
+        }
       } catch {
-        // Ignore parse errors
+        // If JSON parse fails and output is a string, use it directly for error nodes
+        if (typeof obs.output === 'string' && obs.output.length < 2000) {
+          errorMessage = obs.output;
+        }
       }
+    }
+    // Fallback to statusMessage if no errorMessage extracted
+    if (!errorMessage && isError && obs.statusMessage) {
+      errorMessage = obs.statusMessage;
     }
 
     if (isError) errorCount++;
@@ -490,6 +514,7 @@ export function transformToFlowData(
       if (obs.usage.input) totalTokensInput += obs.usage.input;
       if (obs.usage.output) totalTokensOutput += obs.usage.output;
       if (obs.usage.total) totalTokens += obs.usage.total;
+      if (obs.usage.cacheRead) totalCacheRead += obs.usage.cacheRead;
     }
 
     nodes.push({
@@ -512,6 +537,7 @@ export function transformToFlowData(
           input: obs.usage.input,
           output: obs.usage.output,
           total: obs.usage.total,
+          cacheRead: obs.usage.cacheRead,
         } : undefined,
         cost: obs.cost,
         statusMessage: obs.statusMessage || undefined,
@@ -545,14 +571,27 @@ export function transformToFlowData(
         if (callIsError) errorCount++;
         apiCallCount++;
 
-        // Extract error message from debug call response
+        // Extract error message from debug call
         let callErrorMessage: string | undefined;
-        if (hasResponseError && call.response) {
-          try {
-            const respObj = typeof call.response === 'string' ? JSON.parse(call.response) : call.response;
-            callErrorMessage = respObj._debug_error || respObj.error || respObj.message || respObj.errorMessage;
-          } catch {
-            // Ignore parse errors
+        if (callIsError) {
+          // Direct error field takes priority
+          if (call.error) {
+            callErrorMessage = call.error;
+          } else if (call.response) {
+            try {
+              const respObj = typeof call.response === 'string' ? JSON.parse(call.response as string) : call.response;
+              const extracted = respObj._debug_error || respObj.error || respObj.message || respObj.errorMessage;
+              callErrorMessage = typeof extracted === 'object' ? JSON.stringify(extracted) : extracted;
+            } catch {
+              // If response is a string, use it directly
+              if (typeof call.response === 'string' && (call.response as string).length < 2000) {
+                callErrorMessage = call.response as string;
+              }
+            }
+          }
+          // Fallback: note the HTTP status
+          if (!callErrorMessage && call.status && call.status >= 400) {
+            callErrorMessage = `HTTP ${call.status} error`;
           }
         }
 
@@ -648,6 +687,7 @@ export function transformToFlowData(
       input: totalTokensInput,
       output: totalTokensOutput,
       total: totalTokens || (totalTokensInput + totalTokensOutput),
+      cacheRead: totalCacheRead,
     },
     _debug: {
       rawObservationCount: observations.length,
