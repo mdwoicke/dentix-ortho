@@ -4,7 +4,7 @@
  * Accepts a session ID, fetches the markdown report from the API, and renders it styled.
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -98,7 +98,7 @@ function useDarkMode() {
   return isDark;
 }
 
-function MermaidBlock({ code }: { code: string }) {
+function MermaidBlock({ code, onToolCallClick }: { code: string; onToolCallClick?: (index: number) => void }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [svg, setSvg] = useState<string>('');
   const isDark = useDarkMode();
@@ -116,6 +116,28 @@ function MermaidBlock({ code }: { code: string }) {
     });
     return () => { cancelled = true; };
   }, [code, isDark]);
+
+  // Attach click handlers to tool call labels in the rendered SVG
+  useEffect(() => {
+    if (!svg || !containerRef.current || !onToolCallClick) return;
+    const texts = containerRef.current.querySelectorAll<SVGTextElement>('text.messageText');
+    texts.forEach((el) => {
+      const match = el.textContent?.match(/^\[(\d+)r?\]\s*(.*)/);
+      if (!match) return;
+      const idx = parseInt(match[1], 10);
+      el.textContent = match[2];
+      el.classList.add('tool-call-link');
+      el.style.cursor = 'pointer';
+      el.style.textDecoration = 'none';
+      el.setAttribute('role', 'link');
+      el.setAttribute('tabindex', '0');
+      const handler = () => onToolCallClick(idx);
+      el.addEventListener('click', handler);
+      el.addEventListener('keydown', (e: KeyboardEvent) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handler(); }
+      });
+    });
+  }, [svg, onToolCallClick]);
 
   if (svg) {
     return (
@@ -136,98 +158,100 @@ function MermaidBlock({ code }: { code: string }) {
 
 // ── Markdown Component Overrides ─────────────────────────────────────────────
 
-const markdownComponents = {
-  h1: ({ children }: any) => (
-    <h1 className="text-2xl font-bold mt-8 mb-4 first:mt-0 text-gray-900 dark:text-gray-100">
-      {children}
-    </h1>
-  ),
-  h2: ({ children }: any) => (
-    <h2 className="text-xl font-bold mt-6 mb-3 pb-2 border-b border-gray-200 dark:border-gray-600 text-gray-900 dark:text-gray-100">
-      {children}
-    </h2>
-  ),
-  h3: ({ children }: any) => (
-    <h3 className="text-lg font-semibold mt-4 mb-2 text-gray-800 dark:text-gray-200">
-      {children}
-    </h3>
-  ),
-  p: ({ children }: any) => (
-    <p className="mb-3 last:mb-0 text-gray-700 dark:text-gray-300 leading-relaxed">
-      {children}
-    </p>
-  ),
-  strong: ({ children }: any) => (
-    <strong className="font-semibold text-gray-900 dark:text-white">{children}</strong>
-  ),
-  ul: ({ children }: any) => (
-    <ul className="list-disc pl-5 mb-3 space-y-1">{children}</ul>
-  ),
-  ol: ({ children }: any) => (
-    <ol className="list-decimal pl-5 mb-3 space-y-1">{children}</ol>
-  ),
-  li: ({ children }: any) => (
-    <li className="text-sm text-gray-700 dark:text-gray-300">{children}</li>
-  ),
-  table: ({ children }: any) => (
-    <div className="overflow-x-auto my-4 rounded-lg border border-gray-200 dark:border-gray-600" style={{ maxWidth: 'calc(100vw - 11rem)' }}>
-      <table className="w-full text-sm border-collapse">{children}</table>
-    </div>
-  ),
-  thead: ({ children }: any) => (
-    <thead className="bg-gray-100 dark:bg-gray-700">{children}</thead>
-  ),
-  tbody: ({ children }: any) => (
-    <tbody className="divide-y divide-gray-200 dark:divide-gray-600">{children}</tbody>
-  ),
-  tr: ({ children }: any) => (
-    <tr className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors even:bg-gray-50/50 dark:even:bg-gray-800/30">
-      {children}
-    </tr>
-  ),
-  th: ({ children }: any) => (
-    <th className="px-4 py-2 text-left font-semibold text-gray-700 dark:text-gray-300 text-xs uppercase tracking-wider bg-gray-100 dark:bg-gray-700">
-      {children}
-    </th>
-  ),
-  td: ({ children }: any) => (
-    <td className="px-4 py-2 text-gray-800 dark:text-gray-200 break-words">
-      {children}
-    </td>
-  ),
-  code: ({ children, className }: any) => {
-    const isMermaid = className?.includes('language-mermaid');
-    if (isMermaid) {
-      const code = String(children).replace(/\n$/, '');
-      return <MermaidBlock code={code} />;
-    }
-    const isBlock = className?.includes('language-');
-    if (isBlock) {
+function getMarkdownComponents(onToolCallClick?: (index: number) => void) {
+  return {
+    h1: ({ children }: any) => (
+      <h1 className="text-2xl font-bold mt-8 mb-4 first:mt-0 text-gray-900 dark:text-gray-100">
+        {children}
+      </h1>
+    ),
+    h2: ({ children }: any) => (
+      <h2 className="text-xl font-bold mt-6 mb-3 pb-2 border-b border-gray-200 dark:border-gray-600 text-gray-900 dark:text-gray-100">
+        {children}
+      </h2>
+    ),
+    h3: ({ children }: any) => (
+      <h3 className="text-lg font-semibold mt-4 mb-2 text-gray-800 dark:text-gray-200">
+        {children}
+      </h3>
+    ),
+    p: ({ children }: any) => (
+      <p className="mb-3 last:mb-0 text-gray-700 dark:text-gray-300 leading-relaxed">
+        {children}
+      </p>
+    ),
+    strong: ({ children }: any) => (
+      <strong className="font-semibold text-gray-900 dark:text-white">{children}</strong>
+    ),
+    ul: ({ children }: any) => (
+      <ul className="list-disc pl-5 mb-3 space-y-1">{children}</ul>
+    ),
+    ol: ({ children }: any) => (
+      <ol className="list-decimal pl-5 mb-3 space-y-1">{children}</ol>
+    ),
+    li: ({ children }: any) => (
+      <li className="text-sm text-gray-700 dark:text-gray-300">{children}</li>
+    ),
+    table: ({ children }: any) => (
+      <div className="overflow-x-auto my-4 rounded-lg border border-gray-200 dark:border-gray-600" style={{ maxWidth: 'calc(100vw - 11rem)' }}>
+        <table className="w-full text-sm border-collapse">{children}</table>
+      </div>
+    ),
+    thead: ({ children }: any) => (
+      <thead className="bg-gray-100 dark:bg-gray-700">{children}</thead>
+    ),
+    tbody: ({ children }: any) => (
+      <tbody className="divide-y divide-gray-200 dark:divide-gray-600">{children}</tbody>
+    ),
+    tr: ({ children }: any) => (
+      <tr className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors even:bg-gray-50/50 dark:even:bg-gray-800/30">
+        {children}
+      </tr>
+    ),
+    th: ({ children }: any) => (
+      <th className="px-4 py-2 text-left font-semibold text-gray-700 dark:text-gray-300 text-xs uppercase tracking-wider bg-gray-100 dark:bg-gray-700">
+        {children}
+      </th>
+    ),
+    td: ({ children }: any) => (
+      <td className="px-4 py-2 text-gray-800 dark:text-gray-200 break-words">
+        {children}
+      </td>
+    ),
+    code: ({ children, className }: any) => {
+      const isMermaid = className?.includes('language-mermaid');
+      if (isMermaid) {
+        const code = String(children).replace(/\n$/, '');
+        return <MermaidBlock code={code} onToolCallClick={onToolCallClick} />;
+      }
+      const isBlock = className?.includes('language-');
+      if (isBlock) {
+        return (
+          <code className="block bg-gray-900 text-green-400 rounded-lg p-4 my-3 text-xs font-mono overflow-x-auto whitespace-pre max-w-full">
+            {children}
+          </code>
+        );
+      }
       return (
-        <code className="block bg-gray-900 text-green-400 rounded-lg p-4 my-3 text-xs font-mono overflow-x-auto whitespace-pre max-w-full">
+        <code className="bg-gray-200 dark:bg-gray-700 px-1.5 py-0.5 rounded text-xs font-mono text-gray-800 dark:text-gray-200 break-all">
           {children}
         </code>
       );
-    }
-    return (
-      <code className="bg-gray-200 dark:bg-gray-700 px-1.5 py-0.5 rounded text-xs font-mono text-gray-800 dark:text-gray-200 break-all">
+    },
+    pre: ({ children }: any) => <div className="my-2">{children}</div>,
+    blockquote: ({ children }: any) => (
+      <blockquote className="border-l-4 border-amber-500 dark:border-amber-400 pl-4 py-2 my-3 bg-amber-50 dark:bg-amber-900/20 rounded-r-lg">
         {children}
-      </code>
-    );
-  },
-  pre: ({ children }: any) => <div className="my-2">{children}</div>,
-  blockquote: ({ children }: any) => (
-    <blockquote className="border-l-4 border-amber-500 dark:border-amber-400 pl-4 py-2 my-3 bg-amber-50 dark:bg-amber-900/20 rounded-r-lg">
-      {children}
-    </blockquote>
-  ),
-  hr: () => <hr className="my-6 border-gray-300 dark:border-gray-600" />,
-  a: ({ href, children }: any) => (
-    <a href={href} className="text-primary-600 dark:text-primary-400 underline hover:no-underline" target="_blank" rel="noopener noreferrer">
-      {children}
-    </a>
-  ),
-};
+      </blockquote>
+    ),
+    hr: () => <hr className="my-6 border-gray-300 dark:border-gray-600" />,
+    a: ({ href, children }: any) => (
+      <a href={href} className="text-primary-600 dark:text-primary-400 underline hover:no-underline" target="_blank" rel="noopener noreferrer">
+        {children}
+      </a>
+    ),
+  };
+}
 
 // ── Main Page ────────────────────────────────────────────────────────────────
 
@@ -238,6 +262,20 @@ export function DetailedReportPage() {
   const [error, setError] = useState<string | null>(null);
   const [report, setReport] = useState<{ markdown: string; classification: string; sessionId: string } | null>(null);
   const reportRef = useRef<HTMLDivElement>(null);
+
+  const handleToolCallClick = useCallback((index: number) => {
+    const el = document.getElementById(`tool-call-${index}`);
+    if (!el) return;
+    // Expand the <details> element
+    el.setAttribute('open', '');
+    // Smooth scroll into view
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    // Add highlight animation, remove after 2s
+    el.classList.add('tool-call-highlight');
+    setTimeout(() => el.classList.remove('tool-call-highlight'), 2000);
+  }, []);
+
+  const mdComponents = useMemo(() => getMarkdownComponents(handleToolCallClick), [handleToolCallClick]);
 
   const fetchReport = useCallback(async (sessionId: string) => {
     if (!sessionId.trim()) return;
@@ -457,7 +495,7 @@ export function DetailedReportPage() {
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 rehypePlugins={[rehypeRaw]}
-                components={markdownComponents}
+                components={mdComponents}
               >
                 {report.markdown}
               </ReactMarkdown>
@@ -517,7 +555,40 @@ export function DetailedReportPage() {
         .detailed-report-markdown details > :not(summary) {
           padding: 0 0.75rem;
         }
+        /* Tool call click-to-jump: clickable labels in Mermaid SVG */
+        .tool-call-link {
+          cursor: pointer;
+          transition: fill 0.15s, text-decoration 0.15s;
+        }
+        .tool-call-link:hover {
+          fill: #2563eb;
+        }
+        .dark .tool-call-link:hover {
+          fill: #60a5fa;
+        }
+        .tool-call-link:focus-visible {
+          outline: 2px solid #2563eb;
+          outline-offset: 2px;
+          border-radius: 2px;
+        }
+
+        /* Tool call highlight animation on target <details> */
+        @keyframes tool-call-ring {
+          0% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.5); }
+          50% { box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.3); }
+          100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
+        }
+        .detailed-report-markdown details.tool-call-highlight {
+          animation: tool-call-ring 1s ease-out 2;
+          border-color: #3b82f6;
+        }
+        .dark .detailed-report-markdown details.tool-call-highlight {
+          border-color: #60a5fa;
+        }
+
         @media print {
+          .tool-call-link { cursor: default; }
+          .tool-call-link:hover { text-decoration: none; }
           /* Hide everything except the report */
           nav, .print\\:hidden, header,
           [class*="border-b"][class*="bg-white"],

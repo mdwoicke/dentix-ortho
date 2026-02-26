@@ -108,18 +108,29 @@ interface CallReportToolCall {
   errorAnalysis?: string;
 }
 
-function analyzeToolError(_name: string, action: string, _input: any, output: any, statusMessage: string | null): string {
+function analyzeToolError(_name: string, action: string, _input: any, output: any, statusMessage: string | null, rawOutput?: string | null): string {
   if (statusMessage?.includes('phoneNumber is required')) {
     return 'The patient lookup action requires a phone number, but none was provided. This typically happens early in the call before the caller shares their phone number.';
   }
   if (statusMessage?.includes('not found') || output?.error?.includes?.('not found')) {
     return `No matching record found for the ${action} request. The search criteria may not match any existing records.`;
   }
+  if (output?._debug_error) {
+    return `Tool returned an error: ${output._debug_error}`;
+  }
   if (output?.success === false && output?.error) {
-    return `Tool returned an error: ${output.error}`;
+    return `Tool returned an error: ${typeof output.error === 'string' ? output.error : JSON.stringify(output.error)}`;
+  }
+  if (output?.success === false && output?.message) {
+    return `Tool returned an error: ${output.message}`;
+  }
+  if (rawOutput) {
+    return `Tool returned: ${rawOutput.substring(0, 300)}`;
   }
   if (!output || Object.keys(output).length === 0) {
-    return 'The tool returned an empty response, which may indicate a timeout or connectivity issue with the upstream API.';
+    return statusMessage
+      ? `Tool error: ${statusMessage}`
+      : 'The tool returned an empty response, which may indicate a timeout or connectivity issue with the upstream API.';
   }
   return statusMessage || 'Tool call encountered an error. Review the input/output for details.';
 }
@@ -426,12 +437,20 @@ function buildCallReport(_traces: any[], observations: any[], transcript: any[],
 
   for (const obs of filtered) {
     const input = (() => { try { return typeof obs.input === 'string' ? JSON.parse(obs.input) : obs.input || {}; } catch { return {}; } })();
-    const output = (() => { try { return typeof obs.output === 'string' ? JSON.parse(obs.output) : obs.output || {}; } catch { return {}; } })();
+    let rawOutputStr: string | null = null;
+    const output = (() => {
+      if (obs.output == null) return {};
+      if (typeof obs.output === 'string') {
+        try { return JSON.parse(obs.output); }
+        catch { rawOutputStr = obs.output; return {}; }
+      }
+      return obs.output;
+    })();
     const action = input?.action || 'unknown';
 
     let status: 'success' | 'error' | 'partial' = 'success';
     if (output?.partialSuccess) status = 'partial';
-    else if (output?.success === false || obs.level === 'ERROR') status = 'error';
+    else if (output?.success === false || obs.level === 'ERROR' || output?._debug_error) status = 'error';
 
     const startTime = obs.started_at || obs.start_time || '';
     const endTime = obs.ended_at || obs.end_time || '';
@@ -472,15 +491,45 @@ function buildCallReport(_traces: any[], observations: any[], transcript: any[],
         outputSummary = apptRef ? `booked: ${String(apptRef).substring(0,8)}...` : 'no GUID returned';
       }
     } else {
-      outputSummary = JSON.stringify(output).substring(0, 100);
+      // Use raw output string if parsed output is empty
+      if (rawOutputStr) {
+        outputSummary = rawOutputStr.substring(0, 200);
+      } else {
+        const outStr = JSON.stringify(output);
+        outputSummary = outStr === '{}' ? (obs.status_message || 'no output') : outStr.substring(0, 100);
+      }
+    }
+
+    // For error cases, ensure outputSummary shows the actual error, not "{}"
+    if (status === 'error' && (outputSummary === '{}' || !outputSummary)) {
+      const errMsg = output?._debug_error || output?.error || output?.message || output?.errorMessage;
+      if (errMsg) {
+        outputSummary = typeof errMsg === 'string' ? errMsg.substring(0, 200) : JSON.stringify(errMsg).substring(0, 200);
+      } else if (rawOutputStr) {
+        outputSummary = rawOutputStr.substring(0, 200);
+      } else if (obs.status_message) {
+        outputSummary = obs.status_message;
+      } else {
+        outputSummary = 'ERROR (no details available)';
+      }
     }
 
     const toolCall: CallReportToolCall = { name: obs.name, action, timestamp: startTime, durationMs, inputSummary, outputSummary, status };
     toolCall.fullInput = input;
-    toolCall.fullOutput = output;
+    // Use raw output as fullOutput if parsed output is empty
+    if (rawOutputStr && JSON.stringify(output) === '{}') {
+      // Try to parse raw string one more time for display; otherwise wrap it
+      try {
+        toolCall.fullOutput = JSON.parse(rawOutputStr);
+      } catch {
+        toolCall.fullOutput = { _rawError: rawOutputStr };
+      }
+    } else {
+      toolCall.fullOutput = output;
+    }
     if (status === 'error' || status === 'partial') {
       toolCall.statusMessage = obs.status_message || undefined;
-      toolCall.errorAnalysis = analyzeToolError(obs.name, action, input, output, obs.status_message || null);
+      toolCall.errorAnalysis = analyzeToolError(obs.name, action, input, output, obs.status_message || null, rawOutputStr);
     }
     report.toolCalls.push(toolCall);
 
@@ -2132,6 +2181,7 @@ interface InvestigationToolCall {
   statusMessage: string | null;
   input: Record<string, any>;
   output: Record<string, any>;
+  rawOutput: string | null;
   timestamp: string;
 }
 
@@ -2466,11 +2516,25 @@ function runInvestigation(sessionId: string, db: BetterSqlite3.Database): Invest
     let input: any = {};
     try { input = typeof obs.input === 'string' ? JSON.parse(obs.input) : obs.input || {}; } catch {}
     let output: any = {};
-    try { output = typeof obs.output === 'string' ? JSON.parse(obs.output) : obs.output || {}; } catch {}
+    let rawOutput: string | null = null;
+    if (obs.output != null) {
+      if (typeof obs.output === 'string') {
+        try {
+          output = JSON.parse(obs.output);
+        } catch {
+          // Preserve the raw error string when JSON parse fails
+          rawOutput = obs.output;
+        }
+      } else {
+        output = obs.output;
+      }
+    }
     const action = input?.action || (toolNames.dateTimeTools.includes(obs.name) ? 'getDateTime' : obs.name.includes('Escalation') || obs.name.includes('HandleEscalation') ? 'escalation' : 'unknown');
     const level = obs.level || 'DEFAULT';
-    const isError = level === 'ERROR' || (obs.status_message || '').includes('required');
-    return { index: idx + 1, name: obs.name, action, level, isError, statusMessage: obs.status_message || null, input, output, timestamp: obs.started_at || '' };
+    const outputStr = rawOutput || JSON.stringify(output);
+    const hasOutputError = outputStr.includes('"success":false') || outputStr.includes('"success": false') || outputStr.includes('_debug_error');
+    const isError = level === 'ERROR' || (obs.status_message || '').includes('required') || hasOutputError;
+    return { index: idx + 1, name: obs.name, action, level, isError, statusMessage: obs.status_message || null, input, output, rawOutput, timestamp: obs.started_at || '' };
   });
 
   // Booking tool calls using tenant-specific scheduling tool names
@@ -2571,22 +2635,52 @@ void CLASSIFICATION_LABEL; // exported via investigateSession JSON response
 
 function getToolCallDetail(tc: InvestigationToolCall): string {
   if (tc.isError) {
-    // Try to extract a clean error message
-    let detail = tc.statusMessage || '';
-    if (!detail) {
-      const out = tc.output;
-      if (out?.message) detail = out.message;
-      else if (out?.error) detail = typeof out.error === 'string' ? out.error : JSON.stringify(out.error);
-      else detail = 'ERROR';
+    // Try to extract a clean error message from multiple sources
+    let detail = '';
+
+    // 1. Check parsed output for standard error fields
+    const out = tc.output;
+    if (out?._debug_error) {
+      detail = typeof out._debug_error === 'string' ? out._debug_error : JSON.stringify(out._debug_error);
+    } else if (out?.message) {
+      detail = typeof out.message === 'string' ? out.message : JSON.stringify(out.message);
+    } else if (out?.error) {
+      detail = typeof out.error === 'string' ? out.error : JSON.stringify(out.error);
+    } else if (out?.errorMessage) {
+      detail = typeof out.errorMessage === 'string' ? out.errorMessage : JSON.stringify(out.errorMessage);
     }
+
+    // 2. If no error from output fields, check rawOutput (unparseable string from tool)
+    if (!detail && tc.rawOutput) {
+      detail = tc.rawOutput;
+    }
+
+    // 3. Fall back to statusMessage
+    if (!detail && tc.statusMessage) {
+      detail = tc.statusMessage;
+    }
+
+    // 4. If output has success:false but no error message, describe what we have
+    if (!detail && out) {
+      const outStr = JSON.stringify(out);
+      if (outStr !== '{}' && outStr !== 'null') {
+        detail = outStr;
+      }
+    }
+
+    // 5. Last resort
+    if (!detail) {
+      detail = 'ERROR (no details available)';
+    }
+
     // Try to parse JSON error strings for a clean message
     if (detail.startsWith('{') || detail.startsWith('Error:')) {
       try {
         const parsed = JSON.parse(detail.replace(/^Error:\s*/, ''));
-        detail = parsed.message || parsed.error || detail;
+        detail = parsed.message || parsed.error || parsed._debug_error || detail;
       } catch { /* keep original */ }
     }
-    if (detail.length > 50) detail = detail.substring(0, 47) + '...';
+    if (detail.length > 120) detail = detail.substring(0, 117) + '...';
     return detail;
   }
   if (tc.name === 'CurrentDateTime' || tc.name === 'current_date_time') {
@@ -2619,7 +2713,15 @@ function getToolCallDetail(tc: InvestigationToolCall): string {
     const id = tc.output?.id || tc.output?.patientId || '';
     return id ? `patient created (ID: ${id})` : 'patient created';
   }
-  return JSON.stringify(tc.output).substring(0, 60);
+  // Use rawOutput if parsed output is empty
+  if (tc.rawOutput) {
+    return tc.rawOutput.substring(0, 120);
+  }
+  const outStr = JSON.stringify(tc.output);
+  if (outStr === '{}' || outStr === 'null') {
+    return tc.statusMessage || 'no output';
+  }
+  return outStr.substring(0, 120);
 }
 
 /** Compact date: "02/25/2026" or "2026-02-25" → "2/25" */
@@ -3284,11 +3386,11 @@ function formatInvestigationMarkdown(r: InvestigationResult): string {
     const shortReqContext = safeReqContext.length > 30 ? safeReqContext.substring(0, 27) + '...' : safeReqContext;
     const requestLabel = shortReqContext ? `${safeLabel} (${shortReqContext})` : safeLabel;
     if (tc.isError) {
-      flowLines.push(`    L->>T: ${requestLabel}`);
-      flowLines.push(`    T--xL: ERROR`);
+      flowLines.push(`    L->>T: [${tc.index}] ${requestLabel}`);
+      flowLines.push(`    T--xL: [${tc.index}r] ERROR`);
     } else {
-      flowLines.push(`    L->>T: ${requestLabel}`);
-      flowLines.push(`    T-->>L: ${shortDetail}`);
+      flowLines.push(`    L->>T: [${tc.index}] ${requestLabel}`);
+      flowLines.push(`    T-->>L: [${tc.index}r] ${shortDetail}`);
     }
   }
 
@@ -3411,7 +3513,7 @@ function formatInvestigationMarkdown(r: InvestigationResult): string {
       const toolLabel = tc.action !== tc.name ? `${tc.name} → ${tc.action}` : tc.name;
       const levelTag = tc.isError ? ' (ERROR)' : '';
       const timeStr = tc.timestamp ? new Date(tc.timestamp).toISOString().slice(11, 19) + ' UTC' : '';
-      lines.push(`<details>`);
+      lines.push(`<details id="tool-call-${tc.index}">`);
       lines.push(`<summary><strong>#${tc.index} ${toolLabel}${levelTag}</strong>${timeStr ? ` — ${timeStr}` : ''}</summary>`);
       lines.push('');
       lines.push('**Input:**');
@@ -3425,10 +3527,16 @@ function formatInvestigationMarkdown(r: InvestigationResult): string {
       lines.push('');
       lines.push('**Output:**');
       lines.push('```json');
-      try {
-        lines.push(JSON.stringify(tc.output || {}, null, 2));
-      } catch {
-        lines.push(String(tc.output));
+      if (tc.rawOutput) {
+        // Raw output string that couldn't be parsed as JSON — show it directly
+        lines.push(tc.rawOutput);
+      } else {
+        try {
+          const outStr = JSON.stringify(tc.output || {}, null, 2);
+          lines.push(outStr === '{}' && tc.statusMessage ? tc.statusMessage : outStr);
+        } catch {
+          lines.push(String(tc.output));
+        }
       }
       lines.push('```');
       lines.push('');
