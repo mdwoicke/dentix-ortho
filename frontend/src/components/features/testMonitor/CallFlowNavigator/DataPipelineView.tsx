@@ -129,6 +129,7 @@ export function DataPipelineView({
   const [currentErrorIndex, setCurrentErrorIndex] = useState(0);
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
   const [layerFilter, setLayerFilter] = useState<LayerFilter>('all');
+  const [currentLayerNodeIndex, setCurrentLayerNodeIndex] = useState(0);
 
   // Get all error nodes for navigation, sorted by start time
   const errorNodes = useMemo(() => {
@@ -186,6 +187,62 @@ export function DataPipelineView({
   // Jump to next error (for cycling through errors)
   const jumpToNextError = () => {
     jumpToError(currentErrorIndex + 1);
+  };
+
+  // Jump to a specific layer node by index
+  const jumpToLayerNode = (index: number) => {
+    if (activeLayerNodes.length === 0) return;
+
+    const wrappedIndex = ((index % activeLayerNodes.length) + activeLayerNodes.length) % activeLayerNodes.length;
+    setCurrentLayerNodeIndex(wrappedIndex);
+
+    const targetNode = activeLayerNodes[wrappedIndex];
+    if (scrollRef.current && targetNode) {
+      // Find which turn contains this node
+      const turn = pipelineTurns.find(t =>
+        targetNode.startMs >= t.startMs && targetNode.startMs < t.endMs
+      );
+
+      // First, scroll the turn into view (instant scroll)
+      if (turn) {
+        const turnElement = scrollRef.current.querySelector(`[data-turn="${turn.id}"]`);
+        if (turnElement) {
+          turnElement.scrollIntoView({ behavior: 'auto', block: 'start' });
+        }
+      }
+
+      // Then find and scroll to the specific node with highlighting
+      requestAnimationFrame(() => {
+        const nodeElement = scrollRef.current?.querySelector(`[data-node-id="${targetNode.id}"]`);
+        if (nodeElement) {
+          nodeElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          // Use layer-specific ring color
+          const ringColor = layerFilter === 'layer4_flowise' ? 'ring-blue-500' :
+                           layerFilter === 'layer3_tools' ? 'ring-amber-500' :
+                           layerFilter === 'layer2_nodered' ? 'ring-purple-500' :
+                           'ring-green-500';
+          nodeElement.classList.add('ring-2', ringColor, 'ring-offset-2');
+          setTimeout(() => {
+            nodeElement.classList.remove('ring-2', ringColor, 'ring-offset-2');
+          }, 2000);
+        }
+      });
+
+      // Also trigger the node click to show details
+      onNodeClick(targetNode);
+    }
+  };
+
+  // Jump to previous layer node
+  const jumpToPreviousLayerNode = () => {
+    if (activeLayerNodes.length === 0) return;
+    jumpToLayerNode(currentLayerNodeIndex - 1);
+  };
+
+  // Jump to next layer node
+  const jumpToNextLayerNode = () => {
+    if (activeLayerNodes.length === 0) return;
+    jumpToLayerNode(currentLayerNodeIndex + 1);
   };
 
 
@@ -282,6 +339,16 @@ export function DataPipelineView({
     return { byLayer, byType, observationDetails, allNodeDetails, totalNodes: nodes.length };
   }, [nodes]);
 
+  // Get nodes for the currently selected layer, sorted by start time
+  const activeLayerNodes = useMemo(() => {
+    if (layerFilter === 'all') return [] as FlowNode[];
+    const layerKey = layerFilter === 'layer4_flowise' ? 'flowise'
+      : layerFilter === 'layer3_tools' ? 'tools'
+      : layerFilter === 'layer2_nodered' ? 'nodeRed'
+      : 'cloud9';
+    return [...debugInfo.byLayer[layerKey]].sort((a, b) => a.startMs - b.startMs);
+  }, [layerFilter, debugInfo]);
+
   // Transform nodes into pipeline turns
   const allPipelineTurns = useMemo(() => {
     return transformToPipelineData(nodes, totalDurationMs);
@@ -365,6 +432,9 @@ export function DataPipelineView({
       }
     });
   }, [focusedSearchNodeId, nodes, pipelineTurns]);
+
+  // Reset layer node index when layer filter changes
+  useEffect(() => { setCurrentLayerNodeIndex(0); }, [layerFilter]);
 
   // Auto-scroll to first node of selected layer when filter changes
   useEffect(() => {
@@ -499,8 +569,73 @@ export function DataPipelineView({
 
   return (
     <div className="h-full flex flex-col">
-      {/* Sticky Error Banner - Always visible when errors exist */}
-      {errorCount > 0 && (
+      {/* Layer Navigation Banner — replaces error banner when a layer filter is active */}
+      {layerFilter !== 'all' && activeLayerNodes.length > 0 ? (
+        <div className={cn(
+          'flex-shrink-0 flex items-center justify-between px-4 py-2 text-white',
+          layerFilter === 'layer4_flowise' && 'bg-gradient-to-r from-blue-500 to-blue-600',
+          layerFilter === 'layer3_tools' && 'bg-gradient-to-r from-amber-500 to-amber-600',
+          layerFilter === 'layer2_nodered' && 'bg-gradient-to-r from-purple-500 to-purple-600',
+          layerFilter === 'layer1_cloud9' && 'bg-gradient-to-r from-green-500 to-green-600',
+        )}>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              <Icons.Layers />
+              <span className="font-semibold">
+                {activeLayerNodes.length} Item{activeLayerNodes.length > 1 ? 's' : ''} in {
+                  layerFilter === 'layer4_flowise' ? 'L4 Flowise' :
+                  layerFilter === 'layer3_tools' ? 'L3 Tools' :
+                  layerFilter === 'layer2_nodered' ? 'L2 Node-RED' :
+                  'L1 Cloud9'
+                }
+              </span>
+            </div>
+            <span className={cn(
+              'text-sm',
+              layerFilter === 'layer4_flowise' && 'text-blue-100',
+              layerFilter === 'layer3_tools' && 'text-amber-100',
+              layerFilter === 'layer2_nodered' && 'text-purple-100',
+              layerFilter === 'layer1_cloud9' && 'text-green-100',
+            )}>
+              ({currentLayerNodeIndex + 1} of {activeLayerNodes.length})
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={jumpToPreviousLayerNode}
+              className={cn(
+                'p-1.5 rounded-lg transition-colors',
+                layerFilter === 'layer4_flowise' && 'hover:bg-blue-400/30',
+                layerFilter === 'layer3_tools' && 'hover:bg-amber-400/30',
+                layerFilter === 'layer2_nodered' && 'hover:bg-purple-400/30',
+                layerFilter === 'layer1_cloud9' && 'hover:bg-green-400/30',
+              )}
+              title="Previous item"
+            >
+              <Icons.ChevronLeft />
+            </button>
+            <button
+              onClick={() => jumpToLayerNode(currentLayerNodeIndex)}
+              className="px-3 py-1 bg-white/20 hover:bg-white/30 rounded-lg text-sm font-medium transition-colors"
+            >
+              Go to Item
+            </button>
+            <button
+              onClick={jumpToNextLayerNode}
+              className={cn(
+                'p-1.5 rounded-lg transition-colors',
+                layerFilter === 'layer4_flowise' && 'hover:bg-blue-400/30',
+                layerFilter === 'layer3_tools' && 'hover:bg-amber-400/30',
+                layerFilter === 'layer2_nodered' && 'hover:bg-purple-400/30',
+                layerFilter === 'layer1_cloud9' && 'hover:bg-green-400/30',
+              )}
+              title="Next item"
+            >
+              <Icons.ChevronRight />
+            </button>
+          </div>
+        </div>
+      ) : errorCount > 0 ? (
         <div className="flex-shrink-0 flex items-center justify-between px-4 py-2 bg-gradient-to-r from-red-500 to-red-600 text-white">
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-2">
@@ -536,7 +671,7 @@ export function DataPipelineView({
             </button>
           </div>
         </div>
-      )}
+      ) : null}
 
       {/* Compact Header - Single row with all controls */}
       <div className="flex-shrink-0 flex items-center justify-between gap-4 px-3 py-1.5 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900">
@@ -818,6 +953,28 @@ export function DataPipelineView({
                     {formatDuration(debugInfo.byLayer.flowise.reduce((acc, n) => acc + n.durationMs, 0))}
                   </div>
                 )}
+                {layerFilter === 'layer4_flowise' && activeLayerNodes.length > 0 && (
+                  <div className="flex items-center gap-1 mt-1">
+                    <div className="flex-1 flex items-center gap-0.5">
+                      {activeLayerNodes.map((_, i) => (
+                        <button
+                          key={i}
+                          onClick={(e) => { e.stopPropagation(); jumpToLayerNode(i); }}
+                          className={cn(
+                            'h-1.5 rounded-full transition-all flex-1 min-w-[3px]',
+                            i === currentLayerNodeIndex
+                              ? 'bg-blue-600 dark:bg-blue-400 scale-y-150'
+                              : 'bg-blue-300 dark:bg-blue-700 hover:bg-blue-400 dark:hover:bg-blue-500'
+                          )}
+                          title={`Item ${i + 1} of ${activeLayerNodes.length}`}
+                        />
+                      ))}
+                    </div>
+                    <span className="text-[8px] font-bold text-blue-600 dark:text-blue-400 ml-1 whitespace-nowrap">
+                      {currentLayerNodeIndex + 1}/{activeLayerNodes.length}
+                    </span>
+                  </div>
+                )}
               </button>
               {/* L3 Tools - Amber */}
               <button
@@ -839,6 +996,28 @@ export function DataPipelineView({
                 {debugInfo.byLayer.tools.length > 0 && (
                   <div className="text-[9px] text-gray-500 dark:text-gray-400 mt-0.5">
                     {formatDuration(debugInfo.byLayer.tools.reduce((acc, n) => acc + n.durationMs, 0))}
+                  </div>
+                )}
+                {layerFilter === 'layer3_tools' && activeLayerNodes.length > 0 && (
+                  <div className="flex items-center gap-1 mt-1">
+                    <div className="flex-1 flex items-center gap-0.5">
+                      {activeLayerNodes.map((_, i) => (
+                        <button
+                          key={i}
+                          onClick={(e) => { e.stopPropagation(); jumpToLayerNode(i); }}
+                          className={cn(
+                            'h-1.5 rounded-full transition-all flex-1 min-w-[3px]',
+                            i === currentLayerNodeIndex
+                              ? 'bg-amber-600 dark:bg-amber-400 scale-y-150'
+                              : 'bg-amber-300 dark:bg-amber-700 hover:bg-amber-400 dark:hover:bg-amber-500'
+                          )}
+                          title={`Item ${i + 1} of ${activeLayerNodes.length}`}
+                        />
+                      ))}
+                    </div>
+                    <span className="text-[8px] font-bold text-amber-600 dark:text-amber-400 ml-1 whitespace-nowrap">
+                      {currentLayerNodeIndex + 1}/{activeLayerNodes.length}
+                    </span>
                   </div>
                 )}
               </button>
@@ -864,6 +1043,28 @@ export function DataPipelineView({
                     {formatDuration(debugInfo.byLayer.nodeRed.reduce((acc, n) => acc + n.durationMs, 0))}
                   </div>
                 )}
+                {layerFilter === 'layer2_nodered' && activeLayerNodes.length > 0 && (
+                  <div className="flex items-center gap-1 mt-1">
+                    <div className="flex-1 flex items-center gap-0.5">
+                      {activeLayerNodes.map((_, i) => (
+                        <button
+                          key={i}
+                          onClick={(e) => { e.stopPropagation(); jumpToLayerNode(i); }}
+                          className={cn(
+                            'h-1.5 rounded-full transition-all flex-1 min-w-[3px]',
+                            i === currentLayerNodeIndex
+                              ? 'bg-purple-600 dark:bg-purple-400 scale-y-150'
+                              : 'bg-purple-300 dark:bg-purple-700 hover:bg-purple-400 dark:hover:bg-purple-500'
+                          )}
+                          title={`Item ${i + 1} of ${activeLayerNodes.length}`}
+                        />
+                      ))}
+                    </div>
+                    <span className="text-[8px] font-bold text-purple-600 dark:text-purple-400 ml-1 whitespace-nowrap">
+                      {currentLayerNodeIndex + 1}/{activeLayerNodes.length}
+                    </span>
+                  </div>
+                )}
               </button>
               {/* L1 Cloud9 - Green */}
               <button
@@ -885,6 +1086,28 @@ export function DataPipelineView({
                 {debugInfo.byLayer.cloud9.length > 0 && (
                   <div className="text-[9px] text-gray-500 dark:text-gray-400 mt-0.5">
                     {formatDuration(debugInfo.byLayer.cloud9.reduce((acc, n) => acc + n.durationMs, 0))}
+                  </div>
+                )}
+                {layerFilter === 'layer1_cloud9' && activeLayerNodes.length > 0 && (
+                  <div className="flex items-center gap-1 mt-1">
+                    <div className="flex-1 flex items-center gap-0.5">
+                      {activeLayerNodes.map((_, i) => (
+                        <button
+                          key={i}
+                          onClick={(e) => { e.stopPropagation(); jumpToLayerNode(i); }}
+                          className={cn(
+                            'h-1.5 rounded-full transition-all flex-1 min-w-[3px]',
+                            i === currentLayerNodeIndex
+                              ? 'bg-green-600 dark:bg-green-400 scale-y-150'
+                              : 'bg-green-300 dark:bg-green-700 hover:bg-green-400 dark:hover:bg-green-500'
+                          )}
+                          title={`Item ${i + 1} of ${activeLayerNodes.length}`}
+                        />
+                      ))}
+                    </div>
+                    <span className="text-[8px] font-bold text-green-600 dark:text-green-400 ml-1 whitespace-nowrap">
+                      {currentLayerNodeIndex + 1}/{activeLayerNodes.length}
+                    </span>
                   </div>
                 )}
               </button>
