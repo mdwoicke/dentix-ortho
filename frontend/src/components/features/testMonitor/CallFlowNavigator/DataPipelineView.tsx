@@ -11,12 +11,13 @@
  * - Playback integration with auto-scroll
  */
 
-import { useState, useMemo, useRef, useEffect } from 'react';
+import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { cn } from '../../../../utils/cn';
+import { STORAGE_KEYS } from '../../../../utils/constants';
 import type { FlowNode, FlowLayer } from './types';
 import { LAYER_CONFIG } from './types';
 import { formatDuration } from './flowTransformers';
-import { transformToPipelineData } from './pipelineTransformers';
+import { transformToPipelineData, extractToolAction } from './pipelineTransformers';
 import { TurnPipeline } from './TurnPipeline';
 
 // Layer filter type - "all" or one of the FlowLayer values
@@ -72,6 +73,16 @@ const Icons = {
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
     </svg>
   ),
+  Chip: () => (
+    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
+    </svg>
+  ),
+  Dollar: () => (
+    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+    </svg>
+  ),
 };
 
 // ============================================================================
@@ -104,6 +115,8 @@ interface DataPipelineViewProps {
   // Search props (managed by parent FlowViewPopout)
   searchMatchingNodeIds?: Set<string>;
   focusedSearchNodeId?: string | null;
+  // Tenant-aware L1 label (e.g., "Cloud9" for Ortho, "NexHealth" for Chord)
+  l1Label?: string;
 }
 
 // ============================================================================
@@ -122,6 +135,7 @@ export function DataPipelineView({
   flowDebug,
   searchMatchingNodeIds = new Set<string>(),
   focusedSearchNodeId = null,
+  l1Label = 'Cloud9',
 }: DataPipelineViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [showFullIO, setShowFullIO] = useState(true);
@@ -130,6 +144,49 @@ export function DataPipelineView({
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
   const [layerFilter, setLayerFilter] = useState<LayerFilter>('all');
   const [currentLayerNodeIndex, setCurrentLayerNodeIndex] = useState(0);
+
+  // Cost-per-1K-tokens state — separate input/output rates (persisted to localStorage)
+  const [inputCostPer1k, setInputCostPer1k] = useState(() => {
+    const stored = localStorage.getItem(STORAGE_KEYS.FLOW_COST_PER_1K_INPUT);
+    return stored ? parseFloat(stored) : 3.00;
+  });
+  const [outputCostPer1k, setOutputCostPer1k] = useState(() => {
+    const stored = localStorage.getItem(STORAGE_KEYS.FLOW_COST_PER_1K_OUTPUT);
+    return stored ? parseFloat(stored) : 15.00;
+  });
+  const [showCostEditor, setShowCostEditor] = useState(false);
+  const costEditorRef = useRef<HTMLDivElement>(null);
+  const costInputRef = useRef<HTMLInputElement>(null);
+
+  const updateCostRate = useCallback((type: 'input' | 'output', value: number) => {
+    const rate = Math.max(0, value);
+    if (type === 'input') {
+      setInputCostPer1k(rate);
+      localStorage.setItem(STORAGE_KEYS.FLOW_COST_PER_1K_INPUT, String(rate));
+    } else {
+      setOutputCostPer1k(rate);
+      localStorage.setItem(STORAGE_KEYS.FLOW_COST_PER_1K_OUTPUT, String(rate));
+    }
+  }, []);
+
+  // Close cost editor on outside click
+  useEffect(() => {
+    if (!showCostEditor) return;
+    const handleClick = (e: MouseEvent) => {
+      if (costEditorRef.current && !costEditorRef.current.contains(e.target as Node)) {
+        setShowCostEditor(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [showCostEditor]);
+
+  // Focus input when cost editor opens
+  useEffect(() => {
+    if (showCostEditor && costInputRef.current) {
+      costInputRef.current.select();
+    }
+  }, [showCostEditor]);
 
   // Get all error nodes for navigation, sorted by start time
   const errorNodes = useMemo(() => {
@@ -551,6 +608,16 @@ export function DataPipelineView({
     return nodes.filter(n => n.status === 'bottleneck').length;
   }, [nodes]);
 
+  const { totalInputTokens, totalOutputTokens, totalTokens } = useMemo(() => {
+    let inp = 0, out = 0, tot = 0;
+    for (const n of nodes) {
+      inp += n.data.tokens?.input || 0;
+      out += n.data.tokens?.output || 0;
+      tot += n.data.tokens?.total || 0;
+    }
+    return { totalInputTokens: inp, totalOutputTokens: out, totalTokens: tot };
+  }, [nodes]);
+
   if (nodes.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-center">
@@ -586,7 +653,7 @@ export function DataPipelineView({
                   layerFilter === 'layer4_flowise' ? 'L4 Flowise' :
                   layerFilter === 'layer3_tools' ? 'L3 Tools' :
                   layerFilter === 'layer2_nodered' ? 'L2 Node-RED' :
-                  'L1 Cloud9'
+                  `L1 ${l1Label}`
                 }
               </span>
             </div>
@@ -696,6 +763,20 @@ export function DataPipelineView({
                 {pipelineTurns.map((turn, idx) => {
                   // Find the original turn index for display
                   const originalIdx = allPipelineTurns.findIndex(t => t.id === turn.id);
+                  // Build tooltip with tool actions (skip ToolCallingAgent)
+                  const turnToolActions = turn.layerNodes.tools
+                    .filter(n => !n.label?.includes('ToolCallingAgent'))
+                    .map(n => extractToolAction(n))
+                    .filter((a): a is NonNullable<typeof a> => a !== null);
+                  const uniqueTurnActions = turnToolActions.reduce<string[]>((acc, a) => {
+                    if (!acc.includes(a.displayLabel)) acc.push(a.displayLabel);
+                    return acc;
+                  }, []);
+                  const toolTip = [
+                    `Turn ${originalIdx + 1}`,
+                    turn.hasError ? '- Has Error' : '',
+                    uniqueTurnActions.length > 0 ? `\n${uniqueTurnActions.join('\n')}` : '',
+                  ].filter(Boolean).join(' ').trim();
                   return (
                     <button
                       key={turn.id}
@@ -712,7 +793,7 @@ export function DataPipelineView({
                             : 'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700',
                         ],
                       )}
-                      title={turn.hasError ? `Turn ${originalIdx + 1} - Has Error` : `Turn ${originalIdx + 1}`}
+                      title={toolTip}
                     >
                       {originalIdx + 1}
                       {/* Error indicator dot */}
@@ -733,7 +814,7 @@ export function DataPipelineView({
             { color: 'bg-blue-500', label: 'L4 Flowise' },
             { color: 'bg-amber-500', label: 'L3 Tools' },
             { color: 'bg-purple-500', label: 'L2 Node-RED' },
-            { color: 'bg-green-500', label: 'L1 Cloud9' },
+            { color: 'bg-green-500', label: `L1 ${l1Label}` },
           ].map(({ color, label }) => (
             <div key={label} className="flex items-center gap-1">
               <div className={cn('w-2 h-2 rounded-full', color)} />
@@ -761,6 +842,84 @@ export function DataPipelineView({
               <span className="text-[10px] font-bold text-orange-700 dark:text-orange-300">{bottleneckCount}</span>
             </div>
           )}
+
+          {/* Token count — input / output (total) */}
+          {totalTokens > 0 && (
+            <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-purple-100 dark:bg-purple-900/30" title={`Input: ${totalInputTokens.toLocaleString()} | Output: ${totalOutputTokens.toLocaleString()} | Total: ${totalTokens.toLocaleString()}`}>
+              <Icons.Chip />
+              <span className="text-[10px] font-bold">
+                <span className="text-blue-600 dark:text-blue-400">{totalInputTokens.toLocaleString()}</span>
+                <span className="text-purple-500 dark:text-purple-400"> in / </span>
+                <span className="text-green-600 dark:text-green-400">{totalOutputTokens.toLocaleString()}</span>
+                <span className="text-purple-500 dark:text-purple-400"> out </span>
+                <span className="text-purple-700 dark:text-purple-300">({totalTokens.toLocaleString()})</span>
+              </span>
+            </div>
+          )}
+
+          {/* Estimated cost badge — split input/output rates */}
+          {totalTokens > 0 && (() => {
+            const inputCost = totalInputTokens * (inputCostPer1k / 1000);
+            const outputCost = totalOutputTokens * (outputCostPer1k / 1000);
+            const totalCost = inputCost + outputCost;
+            return (
+              <div className="relative" ref={costEditorRef}>
+                <button
+                  onClick={() => setShowCostEditor(!showCostEditor)}
+                  className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-green-100 dark:bg-green-900/30 hover:bg-green-200 dark:hover:bg-green-800/40 transition-colors"
+                  title={`Input: $${inputCost.toFixed(2)} ($${inputCostPer1k.toFixed(2)}/1K) + Output: $${outputCost.toFixed(2)} ($${outputCostPer1k.toFixed(2)}/1K)`}
+                >
+                  <Icons.Dollar />
+                  <span className="text-[10px] font-bold text-green-700 dark:text-green-300">
+                    ${totalCost.toFixed(2)}
+                  </span>
+                </button>
+                {showCostEditor && (
+                  <div className="absolute top-full right-0 mt-1 z-50 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg p-2 w-52">
+                    {/* Input rate */}
+                    <label className="block text-[10px] font-medium text-gray-600 dark:text-gray-400 mb-1">
+                      Input $/1K
+                    </label>
+                    <div className="flex items-center gap-1 mb-2">
+                      <span className="text-[10px] text-gray-500">$</span>
+                      <input
+                        ref={costInputRef}
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={inputCostPer1k}
+                        onChange={(e) => updateCostRate('input', parseFloat(e.target.value) || 0)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') setShowCostEditor(false); }}
+                        className="flex-1 px-1.5 py-0.5 text-[10px] rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-green-500"
+                      />
+                    </div>
+                    {/* Output rate */}
+                    <label className="block text-[10px] font-medium text-gray-600 dark:text-gray-400 mb-1">
+                      Output $/1K
+                    </label>
+                    <div className="flex items-center gap-1">
+                      <span className="text-[10px] text-gray-500">$</span>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={outputCostPer1k}
+                        onChange={(e) => updateCostRate('output', parseFloat(e.target.value) || 0)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') setShowCostEditor(false); }}
+                        className="flex-1 px-1.5 py-0.5 text-[10px] rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-green-500"
+                      />
+                    </div>
+                    {/* Cost breakdown summary */}
+                    <div className="text-[9px] text-gray-400 mt-2 pt-1.5 border-t border-gray-200 dark:border-gray-700 space-y-0.5">
+                      <div>Input: <span className="text-blue-500">${inputCost.toFixed(4)}</span> ({totalInputTokens.toLocaleString()} tok)</div>
+                      <div>Output: <span className="text-green-500">${outputCost.toFixed(4)}</span> ({totalOutputTokens.toLocaleString()} tok)</div>
+                      <div className="font-bold text-gray-600 dark:text-gray-300">Total: ${totalCost.toFixed(4)}</div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           {/* Auto-scroll toggle */}
           <button
@@ -838,7 +997,7 @@ export function DataPipelineView({
                 <span className="text-blue-600 dark:text-blue-400">L4 Flowise: {debugInfo.byLayer.flowise.length}</span>
                 <span className="text-amber-600 dark:text-amber-400">L3 Tools: {debugInfo.byLayer.tools.length}</span>
                 <span className="text-purple-600 dark:text-purple-400">L2 Node-RED: {debugInfo.byLayer.nodeRed.length}</span>
-                <span className="text-green-600 dark:text-green-400">L1 Cloud9: {debugInfo.byLayer.cloud9.length}</span>
+                <span className="text-green-600 dark:text-green-400">L1 {l1Label}: {debugInfo.byLayer.cloud9.length}</span>
               </div>
             </div>
 
@@ -1080,7 +1239,7 @@ export function DataPipelineView({
                 )}
               >
                 <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-medium text-green-700 dark:text-green-300">L1 Cloud9</span>
+                  <span className="text-[10px] font-medium text-green-700 dark:text-green-300">L1 {l1Label}</span>
                   <span className="text-[10px] font-bold text-green-600 dark:text-green-400">{debugInfo.byLayer.cloud9.length}</span>
                 </div>
                 {debugInfo.byLayer.cloud9.length > 0 && (
@@ -1121,7 +1280,7 @@ export function DataPipelineView({
               <div className="space-y-1">
                 <div className="flex justify-between text-[10px]">
                   <span className="text-gray-600 dark:text-gray-400">Tool calls:</span>
-                  <span className="font-medium text-gray-900 dark:text-gray-100">{debugInfo.byType.tool_decision.length}</span>
+                  <span className="font-medium text-gray-900 dark:text-gray-100">{debugInfo.byType.tool_decision.filter(n => !n.label?.includes('ToolCallingAgent')).length}</span>
                 </div>
                 <div className="flex justify-between text-[10px]">
                   <span className="text-gray-600 dark:text-gray-400">HTTP requests:</span>
@@ -1158,6 +1317,16 @@ export function DataPipelineView({
                     turn.layerNodes.nodeRed.length + turn.layerNodes.cloud9.length;
                   // Find the original turn index for display
                   const originalIdx = allPipelineTurns.findIndex(t => t.id === turn.id);
+                  // Extract tool actions for this turn (skip ToolCallingAgent — present on every turn)
+                  const toolActions = turn.layerNodes.tools
+                    .filter(n => !n.label?.includes('ToolCallingAgent'))
+                    .map(n => extractToolAction(n))
+                    .filter((a): a is NonNullable<typeof a> => a !== null);
+                  // Deduplicate by action name
+                  const uniqueActions = toolActions.reduce<Array<{ toolName: string; action: string; displayLabel: string }>>((acc, a) => {
+                    if (!acc.some(x => x.action === a.action && x.toolName === a.toolName)) acc.push(a);
+                    return acc;
+                  }, []);
                   return (
                     <button
                       key={turn.id}
@@ -1177,6 +1346,19 @@ export function DataPipelineView({
                       <div className="text-[9px] text-gray-500 dark:text-gray-400">
                         {nodeCount} nodes • {formatDuration(turn.endMs - turn.startMs)}
                       </div>
+                      {uniqueActions.length > 0 && (
+                        <div className="mt-0.5 flex flex-wrap gap-0.5">
+                          {uniqueActions.map((a, aIdx) => (
+                            <span
+                              key={aIdx}
+                              className="inline-block px-1 py-0 rounded text-[8px] font-medium bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 truncate max-w-full"
+                              title={a.displayLabel}
+                            >
+                              {a.displayLabel}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </button>
                   );
                 })}
@@ -1209,6 +1391,7 @@ export function DataPipelineView({
                   showFullIO={showFullIO}
                   searchMatchingNodeIds={searchMatchingNodeIds}
                   focusedSearchNodeId={focusedSearchNodeId}
+                  l1Label={l1Label}
                 />
 
                 {/* Connector between turns */}
