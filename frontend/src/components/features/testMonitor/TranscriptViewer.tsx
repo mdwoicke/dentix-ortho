@@ -264,7 +264,7 @@ function JsonWithPatientLinks({
 // Node-RED base URL for endpoint display
 const NODERED_BASE_URL = 'https://c1-aicoe-nodered-lb.prod.c1conversations.io/FabricWorkflow/api/chord';
 
-// Endpoint mappings for display purposes
+// Endpoint mappings for display purposes — Ortho (Cloud9)
 const TOOL_ENDPOINTS: Record<string, Record<string, string>> = {
   chord_ortho_patient: {
     lookup: `${NODERED_BASE_URL}/ortho-prd/getPatientByFilter`,
@@ -281,19 +281,41 @@ const TOOL_ENDPOINTS: Record<string, Record<string, string>> = {
     book_child: `${NODERED_BASE_URL}/ortho-prd/createAppt`,
     cancel: `${NODERED_BASE_URL}/ortho-prd/cancelAppt`,
   },
+  // Chord (NexHealth) endpoints — no /ortho-prd/ prefix
+  chord_patient_v07_stage: {
+    lookup: `${NODERED_BASE_URL}/getPatientByPhoneNum`,
+    get: `${NODERED_BASE_URL}/getPatient`,
+    create: `${NODERED_BASE_URL}/createPatient`,
+    appointments: `${NODERED_BASE_URL}/getPatientAppts`,
+    clinic_info: `${NODERED_BASE_URL}/getLocation`,
+    edit_insurance: `${NODERED_BASE_URL}/editPatientInsurance`,
+    confirm_appointment: `${NODERED_BASE_URL}/confirmAppt`,
+  },
+  chord_scheduling_v08: {
+    slots: `${NODERED_BASE_URL}/getApptSlots`,
+    grouped_slots: `${NODERED_BASE_URL}/getGroupedApptSlots`,
+    book_child: `${NODERED_BASE_URL}/createAppt`,
+    cancel: `${NODERED_BASE_URL}/cancelAppt`,
+  },
 };
+
+// Chord tool name variants (from toolNameResolver.ts)
+const CHORD_TOOL_NAMES = ['chord_patient_v07_stage', 'chord_scheduling_v08', 'chord_scheduling_v07_dev'];
 
 /**
  * Extract tool name and action from an API call for replay
  */
-function extractToolInfoFromApiCall(call: ApiCall): { toolName: string; action: string; endpoint: string; input: Record<string, unknown> } | null {
+function extractToolInfoFromApiCall(call: ApiCall): { toolName: string; action: string; endpoint: string; input: Record<string, unknown>; tenantId?: number } | null {
   // Skip flowise_payload and other non-tool calls
   if (!call.toolName || call.toolName === 'flowise_payload') {
     return null;
   }
 
-  // Supported tools for replay
-  const SUPPORTED_TOOLS = ['chord_ortho_patient', 'schedule_appointment_ortho'];
+  // Supported tools for replay — Ortho + Chord
+  const SUPPORTED_TOOLS = [
+    'chord_ortho_patient', 'schedule_appointment_ortho',
+    'chord_patient_v07_stage', 'chord_scheduling_v08', 'chord_scheduling_v07_dev',
+  ];
   if (!SUPPORTED_TOOLS.includes(call.toolName)) {
     return null;
   }
@@ -306,14 +328,22 @@ function extractToolInfoFromApiCall(call: ApiCall): { toolName: string; action: 
     return null;
   }
 
+  // Determine tenant: Chord tools = tenant 5, Ortho = tenant 1
+  const isChord = CHORD_TOOL_NAMES.includes(call.toolName);
+  const tenantId = isChord ? 5 : undefined;
+
   // Determine endpoint for display
-  const endpoint = TOOL_ENDPOINTS[call.toolName]?.[action] || `${NODERED_BASE_URL}/ortho-prd/${action}`;
+  const defaultEndpoint = isChord
+    ? `${NODERED_BASE_URL}/${action}`
+    : `${NODERED_BASE_URL}/ortho-prd/${action}`;
+  const endpoint = TOOL_ENDPOINTS[call.toolName]?.[action] || defaultEndpoint;
 
   return {
     toolName: call.toolName,
     action,
     endpoint,
     input: requestPayload as Record<string, unknown>,
+    tenantId,
   };
 }
 
@@ -573,6 +603,7 @@ function ApiCallModal({
           action={toolInfo.action}
           endpoint={toolInfo.endpoint}
           initialInput={toolInfo.input}
+          tenantId={toolInfo.tenantId}
         />
       )}
     </div>,

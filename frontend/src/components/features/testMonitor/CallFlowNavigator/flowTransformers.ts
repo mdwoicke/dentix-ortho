@@ -84,7 +84,8 @@ function determineLayer(type: FlowNodeType, obs?: ProductionTraceObservation): F
   // Tool/Function call patterns (Layer 3)
   const toolPatterns = [
     'schedule_appointment', 'chord_dso', 'chord_ortho',
-    'handle_escalation', 'current_datetime', 'current_date',
+    'chord_patient', 'chord_scheduling', // Chord (NexHealth) tool prefixes
+    'handle_escalation', 'handleescalation', 'current_datetime', 'current_date', 'currentdatetime',
     'patient_tool', 'scheduling_tool', 'tool_call', 'function_call',
     'tool:', 'action:', 'slots', 'book_child', 'lookup',
     'get_existing', 'grouped_slots', 'reschedule', 'cancel',
