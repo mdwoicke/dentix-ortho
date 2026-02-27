@@ -8,10 +8,11 @@
 import { Request, Response } from 'express';
 import BetterSqlite3 from 'better-sqlite3';
 import path from 'path';
+import fs from 'fs';
 import { LangfuseTraceService } from '../services/langfuseTraceService';
 import { classifyCallerIntent, CallerIntent, ConversationTurn, enhanceIntentWithObservations } from '../services/callerIntentClassifier';
 import { mapToolSequence, ToolSequenceResult } from '../services/toolSequenceMapper';
-import { getAllKnownToolNames, getToolNamesForConfig, getTenantIdForConfig } from '../services/toolNameResolver';
+import { getAllKnownToolNames, getToolNamesForConfig, getTenantIdForConfig, ToolNames } from '../services/toolNameResolver';
 import {
   transformToConversationTurns,
   filterInternalTraces,
@@ -20,12 +21,15 @@ import { verifyFulfillment, FulfillmentVerdict } from '../services/fulfillmentVe
 import { createCloud9Client } from '../services/cloud9/client';
 import { getCloud9ConfigForTenant } from '../middleware/tenantContext';
 import { ProdTestRecordService } from '../services/prodTestRecordService';
+import * as flowiseEnrichment from '../services/flowiseChatMessageService';
 
 // Path to test-agent database
 const TEST_AGENT_DB_PATH = path.resolve(__dirname, '../../../test-agent/data/test-results.db');
 
 function getDb(): BetterSqlite3.Database {
   const db = new BetterSqlite3(TEST_AGENT_DB_PATH);
+  db.pragma('journal_mode = WAL');
+  db.pragma('busy_timeout = 15000');
   // Ensure session_analysis table exists
   db.exec(`
     CREATE TABLE IF NOT EXISTS session_analysis (
@@ -106,6 +110,8 @@ interface CallReportToolCall {
   fullOutput?: Record<string, any>;
   statusMessage?: string;
   errorAnalysis?: string;
+  // Flowise enrichment: actual per-call timing from _debug_calls
+  flowiseTimingMs?: number;
 }
 
 function analyzeToolError(_name: string, action: string, _input: any, output: any, statusMessage: string | null, rawOutput?: string | null): string {
@@ -148,6 +154,15 @@ interface CallReportBookingResult {
   appointmentTypeGUID?: string;
 }
 
+interface FlowiseEnrichmentSummary {
+  isEnriched: boolean;
+  enrichedAt?: string;
+  hasLoops: boolean;
+  totalToolCalls: number;
+  flowiseErrors: string[];
+  toolTimings: Record<string, number>; // tool name -> avg ms
+}
+
 interface CallReport {
   callerName: string | null;
   callerPhone: string | null;
@@ -163,6 +178,7 @@ interface CallReport {
   bookingOverall: 'success' | 'partial' | 'failed' | 'none';
   discrepancies: Array<{ aspect: string; said: string; actual: string }>;
   issues: string[];
+  flowiseEnrichment?: FlowiseEnrichmentSummary;
 }
 
 // ============================================================================
@@ -891,6 +907,53 @@ function buildCallReport(_traces: any[], observations: any[], transcript: any[],
     report.issues.push(`Tool call ${partialTool.name}→${partialTool.action} returned partial success (${partialTool.durationMs || '?'}ms elapsed)`);
   }
 
+  // Flowise enrichment: add per-tool timing and error data if available
+  if (sessionId) {
+    try {
+      const db = getDb();
+      const isEnriched = flowiseEnrichment.isSessionEnriched(db, sessionId);
+      if (isEnriched) {
+        const toolTimings = flowiseEnrichment.getSessionToolTimings(db, sessionId);
+        const errors = flowiseEnrichment.getSessionFlowiseErrors(db, sessionId);
+        const reasoning = flowiseEnrichment.getSessionReasoning(db, sessionId);
+        const hasLoops = reasoning.some(t => t.hasLoopIndicator);
+        const allErrors = errors.flatMap(e => e.errors);
+
+        // Enrich individual tool calls with actual Flowise timing
+        for (const tc of report.toolCalls) {
+          const avgTiming = toolTimings[tc.name];
+          if (avgTiming) {
+            tc.flowiseTimingMs = avgTiming;
+          }
+        }
+
+        // Get enrichedAt from production_sessions
+        const sessionRow = db.prepare(
+          'SELECT flowise_enriched_at FROM production_sessions WHERE session_id = ?'
+        ).get(sessionId) as any;
+
+        report.flowiseEnrichment = {
+          isEnriched: true,
+          enrichedAt: sessionRow?.flowise_enriched_at || undefined,
+          hasLoops,
+          totalToolCalls: reasoning.reduce((sum, t) => sum + t.toolTimings.length, 0),
+          flowiseErrors: allErrors,
+          toolTimings,
+        };
+
+        if (hasLoops) {
+          report.issues.push('Flowise loop detected: repeated identical tool calls in this session');
+        }
+        if (allErrors.length > 0) {
+          report.issues.push(`${allErrors.length} Flowise-internal error(s) detected (not visible in Langfuse)`);
+        }
+      }
+      db.close();
+    } catch {
+      // Non-fatal: Flowise enrichment is optional
+    }
+  }
+
   return report;
 }
 
@@ -1559,6 +1622,74 @@ export async function verifySession(req: Request, res: Response): Promise<void> 
  * Note: Originally this queried monitoring_results, but that table was never populated.
  * Now uses session_analysis directly with column mapping.
  */
+
+// ── Standalone Report Files ─────────────────────────────────────────────────
+
+const REPORTS_DIR = path.resolve(__dirname, '../../../reports');
+
+/**
+ * List available standalone markdown reports from the /reports directory.
+ */
+export async function listReports(_req: Request, res: Response): Promise<void> {
+  try {
+    if (!fs.existsSync(REPORTS_DIR)) {
+      res.json({ data: [] });
+      return;
+    }
+    const files = fs.readdirSync(REPORTS_DIR)
+      .filter(f => f.endsWith('.md'))
+      .map(f => {
+        const stat = fs.statSync(path.join(REPORTS_DIR, f));
+        return {
+          filename: f,
+          name: f.replace(/\.md$/, '').replace(/-/g, ' '),
+          size: stat.size,
+          modified: stat.mtime.toISOString(),
+        };
+      })
+      .sort((a, b) => b.modified.localeCompare(a.modified));
+    res.json({ data: files });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
+/**
+ * Serve a standalone markdown report file by filename.
+ * Prevents directory traversal by validating the filename.
+ */
+export async function getReportFile(req: Request, res: Response): Promise<void> {
+  try {
+    const { filename } = req.params;
+    // Security: only allow alphanumeric, hyphens, underscores, dots
+    if (!/^[\w\-\.]+\.md$/.test(filename)) {
+      res.status(400).json({ error: 'Invalid filename' });
+      return;
+    }
+    const filePath = path.join(REPORTS_DIR, filename);
+    if (!fs.existsSync(filePath)) {
+      res.status(404).json({ error: `Report "${filename}" not found` });
+      return;
+    }
+    const markdown = fs.readFileSync(filePath, 'utf-8');
+    // Try to extract classification from markdown content
+    let classification = 'INVESTIGATION';
+    if (markdown.match(/false.?positive/i)) classification = 'FALSE_POSITIVE';
+    else if (markdown.match(/disconnect|dead.?air/i)) classification = 'DISCONNECT';
+    else if (markdown.match(/legitimate|clean/i)) classification = 'LEGITIMATE';
+
+    res.json({
+      data: {
+        markdown,
+        classification,
+        sessionId: filename.replace(/\.md$/, ''),
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
 export async function getMonitoringResults(req: Request, res: Response): Promise<void> {
   let db: BetterSqlite3.Database | null = null;
 
@@ -2227,6 +2358,15 @@ interface BookingDetail {
   disposition: string | null;
 }
 
+interface CallIssue {
+  type: 'duplicate_patient' | 'unfulfilled_booking' | 'session_reset' | 'error_blocked_workflow' | 'patient_create_error';
+  severity: 'critical' | 'warning' | 'info';
+  title: string;
+  description: string;
+  affectedToolCalls: number[];  // tool call indices
+  details?: Record<string, any>;
+}
+
 interface InvestigationResult {
   sessionId: string;
   tenantId: number;  // 1=Ortho (Cloud9), 5=Chord (NexHealth)
@@ -2252,6 +2392,48 @@ interface InvestigationResult {
   childNames: string[];
   phone: string | null;
   bookingDetails: BookingDetail[];
+  flowiseEnrichment?: FlowiseEnrichmentSummary;
+  flowiseTurns?: Array<{
+    turnIndex: number;
+    role: string;
+    toolTimings: Array<{ tool: string; durationMs: number }>;
+    hasLoopIndicator: boolean;
+    errors: string[];
+    stepCount: number;
+  }>;
+  slotAnalysis?: {
+    verdict: 'HALLUCINATION_DETECTED' | 'CLEAN';
+    slotRetrievals: Array<{
+      toolCallIndex: number;
+      action: string;
+      slotsReturned: number;
+      dates: string[];
+      operatories: string[];
+    }>;
+    bookingAttempts: Array<{
+      toolCallIndex: number;
+      childName: string;
+      startTime: string;
+      operatory: string;
+      date: string;
+      success: boolean;
+      error: string | null;
+      matched: boolean;
+    }>;
+    hallucinations: Array<{
+      toolCallIndex: number;
+      childName: string;
+      startTime: string;
+      operatory: string;
+      date: string;
+      error: string | null;
+      reason: string;
+    }>;
+    uniqueDatesReturned: string[];
+    uniqueOperatoriesReturned: string[];
+    hasSlotHallucinations: boolean;
+  };
+  callIssues?: CallIssue[];
 }
 
 /** Extract detailed booking information from tool outputs, PAYLOAD, and prod_test_records */
@@ -2459,6 +2641,342 @@ function extractBookingDetails(
  * Shared investigation logic used by both investigateSession and getInvestigationReport.
  * Returns null if session not found.
  */
+/** Run slot-level hallucination analysis on already-parsed tool calls. */
+function runSlotAnalysis(
+  toolCalls: InvestigationToolCall[],
+  toolNames: ReturnType<typeof getToolNamesForConfig>,
+): InvestigationResult['slotAnalysis'] | undefined {
+  // Collect slots from all slot retrieval calls
+  const allValidSlots: Array<{ startTime: string; operatoryId: string; date: string; normalizedTime: string }> = [];
+  const slotRetrievals: NonNullable<InvestigationResult['slotAnalysis']>['slotRetrievals'] = [];
+  const bookingAttempts: NonNullable<InvestigationResult['slotAnalysis']>['bookingAttempts'] = [];
+
+  for (const tc of toolCalls) {
+    if (!toolNames.schedulingTools.includes(tc.name)) continue;
+
+    // Slot retrieval
+    if (tc.action === 'slots' || tc.action === 'grouped_slots') {
+      const slots = extractSlotsFromToolOutput(tc.output);
+      allValidSlots.push(...slots);
+
+      const dates = [...new Set(slots.map(s => s.date))].sort();
+      const operatories = [...new Set(slots.map(s => s.operatoryId).filter(Boolean))].sort();
+
+      slotRetrievals.push({
+        toolCallIndex: tc.index, action: tc.action,
+        slotsReturned: slots.length, dates, operatories,
+      });
+    }
+
+    // Booking attempts
+    if (tc.action === 'book_child' || tc.action === 'book') {
+      const outputStr = tc.rawOutput || JSON.stringify(tc.output);
+      const hasOutputError = outputStr.includes('"success":false') || outputStr.includes('"success": false') || outputStr.includes('_debug_error');
+      const isError = tc.isError || hasOutputError;
+      const success = !isError && (tc.output?.success !== false);
+
+      let error: string | null = null;
+      if (isError) {
+        error = tc.output?._debug_error || tc.output?.message || tc.output?.error || tc.statusMessage || tc.rawOutput || 'Unknown error';
+        if (typeof error === 'object') error = JSON.stringify(error);
+        if (error && error.length > 120) error = error.substring(0, 117) + '...';
+      }
+
+      const attempts = extractBookingAttemptsFromToolInput(tc.input);
+      for (const attempt of attempts) {
+        const attemptDate = attempt.date || extractDateFromSlotTime(attempt.startTime) || '';
+        const attemptNormTime = attempt.time || normalizeTimeForComparison(attempt.startTime);
+
+        // Comprehensive match: check date + time + operatory against all returned slots
+        const matched = allValidSlots.some(vs => {
+          // Exact raw startTime match
+          if (vs.startTime === attempt.startTime && vs.operatoryId === attempt.operatoryId) return true;
+          // Normalized date + time + operatory match (handles different formats)
+          const dateMatch = vs.date === attemptDate;
+          const timeMatch = vs.normalizedTime === attemptNormTime;
+          const opMatch = vs.operatoryId === attempt.operatoryId;
+          if (dateMatch && timeMatch && opMatch) return true;
+          return false;
+        });
+
+        bookingAttempts.push({
+          toolCallIndex: tc.index,
+          childName: attempt.childName, startTime: attempt.startTime || `${attemptDate} ${attemptNormTime}`,
+          operatory: attempt.operatoryId, date: attemptDate || 'unknown',
+          success, error, matched,
+        });
+      }
+    }
+  }
+
+  // If no booking attempts, skip analysis
+  if (bookingAttempts.length === 0) return undefined;
+
+  // Identify hallucinations — check each unmatched booking against all available data
+  const hallucinations: NonNullable<InvestigationResult['slotAnalysis']>['hallucinations'] = [];
+  const uniqueDatesReturned = [...new Set(allValidSlots.map(s => s.date))].sort();
+  const uniqueOperatoriesReturned = [...new Set(allValidSlots.map(s => s.operatoryId).filter(Boolean))].sort();
+  const uniqueTimesReturned = [...new Set(allValidSlots.map(s => s.normalizedTime).filter(Boolean))].sort();
+
+  for (const attempt of bookingAttempts) {
+    if (!attempt.matched) {
+      const reasons: string[] = [];
+      const attemptNormTime = normalizeTimeForComparison(attempt.startTime);
+
+      // Check each dimension of the booking data
+      const dateAvailable = attempt.date && attempt.date !== 'unknown' && uniqueDatesReturned.includes(attempt.date);
+      const opAvailable = attempt.operatory && uniqueOperatoriesReturned.includes(attempt.operatory);
+      const timeAvailable = attemptNormTime && uniqueTimesReturned.includes(attemptNormTime);
+
+      if (attempt.date && attempt.date !== 'unknown' && !dateAvailable) {
+        reasons.push(`Date ${attempt.date} never returned by any slot retrieval (available: ${uniqueDatesReturned.join(', ') || 'none'})`);
+      }
+      if (attempt.operatory && !opAvailable) {
+        reasons.push(`Operatory ${attempt.operatory} never returned (available: ${uniqueOperatoriesReturned.join(', ') || 'none'})`);
+      }
+      if (attemptNormTime && dateAvailable && opAvailable && !timeAvailable) {
+        reasons.push(`Time ${attemptNormTime} not available on ${attempt.date} for operatory ${attempt.operatory}`);
+      }
+      if (reasons.length === 0) {
+        // Date, operatory, and time may each exist individually but the exact combination wasn't returned
+        reasons.push('Exact date+time+operatory combination not found in any slot retrieval response');
+      }
+
+      hallucinations.push({
+        toolCallIndex: attempt.toolCallIndex,
+        childName: attempt.childName, startTime: attempt.startTime,
+        operatory: attempt.operatory, date: attempt.date,
+        error: attempt.error, reason: reasons.join('; '),
+      });
+    }
+  }
+
+  return {
+    verdict: hallucinations.length > 0 ? 'HALLUCINATION_DETECTED' : 'CLEAN',
+    slotRetrievals, bookingAttempts, hallucinations,
+    uniqueDatesReturned, uniqueOperatoriesReturned,
+    hasSlotHallucinations: hallucinations.length > 0,
+  };
+}
+
+/**
+ * Analyze tool calls for call-level issues that block task completion
+ * (duplicate patient creation, unfulfilled booking intent, session resets, error-blocked workflows)
+ */
+function runCallIssueAnalysis(
+  toolCalls: InvestigationToolCall[],
+  toolNames: ToolNames,
+  traces: any[],
+  db: BetterSqlite3.Database,
+  sessionId: string,
+): CallIssue[] {
+  const issues: CallIssue[] = [];
+
+  // ── A. Duplicate patient creation ──
+  const createCalls = toolCalls.filter(tc =>
+    toolNames.patientTools.includes(tc.name) && tc.action === 'create'
+  );
+  if (createCalls.length > 0) {
+    // Check for "already exists" errors in output or statusMessage
+    const duplicateErrors = createCalls.filter(tc => {
+      const outputStr = tc.rawOutput || JSON.stringify(tc.output || {});
+      const msgStr = tc.statusMessage || '';
+      const combined = outputStr + ' ' + msgStr;
+      return /already exists/i.test(combined) ||
+        /A patient with that information already exists/i.test(combined) ||
+        /duplicate/i.test(combined);
+    });
+    if (duplicateErrors.length > 0) {
+      issues.push({
+        type: 'duplicate_patient',
+        severity: 'warning',
+        title: 'Duplicate Patient Creation Attempted',
+        description: `${duplicateErrors.length} of ${createCalls.length} patient create call(s) returned "already exists" errors. The LLM attempted to create a patient that was already in the system.`,
+        affectedToolCalls: duplicateErrors.map(tc => tc.index),
+        details: {
+          totalCreateCalls: createCalls.length,
+          duplicateErrorCount: duplicateErrors.length,
+          createResults: createCalls.map(tc => ({
+            index: tc.index,
+            firstName: tc.input?.firstName || tc.input?.patientFirstName || 'unknown',
+            lastName: tc.input?.lastName || tc.input?.patientLastName || 'unknown',
+            isError: tc.isError,
+            errorMessage: tc.rawOutput || (tc.isError ? tc.statusMessage : null),
+          })),
+        },
+      });
+    }
+
+    // Also check for multiple successful creates with same name
+    const successfulCreates = createCalls.filter(tc => !tc.isError);
+    if (successfulCreates.length > 1) {
+      const nameMap = new Map<string, InvestigationToolCall[]>();
+      for (const tc of successfulCreates) {
+        const name = `${(tc.input?.firstName || tc.input?.patientFirstName || '').toLowerCase()} ${(tc.input?.lastName || tc.input?.patientLastName || '').toLowerCase()}`.trim();
+        if (name) {
+          if (!nameMap.has(name)) nameMap.set(name, []);
+          nameMap.get(name)!.push(tc);
+        }
+      }
+      for (const [name, calls] of nameMap) {
+        if (calls.length > 1) {
+          issues.push({
+            type: 'duplicate_patient',
+            severity: 'warning',
+            title: `Same Patient Created ${calls.length} Times`,
+            description: `Patient "${name}" was successfully created ${calls.length} times across different turns, likely due to session reset causing the LLM to lose awareness of prior actions.`,
+            affectedToolCalls: calls.map(tc => tc.index),
+          });
+        }
+      }
+    }
+  }
+
+  // ── B. Unfulfilled booking intent ──
+  const slotsRetrieved = toolCalls.some(tc =>
+    toolNames.schedulingTools.includes(tc.name) &&
+    (tc.action === 'slots' || tc.action === 'grouped_slots')
+  );
+  const bookingAttempted = toolCalls.some(tc =>
+    toolNames.schedulingTools.includes(tc.name) &&
+    (tc.action === 'book_child' || tc.action === 'book')
+  );
+  if (slotsRetrieved && !bookingAttempted) {
+    // Count slots returned
+    const slotCalls = toolCalls.filter(tc =>
+      toolNames.schedulingTools.includes(tc.name) &&
+      (tc.action === 'slots' || tc.action === 'grouped_slots') &&
+      !tc.isError
+    );
+    let totalSlots = 0;
+    for (const sc of slotCalls) {
+      // Chord returns slots as a direct array; Ortho nests under .slots/.grouped_slots
+      if (Array.isArray(sc.output)) {
+        totalSlots += sc.output.length;
+      } else {
+        const slots = sc.output?.slots || sc.output?.grouped_slots || sc.output?.available_slots;
+        if (Array.isArray(slots)) totalSlots += slots.length;
+        else if (typeof sc.output?.count === 'number') totalSlots += sc.output.count;
+        else if (typeof slots === 'object' && slots !== null) {
+          // grouped_slots returns object with date keys
+          for (const dateSlots of Object.values(slots)) {
+            if (Array.isArray(dateSlots)) totalSlots += (dateSlots as any[]).length;
+          }
+        }
+      }
+    }
+
+    // Determine if an error blocked the booking
+    let reason = '';
+    const errorAfterSlots = toolCalls.filter(tc => tc.isError && tc.index > slotCalls[0]?.index);
+    if (errorAfterSlots.length > 0) {
+      const blockingError = errorAfterSlots[0];
+      reason = `An error on tool call #${blockingError.index} (${blockingError.name}→${blockingError.action}) may have prevented the booking step from executing.`;
+    } else {
+      reason = 'No blocking error detected — the LLM may have lost context or the call ended before booking.';
+    }
+
+    issues.push({
+      type: 'unfulfilled_booking',
+      severity: 'critical',
+      title: 'Slots Retrieved but Booking Never Attempted',
+      description: `Available slots were retrieved (${totalSlots > 0 ? totalSlots + ' slots found' : 'slots returned'}) but no booking tool call (book/book_child) was ever made. ${reason}`,
+      affectedToolCalls: slotCalls.map(tc => tc.index),
+      details: {
+        slotsRetrievedCount: totalSlots,
+        slotCallIndices: slotCalls.map(tc => tc.index),
+        blockingErrors: errorAfterSlots.map(tc => ({
+          index: tc.index,
+          name: tc.name,
+          action: tc.action,
+          error: tc.rawOutput || tc.statusMessage,
+        })),
+      },
+    });
+  }
+
+  // ── C. Session reset detection ──
+  if (traces.length > 1) {
+    try {
+      const sessionResetRow = db.prepare(`
+        SELECT COUNT(DISTINCT original_session_id) as uniqueIds, COUNT(*) as traceCount
+        FROM production_traces
+        WHERE session_id = ? AND original_session_id IS NOT NULL AND original_session_id != ''
+      `).get(sessionId) as any;
+
+      if (sessionResetRow && sessionResetRow.uniqueIds > 1 && sessionResetRow.uniqueIds === sessionResetRow.traceCount) {
+        issues.push({
+          type: 'session_reset',
+          severity: 'critical',
+          title: 'Per-Turn Session Reset Detected',
+          description: `${sessionResetRow.traceCount} traces with ${sessionResetRow.uniqueIds} unique Flowise session IDs — every turn created a new session. The LLM loses all awareness of prior tool actions between turns, leading to duplicate operations and incomplete workflows.`,
+          affectedToolCalls: [],
+          details: {
+            uniqueIds: sessionResetRow.uniqueIds,
+            traceCount: sessionResetRow.traceCount,
+          },
+        });
+      }
+    } catch {
+      // original_session_id column might not exist — skip
+    }
+  }
+
+  // ── D. Error-blocked workflow ──
+  // Check if a tool error prevented subsequent workflow actions
+  const workflowTools = toolCalls.filter(tc =>
+    !toolNames.dateTimeTools.includes(tc.name) &&
+    !toolNames.escalationTools.includes(tc.name) &&
+    tc.action !== 'getDateTime' && tc.action !== 'escalation'
+  );
+
+  for (const tc of workflowTools) {
+    if (!tc.isError) continue;
+
+    // Check what should have followed
+    const followUpMissing: string[] = [];
+    if (tc.action === 'create') {
+      // After a create error, check if book_child was never called
+      if (!bookingAttempted && slotsRetrieved) {
+        followUpMissing.push('book_child');
+      }
+    } else if (tc.action === 'lookup') {
+      // After a lookup error, check if create or book was never called
+      const hasCreate = toolCalls.some(t => t.action === 'create' && t.index > tc.index);
+      if (!hasCreate && !bookingAttempted) {
+        followUpMissing.push('create or book_child');
+      }
+    }
+
+    if (followUpMissing.length > 0) {
+      // Verify this error was the last meaningful tool call (workflow died here)
+      const laterWorkflowCalls = workflowTools.filter(t => t.index > tc.index && !t.isError);
+      const errorMessage = tc.rawOutput || tc.statusMessage || 'unknown error';
+      const shortError = errorMessage.length > 100 ? errorMessage.substring(0, 97) + '...' : errorMessage;
+
+      issues.push({
+        type: 'error_blocked_workflow',
+        severity: laterWorkflowCalls.length === 0 ? 'critical' : 'warning',
+        title: `Error on ${tc.action} Blocked ${followUpMissing.join('/')}`,
+        description: `Tool call #${tc.index} (${tc.name}→${tc.action}) errored: "${shortError}". The expected follow-up action (${followUpMissing.join('/')}) was never called.${laterWorkflowCalls.length === 0 ? ' This was the last meaningful tool call in the session — the workflow died at this point.' : ''}`,
+        affectedToolCalls: [tc.index],
+        details: {
+          erroredCall: {
+            index: tc.index,
+            name: tc.name,
+            action: tc.action,
+            error: errorMessage,
+          },
+          missingFollowUp: followUpMissing,
+          wasLastWorkflowCall: laterWorkflowCalls.length === 0,
+        },
+      });
+    }
+  }
+
+  return issues;
+}
+
 function runInvestigation(sessionId: string, db: BetterSqlite3.Database): InvestigationResult | null {
   const session = db.prepare(`
     SELECT session_id, langfuse_config_id, has_successful_booking, has_transfer, has_order,
@@ -2579,6 +3097,52 @@ function runInvestigation(sessionId: string, db: BetterSqlite3.Database): Invest
   // ── Build booking details from tool outputs, PAYLOAD, and prod_test_records ──
   const bookingDetails = extractBookingDetails(bookingToolCalls, payloadFindings, db, sessionId, tenantId);
 
+  // Flowise enrichment (if available)
+  let flowiseData: FlowiseEnrichmentSummary | undefined;
+  let flowiseTurnsData: InvestigationResult['flowiseTurns'];
+  try {
+    const isEnriched = flowiseEnrichment.isSessionEnriched(db, sessionId);
+    if (isEnriched) {
+      const toolTimings = flowiseEnrichment.getSessionToolTimings(db, sessionId);
+      const errors = flowiseEnrichment.getSessionFlowiseErrors(db, sessionId);
+      const reasoning = flowiseEnrichment.getSessionReasoning(db, sessionId);
+      const sessionRow = db.prepare(
+        'SELECT flowise_enriched_at FROM production_sessions WHERE session_id = ?'
+      ).get(sessionId) as any;
+
+      flowiseData = {
+        isEnriched: true,
+        enrichedAt: sessionRow?.flowise_enriched_at || undefined,
+        hasLoops: reasoning.some(t => t.hasLoopIndicator),
+        totalToolCalls: reasoning.reduce((sum, t) => sum + t.toolTimings.length, 0),
+        flowiseErrors: errors.flatMap(e => e.errors),
+        toolTimings,
+      };
+
+      // Per-turn detail for the markdown report
+      flowiseTurnsData = reasoning
+        .filter(t => t.role === 'apiMessage' && (t.toolTimings.length > 0 || t.hasLoopIndicator || t.errors.length > 0))
+        .map(t => ({
+          turnIndex: t.turnIndex,
+          role: t.role,
+          toolTimings: t.toolTimings,
+          hasLoopIndicator: t.hasLoopIndicator,
+          errors: t.errors,
+          stepCount: t.stepCount,
+        }));
+    }
+  } catch {
+    // Non-fatal
+  }
+
+  // Slot-level hallucination analysis (only if there are booking tool calls)
+  const slotAnalysis = bookingToolCalls.length > 0
+    ? runSlotAnalysis(toolCalls, toolNames)
+    : undefined;
+
+  // Call-level issue detection (duplicate patients, unfulfilled bookings, session resets, error-blocked workflows)
+  const callIssues = runCallIssueAnalysis(toolCalls, toolNames, traces, db, sessionId);
+
   return {
     sessionId,
     tenantId,
@@ -2594,6 +3158,10 @@ function runInvestigation(sessionId: string, db: BetterSqlite3.Database): Invest
     childNames: childNamesList,
     phone: phoneMatch ? phoneMatch[0] : null,
     bookingDetails,
+    flowiseEnrichment: flowiseData,
+    flowiseTurns: flowiseTurnsData,
+    slotAnalysis,
+    callIssues: callIssues.length > 0 ? callIssues : undefined,
   };
 }
 
@@ -2802,7 +3370,7 @@ function getToolCallRequestDetail(tc: InvestigationToolCall): string {
   }
 
   if (tc.action === 'escalation') {
-    return (tc.input.reason || tc.input.transferReason || tc.input.escalationIntent || '').substring(0, 30);
+    return tc.input.reason || tc.input.transferReason || tc.input.escalationIntent || '';
   }
 
   if (tc.action === 'lookup') {
@@ -2810,19 +3378,19 @@ function getToolCallRequestDetail(tc: InvestigationToolCall): string {
       const ph = String(tc.input.phoneNumber);
       return `ph: ***${ph.slice(-4)}`;
     }
-    if (tc.input.filter) return String(tc.input.filter).substring(0, 20);
+    if (tc.input.filter) return String(tc.input.filter);
     return '';
   }
 
   if (tc.action === 'cancel') {
     const id = tc.input.appointmentGUID || tc.input.appointmentId || '';
-    return id ? `appt ${String(id).substring(0, 8)}...` : '';
+    return id ? `appt ${String(id)}` : '';
   }
 
   if (tc.action === 'get_existing' || tc.action === 'reschedule') {
     const parts: string[] = [];
     const id = tc.input.appointmentGUID || tc.input.appointmentId || tc.input.patientGUID || '';
-    if (id) parts.push(`appt ${String(id).substring(0, 8)}...`);
+    if (id) parts.push(`appt ${String(id)}`);
     if (tc.action === 'reschedule' && tc.input.newStartTime) {
       const date = shortenDate(tc.input.newStartTime);
       const time = formatShortTime(tc.input.newStartTime);
@@ -2834,7 +3402,7 @@ function getToolCallRequestDetail(tc: InvestigationToolCall): string {
   // appointments action — show patient ID if present
   if (tc.action === 'appointments') {
     const id = tc.input.patientId || tc.input.patientGUID || '';
-    return id ? `patient ${String(id).substring(0, 10)}` : '';
+    return id ? `patient ${String(id)}` : '';
   }
 
   // clinic_info, CurrentDateTime — no context needed
@@ -2846,8 +3414,8 @@ function detectRecommendedFixes(r: InvestigationResult): RecommendedFix[] {
   const errorToolCalls = r.toolCalls.filter(tc => tc.isError);
   const isOrtho = r.tenantId === 1;
 
-  // Early exit: CLEAN with no errors → no fixes needed
-  if (r.classification === 'CLEAN' && errorToolCalls.length === 0) return fixes;
+  // Early exit: CLEAN with no errors and no call issues → no fixes needed
+  if (r.classification === 'CLEAN' && errorToolCalls.length === 0 && (!r.callIssues || r.callIssues.length === 0)) return fixes;
 
   // Rule 1: Hallucinated booking — LLM confirmed booking without calling book_child
   if (r.classification === 'FALSE_POSITIVE' && r.bookingToolCallCount === 0) {
@@ -2992,6 +3560,56 @@ function detectRecommendedFixes(r: InvestigationResult): RecommendedFix[] {
     });
   }
 
+  // Rule 9: Slot hallucination — booking used slots not returned by any tool
+  if (r.slotAnalysis?.hasSlotHallucinations) {
+    const count = r.slotAnalysis.hallucinations.length;
+    fixes.push({
+      severity: 'Critical',
+      target: 'system_prompt',
+      issue: `${count} booking attempt(s) used slot(s) not returned by any prior slots/grouped_slots call`,
+      recommendation: 'Strengthen anti-hallucination: require re-calling slots before offering alternatives. Verify Rule A28 is deployed.',
+    });
+    fixes.push({
+      severity: 'Critical',
+      target: 'scheduling_tool',
+      issue: 'No server-side validation rejects bookings for slots never returned by the tool',
+      recommendation: 'Deploy slotToken verification (v93): require a crypto hash from the slots response in each book_child call.',
+    });
+  }
+
+  // Rule 10: Duplicate patient creation (from call issues)
+  const dupPatientIssues = r.callIssues?.filter(i => i.type === 'duplicate_patient') || [];
+  if (dupPatientIssues.length > 0) {
+    fixes.push({
+      severity: 'Warning',
+      target: 'system_prompt',
+      issue: 'LLM created or attempted to create the same patient multiple times across turns',
+      recommendation: 'Add instruction: "Before calling create, check if you already created a patient in a prior turn by reviewing tool call history. Never create a patient who was already created."',
+    });
+  }
+
+  // Rule 11: Session reset (from call issues)
+  const sessionResetIssues = r.callIssues?.filter(i => i.type === 'session_reset') || [];
+  if (sessionResetIssues.length > 0) {
+    fixes.push({
+      severity: 'Critical',
+      target: 'nodered_flow',
+      issue: `Per-turn session reset detected: ${sessionResetIssues[0].details?.uniqueIds} unique Flowise session IDs across ${sessionResetIssues[0].details?.traceCount} traces`,
+      recommendation: 'Platform issue: The telephony platform (K8) is creating a new Flowise session for each utterance. This causes the LLM to lose awareness of prior tool actions between turns, leading to duplicate operations.',
+    });
+  }
+
+  // Rule 12: Unfulfilled booking intent (from call issues)
+  const unfulfilledIssues = r.callIssues?.filter(i => i.type === 'unfulfilled_booking') || [];
+  if (unfulfilledIssues.length > 0) {
+    fixes.push({
+      severity: 'Critical',
+      target: 'system_prompt',
+      issue: 'Available slots were retrieved but booking was never attempted',
+      recommendation: 'Investigate why the booking step was skipped. If blocked by an error, address the upstream error. The caller may believe they are booked when they are not.',
+    });
+  }
+
   return fixes;
 }
 
@@ -3080,7 +3698,7 @@ function formatInvestigationMarkdown(r: InvestigationResult): string {
     }
   }
 
-  // ── Dynamic title based on classification ──
+  // ── Dynamic title based on classification and call issues ──
   const TITLE_MAP: Record<string, string> = {
     CLEAN: 'Session Analysis Report — No Issues Detected',
     LEGITIMATE: 'Session Analysis Report — Legitimate Booking Verified',
@@ -3088,7 +3706,14 @@ function formatInvestigationMarkdown(r: InvestigationResult): string {
     FALSE_POSITIVE_WITH_TOOL: 'Suspicious Booking Investigation Report',
     INCONCLUSIVE: 'Session Analysis Report — Manual Review Required',
   };
-  lines.push(`# ${TITLE_MAP[r.classification] || 'Session Analysis Report'}`);
+  let title = TITLE_MAP[r.classification] || 'Session Analysis Report';
+  if (r.classification === 'CLEAN' && r.callIssues && r.callIssues.length > 0) {
+    const criticalCount = r.callIssues.filter(i => i.severity === 'critical').length;
+    title = criticalCount > 0
+      ? 'Session Analysis Report — Call Issues Detected'
+      : 'Session Analysis Report — Warnings Detected';
+  }
+  lines.push(`# ${title}`);
   lines.push('');
 
   // ── Metadata — all dynamic ──
@@ -3100,6 +3725,10 @@ function formatInvestigationMarkdown(r: InvestigationResult): string {
   if (r.childNames.length > 0) metaLines.push(`**Children:** ${r.childNames.join(', ')}`);
   if (patientInfoList.length > 0) metaLines.push(`**Patient(s):** ${patientInfoList.join('; ')}`);
   if (locationStr) metaLines.push(`**Location:** ${locationStr}`);
+  if (r.flowiseEnrichment?.isEnriched) {
+    const fBadge = r.flowiseEnrichment.hasLoops ? 'Flowise Data (Loop Detected)' : 'Flowise Data Available';
+    metaLines.push(`**Flowise:** ${fBadge}`);
+  }
   lines.push(metaLines.join('  \n'));
   lines.push('');
 
@@ -3201,6 +3830,11 @@ function formatInvestigationMarkdown(r: InvestigationResult): string {
     });
     lines.push(`This session contains **${r.bookingToolCallCount} booking tool call(s)** and PAYLOAD appointment IDs ${ids || 'N/A'}. The booking appears genuine.`);
     if (bookResults.length > 0) lines.push(`\nBooking results: ${bookResults.join('; ')}`);
+    if (r.slotAnalysis?.hasSlotHallucinations) {
+      const hCount = r.slotAnalysis.hallucinations.length;
+      const totalAttempts = r.slotAnalysis.bookingAttempts.length;
+      lines.push(`\n**However, ${hCount} of ${totalAttempts} booking attempt(s) used hallucinated slots** — slots not returned by any prior scheduling tool call. See Step 6 below.`);
+    }
   } else if (r.classification === 'CLEAN') {
     const actualTools = r.toolCalls.map(tc => tc.action !== tc.name ? tc.action : tc.name);
     const cleanDisposition = extractDisposition(r.payloadFindings, r.tenantId);
@@ -3228,6 +3862,75 @@ function formatInvestigationMarkdown(r: InvestigationResult): string {
     lines.push('Could not conclusively classify this session. Manual review recommended.');
   }
   lines.push('');
+
+  // ── Call Issues (if any) ──
+  if (r.callIssues && r.callIssues.length > 0) {
+    const criticalCount = r.callIssues.filter(i => i.severity === 'critical').length;
+    const warningCount = r.callIssues.filter(i => i.severity === 'warning').length;
+    const infoCount = r.callIssues.filter(i => i.severity === 'info').length;
+    const severitySummary = [
+      criticalCount > 0 ? `${criticalCount} critical` : '',
+      warningCount > 0 ? `${warningCount} warning${warningCount > 1 ? 's' : ''}` : '',
+      infoCount > 0 ? `${infoCount} info` : '',
+    ].filter(Boolean).join(', ');
+
+    lines.push('---');
+    lines.push('');
+    lines.push('## Call Issues');
+    lines.push('');
+    lines.push(`> **${r.callIssues.length} issue(s) detected** (${severitySummary})`);
+    lines.push('');
+
+    for (const issue of r.callIssues) {
+      const severityLabel = issue.severity === 'critical' ? '**Critical**' : issue.severity === 'warning' ? 'Warning' : 'Info';
+      lines.push(`### ${issue.title}`);
+      lines.push(`**Severity:** ${severityLabel}`);
+      lines.push(`**Description:** ${issue.description}`);
+      if (issue.affectedToolCalls.length > 0) {
+        lines.push(`**Affected Tool Calls:** ${issue.affectedToolCalls.map(i => `#${i}`).join(', ')}`);
+      }
+      lines.push('');
+
+      // Type-specific detail rendering
+      if (issue.type === 'duplicate_patient' && issue.details?.createResults) {
+        lines.push('| # | Patient Name | Result | Error |');
+        lines.push('|---|-------------|--------|-------|');
+        for (const cr of issue.details.createResults as any[]) {
+          const name = `${cr.firstName} ${cr.lastName}`;
+          const result = cr.isError ? 'ERROR' : 'Success';
+          const error = cr.errorMessage ? escapeTableCell(String(cr.errorMessage).substring(0, 60)) : '—';
+          lines.push(`| #${cr.index} | ${name} | ${result} | ${error} |`);
+        }
+        lines.push('');
+      } else if (issue.type === 'unfulfilled_booking' && issue.details) {
+        const d = issue.details;
+        lines.push(`- **Slots retrieved:** ${d.slotsRetrievedCount || 'unknown count'} (tool calls ${(d.slotCallIndices as number[])?.map((i: number) => `#${i}`).join(', ') || 'N/A'})`);
+        lines.push('- **Booking attempted:** No');
+        if ((d.blockingErrors as any[])?.length > 0) {
+          lines.push('- **Blocking errors:**');
+          for (const err of d.blockingErrors as any[]) {
+            const errMsg = String(err.error || '').substring(0, 80);
+            lines.push(`  - Tool call #${err.index} (${err.name}→${err.action}): ${errMsg}`);
+          }
+        }
+        lines.push('');
+      } else if (issue.type === 'session_reset' && issue.details) {
+        lines.push(`- **Unique session IDs:** ${issue.details.uniqueIds}`);
+        lines.push(`- **Total traces:** ${issue.details.traceCount}`);
+        lines.push(`- **Impact:** Every turn starts a fresh LLM context — the agent cannot remember its own prior actions`);
+        lines.push('');
+      } else if (issue.type === 'error_blocked_workflow' && issue.details) {
+        const d = issue.details;
+        const ec = d.erroredCall as any;
+        lines.push(`- **Failed call:** #${ec.index} (${ec.name}→${ec.action})`);
+        const errStr = String(ec.error || '').substring(0, 100);
+        lines.push(`- **Error:** ${errStr}`);
+        lines.push(`- **Missing follow-up:** ${(d.missingFollowUp as string[]).join(', ')}`);
+        lines.push(`- **Last workflow call:** ${d.wasLastWorkflowCall ? 'Yes — workflow died at this point' : 'No — other tool calls followed'}`);
+        lines.push('');
+      }
+    }
+  }
 
   // ── Step-by-Step Discovery ──
   lines.push('---');
@@ -3360,6 +4063,71 @@ function formatInvestigationMarkdown(r: InvestigationResult): string {
     lines.push('');
   }
 
+  // ── Step 5 & 6: Slot Hallucination Analysis (if slotAnalysis exists) ──
+  if (r.slotAnalysis) {
+    const sa = r.slotAnalysis;
+
+    // Step 5: Slot Retrieval Summary
+    lines.push('### Step 5: Slot Retrieval Summary');
+    lines.push('');
+    if (sa.slotRetrievals.length > 0) {
+      lines.push(`Found ${sa.slotRetrievals.length} slot retrieval call(s) returning slots across ${sa.uniqueDatesReturned.length} date(s) and ${sa.uniqueOperatoriesReturned.length} operatory/operatories.`);
+      lines.push('');
+      lines.push('| # | Tool Call | Action | Slots Returned | Date Range | Operatories |');
+      lines.push('|---|-----------|--------|----------------|------------|-------------|');
+      for (let i = 0; i < sa.slotRetrievals.length; i++) {
+        const sr = sa.slotRetrievals[i];
+        const dateRange = sr.dates.length > 0 ? `${sr.dates[0]} — ${sr.dates[sr.dates.length - 1]}` : '—';
+        const opCount = sr.operatories.length > 0 ? `${sr.operatories.length} (${sr.operatories.slice(0, 3).map(o => `\`${o.substring(0, 8)}\``).join(', ')}${sr.operatories.length > 3 ? '…' : ''})` : '—';
+        lines.push(`| ${i + 1} | #${sr.toolCallIndex} | \`${sr.action}\` | ${sr.slotsReturned} | ${dateRange} | ${opCount} |`);
+      }
+    } else {
+      lines.push('No slot retrieval calls found — booking was attempted without querying available slots.');
+    }
+    lines.push('');
+
+    // Step 6: Booking vs Slot Verification
+    if (sa.bookingAttempts.length > 0) {
+      const hallucinatedCount = sa.hallucinations.length;
+      const validCount = sa.bookingAttempts.length - hallucinatedCount;
+      lines.push('### Step 6: Booking vs Slot Verification');
+      lines.push('');
+      lines.push(`Checked ${sa.bookingAttempts.length} booking attempt(s) against ${sa.slotRetrievals.reduce((sum, sr) => sum + sr.slotsReturned, 0)} returned slots: **${validCount} matched**, **${hallucinatedCount} hallucinated**.`);
+      lines.push('');
+      lines.push('| # | Tool Call | Child | Requested Slot | Operatory | Result | Match |');
+      lines.push('|---|-----------|-------|----------------|-----------|--------|-------|');
+      for (let i = 0; i < sa.bookingAttempts.length; i++) {
+        const ba = sa.bookingAttempts[i];
+        const normTime = normalizeTimeForComparison(ba.startTime);
+        const slotDisplay = `${ba.date} ${normTime}`;
+        const opDisplay = ba.operatory ? `\`${ba.operatory.substring(0, 8)}…\`` : '—';
+        const resultStr = ba.success ? 'Success' : `Failed: ${ba.error || 'unknown'}`;
+        const matchStr = ba.matched ? 'VALID' : '**HALLUCINATED**';
+        lines.push(`| ${i + 1} | #${ba.toolCallIndex} | ${ba.childName} | ${slotDisplay} | ${opDisplay} | ${escapeTableCell(resultStr)} | ${matchStr} |`);
+      }
+      lines.push('');
+
+      // Hallucination Analysis detail
+      if (sa.hasSlotHallucinations) {
+        lines.push('### Hallucination Analysis');
+        lines.push('');
+        lines.push(`> **${hallucinatedCount} booking attempt(s)** used slots not found in any prior slot retrieval response.`);
+        lines.push('');
+        for (let i = 0; i < sa.hallucinations.length; i++) {
+          const h = sa.hallucinations[i];
+          const normTime = normalizeTimeForComparison(h.startTime);
+          lines.push(`**Hallucination #${i + 1}** — ${h.childName} (Tool Call #${h.toolCallIndex})`);
+          lines.push(`- **Requested:** ${h.date} ${normTime}, operatory \`${h.operatory || 'none'}\``);
+          lines.push(`- **Available dates:** ${sa.uniqueDatesReturned.join(', ') || 'none'}`);
+          lines.push(`- **Available operatories:** ${sa.uniqueOperatoriesReturned.length} unique`);
+          lines.push(`- **Reason:** ${h.reason}`);
+          if (h.error) lines.push(`- **Tool error:** ${h.error}`);
+          lines.push('');
+        }
+      }
+    }
+  }
+
   // ── Call Flow Diagram — fully dynamic from tool calls ──
   lines.push('---');
   lines.push('');
@@ -3465,6 +4233,11 @@ function formatInvestigationMarkdown(r: InvestigationResult): string {
     if (r.session.hasTransfer) {
       lines.push(`| **Transfer** | Call was also transferred after booking |`);
     }
+    if (r.slotAnalysis?.hasSlotHallucinations) {
+      const hCount = r.slotAnalysis.hallucinations.length;
+      const totalAttempts = r.slotAnalysis.bookingAttempts.length;
+      lines.push(`| **Slot Hallucinations** | **${hCount} of ${totalAttempts}** booking attempt(s) used slots not returned by any scheduling tool call |`);
+    }
     lines.push(`| **Actual outcome** | Appointment was successfully created |`);
   } else if (r.classification === 'CLEAN') {
     const disposition = extractDisposition(r.payloadFindings, r.tenantId) || null;
@@ -3486,6 +4259,11 @@ function formatInvestigationMarkdown(r: InvestigationResult): string {
     lines.push(`| **Classification** | SUSPICIOUS — Placeholder IDs with tool call |`);
     lines.push(`| **Booking tool calls** | ${r.bookingToolCallCount} |`);
     lines.push(`| **Extracted IDs** | ${r.allExtractedIds.map(id => `\`${id}\``).join(', ')} — all appear to be placeholders |`);
+    if (r.slotAnalysis?.hasSlotHallucinations) {
+      const hCount = r.slotAnalysis.hallucinations.length;
+      const totalAttempts = r.slotAnalysis.bookingAttempts.length;
+      lines.push(`| **Slot Hallucinations** | **${hCount} of ${totalAttempts}** booking attempt(s) used slots not returned by any scheduling tool call |`);
+    }
     lines.push(`| **Actual outcome** | Needs manual verification against booking system |`);
   } else {
     lines.push(`| **Classification** | INCONCLUSIVE |`);
@@ -3494,6 +4272,98 @@ function formatInvestigationMarkdown(r: InvestigationResult): string {
     lines.push(`| **Actual outcome** | Could not determine — manual review needed |`);
   }
   lines.push('');
+
+  // ── Flowise Agent Insights (if enriched) ──
+  if (r.flowiseEnrichment?.isEnriched && r.flowiseTurns && r.flowiseTurns.length > 0) {
+    lines.push('---');
+    lines.push('');
+    lines.push('## Flowise Agent Insights');
+    lines.push('');
+    lines.push('> Data from Flowise chat message API — not available in Langfuse traces.');
+    lines.push('');
+
+    // Summary stats
+    const loopTurns = r.flowiseTurns.filter(t => t.hasLoopIndicator);
+    const errorTurns = r.flowiseTurns.filter(t => t.errors.length > 0);
+    const totalToolCalls = r.flowiseTurns.reduce((sum, t) => sum + t.toolTimings.length, 0);
+
+    lines.push('| Metric | Value |');
+    lines.push('|--------|-------|');
+    lines.push(`| **Turns with tool calls** | ${r.flowiseTurns.length} |`);
+    lines.push(`| **Total tool calls (Flowise)** | ${totalToolCalls || r.flowiseEnrichment.totalToolCalls} |`);
+    if (loopTurns.length > 0) {
+      lines.push(`| **Loop detected** | Yes — ${loopTurns.length} turn(s) with 3+ consecutive identical tool calls |`);
+    }
+    if (errorTurns.length > 0) {
+      lines.push(`| **Flowise-internal errors** | ${errorTurns.reduce((sum, t) => sum + t.errors.length, 0)} error(s) in ${errorTurns.length} turn(s) |`);
+    }
+    lines.push('');
+
+    // Per-turn tool grouping table — the key unique data
+    lines.push('### Per-Turn Tool Grouping');
+    lines.push('');
+    lines.push('Flowise groups tool calls by the LLM turn that triggered them. Langfuse stores observations flat without turn boundaries.');
+    lines.push('');
+    lines.push('| Turn | Tools Called (in order) | Flags |');
+    lines.push('|------|----------------------|-------|');
+    for (const turn of r.flowiseTurns) {
+      const toolList = turn.toolTimings.map(t => `\`${t.tool}\``).join(' → ');
+      const flags: string[] = [];
+      if (turn.hasLoopIndicator) flags.push('**LOOP**');
+      if (turn.errors.length > 0) flags.push(`**${turn.errors.length} error(s)**`);
+      if (turn.toolTimings.length >= 5) flags.push(`${turn.toolTimings.length} calls`);
+      lines.push(`| ${turn.turnIndex} | ${toolList || '—'} | ${flags.join(', ') || '—'} |`);
+    }
+    lines.push('');
+
+    // Per-tool timing averages (if available)
+    const timingEntries = Object.entries(r.flowiseEnrichment.toolTimings);
+    if (timingEntries.length > 0) {
+      lines.push('### Per-Tool Timing (Flowise)');
+      lines.push('');
+      lines.push('Average execution time per tool as measured by Flowise (not available in Langfuse):');
+      lines.push('');
+      lines.push('| Tool | Avg Duration |');
+      lines.push('|------|-------------|');
+      for (const [tool, avgMs] of timingEntries) {
+        lines.push(`| \`${tool}\` | ${avgMs}ms |`);
+      }
+      lines.push('');
+    }
+
+    // Loop details (if any)
+    if (loopTurns.length > 0) {
+      lines.push('### Loop Detection Details');
+      lines.push('');
+      lines.push('Sessions where the agent called the same tool 3+ times consecutively in a single turn:');
+      lines.push('');
+      for (const turn of loopTurns) {
+        const toolSequence = turn.toolTimings.map(t => t.tool);
+        lines.push(`**Turn ${turn.turnIndex}:** ${turn.stepCount} consecutive identical calls`);
+        lines.push(`- Sequence: ${toolSequence.map(t => `\`${t}\``).join(' → ')}`);
+        // Identify the looped tool
+        for (let i = 2; i < toolSequence.length; i++) {
+          if (toolSequence[i] === toolSequence[i-1] && toolSequence[i-1] === toolSequence[i-2]) {
+            lines.push(`- Looped tool: \`${toolSequence[i]}\``);
+            break;
+          }
+        }
+        lines.push('');
+      }
+    }
+
+    // Flowise-internal errors (if any)
+    if (r.flowiseEnrichment.flowiseErrors.length > 0) {
+      lines.push('### Flowise-Internal Errors');
+      lines.push('');
+      lines.push('Errors captured by Flowise but **not visible in Langfuse** traces:');
+      lines.push('');
+      for (const err of r.flowiseEnrichment.flowiseErrors) {
+        lines.push(`- ${err}`);
+      }
+      lines.push('');
+    }
+  }
 
   // ── Recommended Fixes (artifact-targeted) ──
   const fixes = detectRecommendedFixes(r);
@@ -3924,6 +4794,630 @@ export const callLookup = async (req: Request, res: Response): Promise<void> => 
     if (result.formattedSessionId) sids.add(result.formattedSessionId);
     if (result.langfuseSessionId) sids.add(result.langfuseSessionId);
     result.allSessionIds = [...sids];
+
+    db.close();
+    res.json({ data: result });
+  } catch (err: any) {
+    db.close();
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// ── Hallucination Audit ──────────────────────────────────────────────────────
+
+/** Extract a normalized YYYY-MM-DD from various datetime formats. */
+function extractDateFromSlotTime(timeStr: string): string | null {
+  if (!timeStr) return null;
+  // ISO: "2026-04-01T07:45:00"
+  const isoMatch = timeStr.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (isoMatch) return isoMatch[1];
+  // US: "4/1/2026 7:45:00 AM"
+  const usMatch = timeStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (usMatch) {
+    return `${usMatch[3]}-${usMatch[1].padStart(2, '0')}-${usMatch[2].padStart(2, '0')}`;
+  }
+  return null;
+}
+
+/** Normalize a time string to "H:MM AM/PM" for comparison. */
+function normalizeTimeForComparison(timeStr: string): string {
+  if (!timeStr) return '';
+  // US: "4/1/2026 7:45:00 AM" → "7:45 AM"
+  const usMatch = timeStr.match(/(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)/i);
+  if (usMatch) return `${parseInt(usMatch[1])}:${usMatch[2]} ${usMatch[3].toUpperCase()}`;
+  // ISO: "2026-04-01T07:45:00" → "7:45 AM"
+  const isoMatch = timeStr.match(/T(\d{2}):(\d{2})/);
+  if (isoMatch) {
+    let h = parseInt(isoMatch[1]);
+    const suffix = h >= 12 ? 'PM' : 'AM';
+    if (h > 12) h -= 12;
+    if (h === 0) h = 12;
+    return `${h}:${isoMatch[2]} ${suffix}`;
+  }
+  return timeStr;
+}
+
+/** Extract slots from a scheduling tool output (handles multiple formats). */
+function extractSlotsFromToolOutput(output: any): Array<{ startTime: string; operatoryId: string; date: string; normalizedTime: string }> {
+  const slots: Array<{ startTime: string; operatoryId: string; date: string; normalizedTime: string }> = [];
+  if (!output) return slots;
+
+  const addSlot = (s: any) => {
+    // Cloud9/Ortho format: startTime contains full datetime
+    let startTime = s.startTime || s.start_time || '';
+    const opId = String(s.scheduleViewGUID || s.operatoryId || s.operatory_id || s.schdvwGUID || '');
+
+    // Chord DSO format: separate date + time fields (e.g., date: "2026-04-01", time: "7:45 AM")
+    if (!startTime && s.date && s.time) {
+      startTime = `${s.date}T${convertTimeToISO(s.time)}`;
+    }
+
+    const date = s.date || extractDateFromSlotTime(startTime);
+    if (date) {
+      const normTime = s.time || normalizeTimeForComparison(startTime);
+      slots.push({ startTime, operatoryId: opId, date, normalizedTime: normTime });
+    }
+  };
+
+  if (Array.isArray(output.slots)) output.slots.forEach(addSlot);
+  if (Array.isArray(output.groups)) {
+    for (const g of output.groups) {
+      if (Array.isArray(g.slots)) g.slots.forEach(addSlot);
+    }
+  }
+  if (Array.isArray(output)) output.forEach(addSlot);
+
+  // Handle numeric-keyed objects (Chord DSO format: {0: {...}, 1: {...}, ...})
+  if (!Array.isArray(output) && typeof output === 'object' && !output.slots && !output.groups) {
+    const numericKeys = Object.keys(output).filter(k => /^\d+$/.test(k));
+    if (numericKeys.length > 0) {
+      for (const k of numericKeys) addSlot(output[k]);
+    }
+  }
+
+  return slots;
+}
+
+/** Convert "7:45 AM" → "07:45:00" for ISO datetime construction. */
+function convertTimeToISO(timeStr: string): string {
+  const match = timeStr.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+  if (!match) return '00:00:00';
+  let h = parseInt(match[1]);
+  const m = match[2];
+  const ampm = match[3].toUpperCase();
+  if (ampm === 'PM' && h < 12) h += 12;
+  if (ampm === 'AM' && h === 12) h = 0;
+  return `${String(h).padStart(2, '0')}:${m}:00`;
+}
+
+/** Extract booking attempts from a book_child/book tool input. */
+function extractBookingAttemptsFromToolInput(input: any): Array<{ childName: string; startTime: string; operatoryId: string; date: string; time: string }> {
+  const attempts: Array<{ childName: string; startTime: string; operatoryId: string; date: string; time: string }> = [];
+  if (!input) return attempts;
+
+  const extractOne = (obj: any) => {
+    const name = obj.childFirstName || obj.childName || obj.firstName || obj.patientFirstName || 'Unknown';
+    let startTime = obj.startTime || obj.start_time || '';
+    const opId = String(obj.scheduleViewGUID || obj.operatoryId || obj.operatory_id || obj.schdvwGUID || '');
+
+    // Chord DSO format: separate appointmentDate + appointmentTime
+    const apptDate = obj.appointmentDate || obj.appointment_date || '';
+    const apptTime = obj.appointmentTime || obj.appointment_time || '';
+    if (!startTime && apptDate && apptTime) {
+      startTime = `${apptDate}T${convertTimeToISO(apptTime)}`;
+    }
+
+    const date = apptDate || extractDateFromSlotTime(startTime) || '';
+    const time = apptTime || normalizeTimeForComparison(startTime);
+
+    attempts.push({ childName: name, startTime, operatoryId: opId, date, time });
+  };
+
+  if (Array.isArray(input.children)) {
+    input.children.forEach(extractOne);
+  } else {
+    extractOne(input);
+  }
+  return attempts;
+}
+
+interface HallucinationAuditResult {
+  sessionId: string;
+  verdict: 'HALLUCINATION_DETECTED' | 'CLEAN';
+  caller: { name: string | null; phone: string | null };
+  location: string | null;
+  model: string | null;
+  totalCost: number;
+  traceCount: number;
+  configName: string;
+  hasTransfer: boolean;
+  hasBooking: boolean;
+  slotRetrievals: Array<{
+    turnIndex: number;
+    traceId: string;
+    action: string;
+    slotsReturned: number;
+    dates: string[];
+    operatories: string[];
+  }>;
+  bookingAttempts: Array<{
+    turnIndex: number;
+    traceId: string;
+    childName: string;
+    startTime: string;
+    operatory: string;
+    date: string;
+    success: boolean;
+    error: string | null;
+    matched: boolean;
+  }>;
+  hallucinations: Array<{
+    turnIndex: number;
+    traceId: string;
+    childName: string;
+    startTime: string;
+    operatory: string;
+    date: string;
+    error: string | null;
+    reason: string;
+  }>;
+  uniqueDatesReturned: string[];
+  uniqueOperatoriesReturned: string[];
+}
+
+function runHallucinationAudit(sessionId: string, db: BetterSqlite3.Database): HallucinationAuditResult | null {
+  const session = db.prepare(`
+    SELECT session_id, langfuse_config_id, has_successful_booking, has_transfer,
+           trace_count, error_count, first_trace_at, last_trace_at, user_id,
+           total_cost, location_name
+    FROM production_sessions WHERE session_id = ?
+  `).get(sessionId) as any;
+
+  if (!session) return null;
+
+  const configId = session.langfuse_config_id;
+  const toolNames = getToolNamesForConfig(db, configId);
+  const configRow = db.prepare('SELECT name FROM langfuse_configs WHERE id = ?').get(configId) as any;
+  const configName = configRow?.name || `Config ${configId}`;
+
+  const traces = db.prepare(`
+    SELECT trace_id, name, started_at FROM production_traces
+    WHERE session_id = ? ORDER BY started_at ASC
+  `).all(sessionId) as any[];
+
+  const phoneMatch = sessionId.match(/\+\d+/);
+  const emptyResult: HallucinationAuditResult = {
+    sessionId, verdict: 'CLEAN',
+    caller: { name: session.user_id || null, phone: phoneMatch?.[0] || null },
+    location: session.location_name || null, model: null,
+    totalCost: session.total_cost || 0, traceCount: session.trace_count || 0,
+    configName, hasTransfer: !!session.has_transfer, hasBooking: !!session.has_successful_booking,
+    slotRetrievals: [], bookingAttempts: [], hallucinations: [],
+    uniqueDatesReturned: [], uniqueOperatoriesReturned: [],
+  };
+
+  if (traces.length === 0) return emptyResult;
+
+  // Map trace_id → turn index (1-based)
+  const traceToTurn = new Map<string, number>();
+  traces.forEach((t: any, i: number) => traceToTurn.set(t.trace_id, i + 1));
+
+  const traceIds = traces.map((t: any) => t.trace_id);
+  const ph = traceIds.map(() => '?').join(',');
+
+  const allObs = db.prepare(`
+    SELECT name, type, level, input, output, status_message, started_at, trace_id
+    FROM production_trace_observations WHERE trace_id IN (${ph}) ORDER BY started_at ASC
+  `).all(...traceIds) as any[];
+
+  // Extract model from GENERATION observations
+  let model: string | null = null;
+  for (const obs of allObs) {
+    if (obs.type !== 'GENERATION') continue;
+    try {
+      const genInput = typeof obs.input === 'string' ? JSON.parse(obs.input) : obs.input;
+      model = genInput?.model || genInput?.model_name || null;
+      if (model) break;
+    } catch {}
+    try {
+      const genOutput = typeof obs.output === 'string' ? JSON.parse(obs.output) : obs.output;
+      model = genOutput?.model || genOutput?.model_name || null;
+      if (model) break;
+    } catch {}
+  }
+
+  // Extract location from clinic_info calls if not in session
+  let location = session.location_name || null;
+  if (!location) {
+    const patObs = allObs.filter((o: any) => toolNames.patientTools.includes(o.name));
+    for (const obs of patObs) {
+      try {
+        const inp = typeof obs.input === 'string' ? JSON.parse(obs.input) : obs.input;
+        if (inp?.action === 'clinic_info') {
+          const out = typeof obs.output === 'string' ? JSON.parse(obs.output) : obs.output;
+          location = out?.locationBehaviors?.office_name || out?.locationInfo?.name || out?.locationName || null;
+          if (location) break;
+        }
+      } catch {}
+    }
+  }
+
+  // Collect slots from all slot retrieval calls
+  const allValidSlots: Array<{ startTime: string; operatoryId: string; date: string; normalizedTime: string }> = [];
+  const slotRetrievals: HallucinationAuditResult['slotRetrievals'] = [];
+  const bookingAttempts: HallucinationAuditResult['bookingAttempts'] = [];
+
+  const schedulingObs = allObs.filter((o: any) => toolNames.schedulingTools.includes(o.name));
+
+  for (const obs of schedulingObs) {
+    let input: any = {};
+    let output: any = {};
+    let rawOutput: string | null = null;
+
+    try { input = typeof obs.input === 'string' ? JSON.parse(obs.input) : obs.input || {}; } catch {}
+    if (obs.output != null) {
+      if (typeof obs.output === 'string') {
+        try { output = JSON.parse(obs.output); } catch { rawOutput = obs.output; }
+      } else {
+        output = obs.output;
+      }
+    }
+
+    const action = input?.action || 'unknown';
+    const turnIndex = traceToTurn.get(obs.trace_id) || 0;
+
+    // Slot retrieval
+    if (action === 'slots' || action === 'grouped_slots') {
+      const slots = extractSlotsFromToolOutput(output);
+      allValidSlots.push(...slots);
+
+      const dates = [...new Set(slots.map(s => s.date))].sort();
+      const operatories = [...new Set(slots.map(s => s.operatoryId).filter(Boolean))].sort();
+
+      slotRetrievals.push({
+        turnIndex, traceId: obs.trace_id, action,
+        slotsReturned: slots.length, dates, operatories,
+      });
+    }
+
+    // Booking attempts
+    if (action === 'book_child' || action === 'book') {
+      const level = obs.level || 'DEFAULT';
+      const outputStr = rawOutput || JSON.stringify(output);
+      const hasOutputError = outputStr.includes('"success":false') || outputStr.includes('"success": false') || outputStr.includes('_debug_error');
+      const isError = level === 'ERROR' || (obs.status_message || '').includes('required') || hasOutputError;
+      const success = !isError && (output?.success !== false);
+
+      let error: string | null = null;
+      if (isError) {
+        error = output?._debug_error || output?.message || output?.error || obs.status_message || rawOutput || 'Unknown error';
+        if (typeof error === 'object') error = JSON.stringify(error);
+        if (error && error.length > 120) error = error.substring(0, 117) + '...';
+      }
+
+      const attempts = extractBookingAttemptsFromToolInput(input);
+      for (const attempt of attempts) {
+        const attemptDate = attempt.date || extractDateFromSlotTime(attempt.startTime) || '';
+        const attemptNormTime = attempt.time || normalizeTimeForComparison(attempt.startTime);
+
+        // Comprehensive match: check date + time + operatory against all returned slots
+        const matched = allValidSlots.some(vs => {
+          if (vs.startTime === attempt.startTime && vs.operatoryId === attempt.operatoryId) return true;
+          const dateMatch = vs.date === attemptDate;
+          const timeMatch = vs.normalizedTime === attemptNormTime;
+          const opMatch = vs.operatoryId === attempt.operatoryId;
+          if (dateMatch && timeMatch && opMatch) return true;
+          return false;
+        });
+
+        bookingAttempts.push({
+          turnIndex, traceId: obs.trace_id,
+          childName: attempt.childName, startTime: attempt.startTime || `${attemptDate} ${attemptNormTime}`,
+          operatory: attempt.operatoryId, date: attemptDate || 'unknown',
+          success, error, matched,
+        });
+      }
+    }
+  }
+
+  // Identify hallucinations — check each dimension of the booking data
+  const hallucinations: HallucinationAuditResult['hallucinations'] = [];
+  const uniqueDatesReturned = [...new Set(allValidSlots.map(s => s.date))].sort();
+  const uniqueOperatoriesReturned = [...new Set(allValidSlots.map(s => s.operatoryId).filter(Boolean))].sort();
+  const uniqueTimesReturned = [...new Set(allValidSlots.map(s => s.normalizedTime).filter(Boolean))].sort();
+
+  for (const attempt of bookingAttempts) {
+    if (!attempt.matched) {
+      const reasons: string[] = [];
+      const attemptNormTime = normalizeTimeForComparison(attempt.startTime);
+
+      const dateAvailable = attempt.date && attempt.date !== 'unknown' && uniqueDatesReturned.includes(attempt.date);
+      const opAvailable = attempt.operatory && uniqueOperatoriesReturned.includes(attempt.operatory);
+      const timeAvailable = attemptNormTime && uniqueTimesReturned.includes(attemptNormTime);
+
+      if (attempt.date && attempt.date !== 'unknown' && !dateAvailable) {
+        reasons.push(`Date ${attempt.date} never returned by any slot retrieval (available: ${uniqueDatesReturned.join(', ') || 'none'})`);
+      }
+      if (attempt.operatory && !opAvailable) {
+        reasons.push(`Operatory ${attempt.operatory} never returned (available: ${uniqueOperatoriesReturned.join(', ') || 'none'})`);
+      }
+      if (attemptNormTime && dateAvailable && opAvailable && !timeAvailable) {
+        reasons.push(`Time ${attemptNormTime} not available on ${attempt.date} for operatory ${attempt.operatory}`);
+      }
+      if (reasons.length === 0) {
+        reasons.push('Exact date+time+operatory combination not found in any slot retrieval response');
+      }
+
+      hallucinations.push({
+        turnIndex: attempt.turnIndex, traceId: attempt.traceId,
+        childName: attempt.childName, startTime: attempt.startTime,
+        operatory: attempt.operatory, date: attempt.date,
+        error: attempt.error, reason: reasons.join('; '),
+      });
+    }
+  }
+
+  // Extract caller name from PAYLOAD in GENERATION outputs
+  let callerName: string | null = session.user_id || null;
+  for (const obs of allObs) {
+    if (obs.type !== 'GENERATION' || !obs.output) continue;
+    try {
+      const out = typeof obs.output === 'string' ? JSON.parse(obs.output) : obs.output;
+      const text = out?.choices?.[0]?.message?.content || (typeof out === 'string' ? out : '');
+      const payloadMatch = typeof text === 'string' ? text.match(/PAYLOAD[:\s]*\{[\s\S]*?"callerName"[:\s]*"([^"]+)"/) : null;
+      if (payloadMatch) { callerName = payloadMatch[1]; break; }
+    } catch {}
+  }
+
+  return {
+    sessionId,
+    verdict: hallucinations.length > 0 ? 'HALLUCINATION_DETECTED' : 'CLEAN',
+    caller: { name: callerName, phone: phoneMatch?.[0] || null },
+    location, model, totalCost: session.total_cost || 0,
+    traceCount: session.trace_count || traces.length,
+    configName, hasTransfer: !!session.has_transfer, hasBooking: !!session.has_successful_booking,
+    slotRetrievals, bookingAttempts, hallucinations,
+    uniqueDatesReturned, uniqueOperatoriesReturned,
+  };
+}
+
+/**
+ * GET /api/trace-analysis/:sessionId/hallucination-audit
+ *
+ * Audits a session for slot hallucination — checks if booking attempts used
+ * slots that were never returned by the scheduling tool.
+ */
+export const hallucinationAudit = async (req: Request, res: Response): Promise<void> => {
+  const { sessionId } = req.params;
+  const db = getDb();
+
+  try {
+    const result = runHallucinationAudit(sessionId, db);
+    db.close();
+    if (!result) {
+      res.status(404).json({ error: `Session "${sessionId}" not found` });
+      return;
+    }
+    res.json({ data: result });
+  } catch (err: any) {
+    db.close();
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// ── UUI Lookup ────────────────────────────────────────────────
+
+interface UuiLookupResult {
+  found: boolean;
+  sessionId: string;
+  inputId: string;
+  resolvedFrom: string | null;
+  uuiRaw: string | null;
+  uuiSegments: string[];
+  variables: Record<string, string>;
+  callerIdNumber: string | null;
+  conversationId: string | null;
+  locationConfigJson: string | null;
+  callSummary: Record<string, unknown> | null;
+}
+
+/**
+ * Extract UUI (User-to-User Information) pipe-delimited string from a Chord session.
+ * Accepts either a session ID (conv_*) or a search ID (UUID/GUID) and auto-resolves.
+ * Looks at the first GENERATION observation's system prompt input for `<available_variables>`.
+ */
+export const uuiLookup = async (req: Request, res: Response): Promise<void> => {
+  const { sessionId: inputId } = req.params;
+  const db = getDb();
+
+  try {
+    // Auto-detect input type and resolve to session_id
+    const isConvFormat = /^conv_\d+/.test(inputId);
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(inputId);
+    let resolvedSessionId: string | null = null;
+    let resolvedFrom: string | null = null;
+
+    if (isConvFormat) {
+      // Direct session ID lookup
+      const session = db.prepare(
+        `SELECT session_id FROM production_sessions WHERE session_id = ? LIMIT 1`
+      ).get(inputId) as { session_id: string } | undefined;
+      if (session) {
+        resolvedSessionId = session.session_id;
+        resolvedFrom = 'session_id';
+      }
+    } else if (isUuid) {
+      // Try trace_id first
+      const trace = db.prepare(
+        `SELECT session_id FROM production_traces WHERE trace_id = ? LIMIT 1`
+      ).get(inputId) as { session_id: string } | undefined;
+      if (trace) {
+        resolvedSessionId = trace.session_id;
+        resolvedFrom = 'trace_id';
+      } else {
+        // Fallback: maybe the UUID is a session_id itself (some sessions use UUID format)
+        const session = db.prepare(
+          `SELECT session_id FROM production_sessions WHERE session_id = ? LIMIT 1`
+        ).get(inputId) as { session_id: string } | undefined;
+        if (session) {
+          resolvedSessionId = session.session_id;
+          resolvedFrom = 'session_id';
+        }
+      }
+    } else {
+      // Unknown format — try as session_id anyway
+      const session = db.prepare(
+        `SELECT session_id FROM production_sessions WHERE session_id = ? LIMIT 1`
+      ).get(inputId) as { session_id: string } | undefined;
+      if (session) {
+        resolvedSessionId = session.session_id;
+        resolvedFrom = 'session_id';
+      }
+    }
+
+    // Fallback: search trace output/observation content for the ID (handles appointment IDs, GUIDs in payloads, etc.)
+    if (!resolvedSessionId) {
+      const byContent = db.prepare(
+        `SELECT session_id FROM production_traces WHERE output LIKE ? ORDER BY started_at DESC LIMIT 1`
+      ).get(`%${inputId}%`) as { session_id: string } | undefined;
+      if (byContent) {
+        resolvedSessionId = byContent.session_id;
+        resolvedFrom = 'content_match';
+      }
+    }
+
+    if (!resolvedSessionId) {
+      db.close();
+      res.status(404).json({ error: `"${inputId}" not found — tried as ${isUuid ? 'trace_id, session_id, and content search' : 'session_id and content search'}` });
+      return;
+    }
+
+    const sessionId = resolvedSessionId;
+
+    // Get all trace IDs for this session
+    const traces = db.prepare(
+      `SELECT trace_id FROM production_traces WHERE session_id = ? ORDER BY started_at ASC`
+    ).all(sessionId) as { trace_id: string }[];
+
+    if (traces.length === 0) {
+      db.close();
+      res.status(404).json({ error: `No traces found for session "${sessionId}"` });
+      return;
+    }
+
+    const traceIds = traces.map(t => t.trace_id);
+    const ph = traceIds.map(() => '?').join(',');
+
+    // Find the first GENERATION observation (contains system prompt with available_variables)
+    const genObs = db.prepare(`
+      SELECT input, output FROM production_trace_observations
+      WHERE trace_id IN (${ph}) AND type = 'GENERATION'
+      ORDER BY started_at ASC
+      LIMIT 1
+    `).get(...traceIds) as { input: string; output: string } | undefined;
+
+    const result: UuiLookupResult = {
+      found: false,
+      sessionId,
+      inputId,
+      resolvedFrom,
+      uuiRaw: null,
+      uuiSegments: [],
+      variables: {},
+      callerIdNumber: null,
+      conversationId: null,
+      locationConfigJson: null,
+      callSummary: null,
+    };
+
+    if (genObs?.input) {
+      let inputStr = genObs.input;
+
+      // GENERATION input may be a JSON array of messages (system + human)
+      try {
+        const parsed = JSON.parse(inputStr);
+        if (Array.isArray(parsed)) {
+          const systemMsg = parsed.find((m: any) => m.role === 'system');
+          inputStr = systemMsg?.content || inputStr;
+        } else if (typeof parsed === 'object' && parsed.messages) {
+          const systemMsg = parsed.messages.find((m: any) => m.role === 'system');
+          inputStr = systemMsg?.content || inputStr;
+        }
+      } catch {
+        // Not JSON, use raw string
+      }
+
+      // Extract <available_variables> block
+      const avMatch = inputStr.match(/<available_variables>([\s\S]*?)<\/available_variables>/);
+      if (avMatch) {
+        result.found = true;
+        const varsBlock = avMatch[1].trim();
+
+        // The available_variables block after Flowise substitution contains comma-separated values:
+        // locationConfigJSON, conversationId, uuiPipeString, callerPhone
+        // Extract UUI (pipe-delimited), phone, conversationId, and location_config JSON
+
+        // Extract the pipe-delimited UUI string (most distinctive pattern)
+        const uuiMatch = varsBlock.match(/(?:^|,\s*)([^,{]*?\|[^,]*?)(?:,|$)/);
+        if (uuiMatch) {
+          result.uuiRaw = uuiMatch[1].trim();
+          result.uuiSegments = result.uuiRaw.split('|');
+        }
+
+        // Extract phone number
+        const phoneMatch = varsBlock.match(/(\+?\d{10,15})/);
+        if (phoneMatch) {
+          result.callerIdNumber = phoneMatch[1];
+          result.variables['caller_id_number'] = phoneMatch[1];
+        }
+
+        // Extract conversationId (conv_ prefix or long numeric string)
+        const convMatch = varsBlock.match(/(conv_[^\s,]+)/);
+        if (convMatch) {
+          result.conversationId = convMatch[1];
+          result.variables['conversationId'] = convMatch[1];
+        } else {
+          const numericConvMatch = varsBlock.match(/(?:^|,\s*)(\d{10,})(?:,|$)/);
+          if (numericConvMatch) {
+            result.conversationId = numericConvMatch[1];
+            result.variables['conversationId'] = numericConvMatch[1];
+          }
+        }
+
+        // Extract location_config JSON (first { ... } block with balanced braces)
+        const jsonStartIdx = varsBlock.indexOf('{');
+        if (jsonStartIdx >= 0) {
+          let depth = 0;
+          let jsonEndIdx = jsonStartIdx;
+          for (let i = jsonStartIdx; i < varsBlock.length; i++) {
+            if (varsBlock[i] === '{') depth++;
+            else if (varsBlock[i] === '}') {
+              depth--;
+              if (depth === 0) { jsonEndIdx = i; break; }
+            }
+          }
+          if (jsonEndIdx > jsonStartIdx) {
+            result.locationConfigJson = varsBlock.substring(jsonStartIdx, jsonEndIdx + 1);
+            result.variables['location_config'] = result.locationConfigJson;
+          }
+        }
+      }
+    }
+
+    // Get call summary from the last trace output
+    const lastTrace = db.prepare(`
+      SELECT output FROM production_traces
+      WHERE session_id = ?
+      ORDER BY started_at DESC
+      LIMIT 1
+    `).get(sessionId) as { output: string } | undefined;
+
+    if (lastTrace?.output) {
+      const payload = parsePayloadFromOutput(lastTrace.output);
+      if (payload) {
+        result.callSummary = (payload as any).Call_Summary || payload;
+      }
+    }
 
     db.close();
     res.json({ data: result });

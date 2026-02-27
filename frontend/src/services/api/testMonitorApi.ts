@@ -1562,6 +1562,29 @@ export async function getProductionSessionStats(options?: {
 }
 
 /**
+ * Get distinct location names for filter dropdown
+ */
+export async function getSessionLocations(configId?: number): Promise<string[]> {
+  const params = new URLSearchParams();
+  if (configId) params.append('configId', configId.toString());
+
+  const queryString = params.toString();
+  const url = `/test-monitor/production-calls/sessions/locations${queryString ? `?${queryString}` : ''}`;
+  const response = await get<TestMonitorApiResponse<{ locations: string[] }>>(url);
+  return response.data.locations;
+}
+
+export async function getSessionEnvironments(configId?: number): Promise<string[]> {
+  const params = new URLSearchParams();
+  if (configId) params.append('configId', configId.toString());
+
+  const queryString = params.toString();
+  const url = `/test-monitor/production-calls/sessions/environments${queryString ? `?${queryString}` : ''}`;
+  const response = await get<TestMonitorApiResponse<{ environments: string[] }>>(url);
+  return response.data.environments;
+}
+
+/**
  * Get list of production sessions (grouped conversations)
  */
 export async function getProductionSessions(options?: {
@@ -1573,6 +1596,8 @@ export async function getProductionSessions(options?: {
   userId?: string;
   callerPhone?: string;
   disposition?: 'bookings' | 'errors' | 'transfers';
+  locationName?: string;
+  environment?: string;
 }): Promise<ProductionSessionsResponse> {
   const params = new URLSearchParams();
   if (options?.configId) params.append('configId', options.configId.toString());
@@ -1583,6 +1608,8 @@ export async function getProductionSessions(options?: {
   if (options?.userId) params.append('userId', options.userId);
   if (options?.callerPhone) params.append('callerPhone', options.callerPhone);
   if (options?.disposition) params.append('disposition', options.disposition);
+  if (options?.locationName) params.append('locationName', options.locationName);
+  if (options?.environment) params.append('environment', options.environment);
 
   const queryString = params.toString();
   const url = `/test-monitor/production-calls/sessions${queryString ? `?${queryString}` : ''}`;
@@ -2743,6 +2770,134 @@ export async function getInvestigationReport(sessionId: string): Promise<{ markd
   return response.data;
 }
 
+// ── Hallucination Audit ──────────────────────────────────────
+
+export interface HallucinationAuditResult {
+  sessionId: string;
+  verdict: 'HALLUCINATION_DETECTED' | 'CLEAN';
+  caller: { name: string | null; phone: string | null };
+  location: string | null;
+  model: string | null;
+  totalCost: number;
+  traceCount: number;
+  configName: string;
+  hasTransfer: boolean;
+  hasBooking: boolean;
+  slotRetrievals: Array<{
+    turnIndex: number;
+    traceId: string;
+    action: string;
+    slotsReturned: number;
+    dates: string[];
+    operatories: string[];
+  }>;
+  bookingAttempts: Array<{
+    turnIndex: number;
+    traceId: string;
+    childName: string;
+    startTime: string;
+    operatory: string;
+    date: string;
+    success: boolean;
+    error: string | null;
+    matched: boolean;
+  }>;
+  hallucinations: Array<{
+    turnIndex: number;
+    traceId: string;
+    childName: string;
+    startTime: string;
+    operatory: string;
+    date: string;
+    error: string | null;
+    reason: string;
+  }>;
+  uniqueDatesReturned: string[];
+  uniqueOperatoriesReturned: string[];
+}
+
+/**
+ * Audit a session for slot hallucination.
+ */
+export async function hallucinationAudit(sessionId: string): Promise<HallucinationAuditResult> {
+  const response = await get<TestMonitorApiResponse<HallucinationAuditResult>>(
+    `/trace-analysis/${encodeURIComponent(sessionId)}/hallucination-audit`
+  );
+  return response.data;
+}
+
+/**
+ * Get a standalone markdown report file from the /reports directory.
+ */
+export async function getStandaloneReport(filename: string): Promise<{ markdown: string; classification: string; sessionId: string }> {
+  const response = await get<TestMonitorApiResponse<{ markdown: string; classification: string; sessionId: string }>>(
+    `/trace-analysis/reports/${encodeURIComponent(filename)}`
+  );
+  return response.data;
+}
+
+// ── Flowise Enrichment ────────────────────────────────────────
+
+export interface FlowiseReasoningTurn {
+  turnIndex: number;
+  role: string;
+  messageId: string;
+  stepCount: number;
+  agentReasoning: any[];
+  toolTimings: Array<{ tool: string; durationMs: number }>;
+  hasLoopIndicator: boolean;
+  sourceDocuments: any[];
+  errors: string[];
+}
+
+export interface FlowiseReasoningResponse {
+  sessionId: string;
+  isEnriched: boolean;
+  turns: FlowiseReasoningTurn[];
+  toolTimings: Record<string, number>;
+  totalSteps: number;
+  hasLoops: boolean;
+}
+
+export interface FlowiseEnrichResult {
+  sessionsProcessed: number;
+  sessionsEnriched: number;
+  sessionsSkipped: number;
+  sessionsFailed: number;
+  errors: string[];
+}
+
+/**
+ * Get stored Flowise agent reasoning data for a session.
+ */
+export async function getFlowiseReasoning(sessionId: string): Promise<FlowiseReasoningResponse> {
+  const response = await get<TestMonitorApiResponse<FlowiseReasoningResponse>>(
+    `/test-monitor/flowise-reasoning/${encodeURIComponent(sessionId)}`
+  );
+  return response.data;
+}
+
+/**
+ * Get Flowise-specific errors for a session.
+ */
+export async function getFlowiseErrors(sessionId: string): Promise<{ sessionId: string; errors: Array<{ turnIndex: number; errors: string[] }> }> {
+  const response = await get<TestMonitorApiResponse<{ sessionId: string; errors: Array<{ turnIndex: number; errors: string[] }> }>>(
+    `/test-monitor/flowise-reasoning/${encodeURIComponent(sessionId)}/errors`
+  );
+  return response.data;
+}
+
+/**
+ * Trigger Flowise enrichment for specific sessions or recent un-enriched ones.
+ */
+export async function enrichFromFlowise(sessionIds?: string[], lookbackHours?: number): Promise<FlowiseEnrichResult> {
+  const response = await post<TestMonitorApiResponse<FlowiseEnrichResult>>(
+    '/test-monitor/flowise-enrich',
+    { sessionIds, lookbackHours }
+  );
+  return response.data;
+}
+
 // ── Call Lookup ────────────────────────────────────────────────
 
 export interface CallLookupResult {
@@ -2773,6 +2928,33 @@ export async function callLookup(id: string, options?: { configs?: string; days?
   const qs = params.toString();
   const response = await get<TestMonitorApiResponse<CallLookupResult>>(
     `/trace-analysis/call-lookup/${encodeURIComponent(id)}${qs ? `?${qs}` : ''}`
+  );
+  return response.data;
+}
+
+// ── UUI Lookup ────────────────────────────────────────────────
+
+export interface UuiLookupResult {
+  found: boolean;
+  sessionId: string;
+  inputId: string;
+  resolvedFrom: string | null;
+  uuiRaw: string | null;
+  uuiSegments: string[];
+  variables: Record<string, string>;
+  callerIdNumber: string | null;
+  conversationId: string | null;
+  locationConfigJson: string | null;
+  callSummary: Record<string, unknown> | null;
+}
+
+/**
+ * Extract UUI (User-to-User Information) from a Chord session.
+ * Accepts either a session ID (conv_*) or a search ID (UUID/trace ID).
+ */
+export async function uuiLookup(idOrSessionId: string): Promise<UuiLookupResult> {
+  const response = await get<TestMonitorApiResponse<UuiLookupResult>>(
+    `/trace-analysis/${encodeURIComponent(idOrSessionId)}/uui`
   );
   return response.data;
 }

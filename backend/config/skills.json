@@ -632,6 +632,57 @@
           "placeholder": "e.g. dd1a7852-e45f-4e89-b09e-2e633318f5d0"
         }
       ]
+    },
+    {
+      "id": "chord-call-lookup",
+      "name": "Chord Call Lookup",
+      "description": "Search for a Chord DSO call by any ID (trace ID, session ID, phone number, GUID). Returns formatted session ID, booking details, and call summary.",
+      "command": "cd {{workDir}} && node \"C:/Users/mwoic/.claude/skills/chord-call-lookup/lookup.js\" {{searchId}} {{daysArg}} {{allConfigsArg}}",
+      "category": "agents",
+      "inputs": [
+        {
+          "name": "searchId",
+          "label": "Search ID",
+          "type": "text",
+          "required": true,
+          "placeholder": "e.g. +12132791621 or trace UUID or session ID",
+          "description": "Any identifier: phone number, trace ID, session ID, appointment ID, GUID"
+        },
+        {
+          "name": "days",
+          "label": "Days Back",
+          "type": "number",
+          "required": false,
+          "default": 30,
+          "min": 1,
+          "max": 90,
+          "description": "How many days back to search"
+        },
+        {
+          "name": "allConfigs",
+          "label": "Search All Configs",
+          "type": "checkbox",
+          "default": false,
+          "description": "Search all Langfuse configs (not just Chord)"
+        }
+      ]
+    },
+    {
+      "id": "chord-uui-lookup",
+      "name": "Chord UUI Lookup",
+      "description": "Extract the pipe-delimited UUI (User-to-User Information) string from a Chord session. Accepts either a session ID (conv_*) or a search ID (UUID/trace ID). Returns parsed UUI segments, available variables, location GUID, DNIS, and call summary.",
+      "command": "cd {{workDir}} && node \"C:/Users/mwoic/.claude/skills/chord-uui-lookup/lookup.js\" {{sessionId}}",
+      "category": "agents",
+      "inputs": [
+        {
+          "name": "sessionId",
+          "label": "Session ID or Search ID",
+          "type": "text",
+          "required": true,
+          "placeholder": "e.g. conv_8_+12132791621_1772224829364 or 12574d4f-5d82-483f-bd09-208fcb414ee0",
+          "description": "Session ID (conv_X_+phone_timestamp) or search ID (UUID/trace ID) — auto-detected"
+        }
+      ]
     }
   ]
 }
