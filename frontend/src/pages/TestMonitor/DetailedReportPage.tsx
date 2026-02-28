@@ -5,13 +5,15 @@
  */
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { useSearchParams } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
 import mermaid from 'mermaid';
 import { Card, Spinner } from '../../components/ui';
-import { getInvestigationReport } from '../../services/api/testMonitorApi';
+import { getInvestigationReport, getStandaloneReport, getFlowiseReasoning, enrichFromFlowise } from '../../services/api/testMonitorApi';
+import type { FlowiseReasoningResponse, FlowiseReasoningTurn } from '../../services/api/testMonitorApi';
 
 // Mermaid config shared between themes
 const mermaidBase = {
@@ -69,6 +71,17 @@ function ClassificationBadge({ classification }: { classification: string }) {
       textColor = 'text-yellow-800 dark:text-yellow-200';
       label = 'INCONCLUSIVE';
       break;
+    case 'DISCONNECT':
+    case 'DEAD_AIR':
+      bgColor = 'bg-orange-100 dark:bg-orange-900/40';
+      textColor = 'text-orange-800 dark:text-orange-200';
+      label = normalized.replace(/_/g, ' ');
+      break;
+    case 'INVESTIGATION':
+      bgColor = 'bg-blue-100 dark:bg-blue-900/40';
+      textColor = 'text-blue-800 dark:text-blue-200';
+      label = 'INVESTIGATION';
+      break;
     default:
       bgColor = 'bg-gray-100 dark:bg-gray-700';
       textColor = 'text-gray-800 dark:text-gray-200';
@@ -79,6 +92,152 @@ function ClassificationBadge({ classification }: { classification: string }) {
     <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-bold ${bgColor} ${textColor}`}>
       {label}
     </span>
+  );
+}
+
+// ── Data Popup (click-to-open modal for truncated table values) ──────────────
+
+/** Decode base64 title → structured data or plain string. */
+function decodePopupData(encoded: string): any {
+  try {
+    const json = atob(encoded);
+    return JSON.parse(json);
+  } catch {
+    // Not base64/JSON — treat as plain text
+    return encoded;
+  }
+}
+
+/** Full-screen modal showing the complete untruncated data. */
+function DataModal({ data, onClose }: { data: any; onClose: () => void }) {
+  const overlayRef = useRef<HTMLDivElement>(null);
+
+  // Close on Escape
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose]);
+
+  const handleOverlayClick = (e: React.MouseEvent) => {
+    if (e.target === overlayRef.current) onClose();
+  };
+
+  // Determine content type
+  const isSlotData = data && typeof data === 'object' && (data.operatories || data.slots);
+  const isText = typeof data === 'string';
+
+  return (
+    <div
+      ref={overlayRef}
+      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+      onClick={handleOverlayClick}
+    >
+      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-3xl w-full max-h-[85vh] flex flex-col overflow-hidden border border-gray-200 dark:border-gray-700">
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
+          <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-200">
+            {isSlotData ? `Full Slot Data — ${data.slots?.length ?? 0} slots, ${data.operatories?.length ?? 0} operatories` : 'Full Value'}
+          </h3>
+          <button
+            onClick={onClose}
+            className="p-1 rounded-lg text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto p-5">
+          {isSlotData && (
+            <div className="space-y-5">
+              {/* Operatories list */}
+              {data.operatories?.length > 0 && (
+                <div>
+                  <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
+                    Operatories ({data.operatories.length})
+                  </h4>
+                  <div className="grid gap-1.5">
+                    {data.operatories.map((op: string, i: number) => (
+                      <code key={i} className="block text-xs bg-gray-100 dark:bg-gray-700 px-3 py-1.5 rounded font-mono text-gray-800 dark:text-gray-200 select-all">
+                        {op}
+                      </code>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Slots table */}
+              {data.slots?.length > 0 && (
+                <div>
+                  <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
+                    Slots ({data.slots.length})
+                  </h4>
+                  <div className="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-600">
+                    <table className="w-full text-sm border-collapse">
+                      <thead className="bg-gray-100 dark:bg-gray-700">
+                        <tr>
+                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 dark:text-gray-300 uppercase">#</th>
+                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 dark:text-gray-300 uppercase">Date</th>
+                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 dark:text-gray-300 uppercase">Time</th>
+                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 dark:text-gray-300 uppercase">Operatory ID</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-200 dark:divide-gray-600">
+                        {data.slots.map((slot: any, i: number) => (
+                          <tr key={i} className="hover:bg-gray-50 dark:hover:bg-gray-700/50 even:bg-gray-50/50 dark:even:bg-gray-800/30">
+                            <td className="px-3 py-1.5 text-gray-400 text-xs">{i + 1}</td>
+                            <td className="px-3 py-1.5 text-gray-800 dark:text-gray-200">{slot.date}</td>
+                            <td className="px-3 py-1.5 text-gray-800 dark:text-gray-200 font-mono">{slot.time}</td>
+                            <td className="px-3 py-1.5 font-mono text-xs text-gray-600 dark:text-gray-400 select-all">{slot.op}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {isText && (
+            <pre className="text-sm font-mono whitespace-pre-wrap break-all text-gray-800 dark:text-gray-200 bg-gray-50 dark:bg-gray-900 rounded-lg p-4 select-all">
+              {data}
+            </pre>
+          )}
+
+          {!isSlotData && !isText && (
+            <pre className="text-sm font-mono whitespace-pre-wrap break-all text-gray-800 dark:text-gray-200 bg-gray-50 dark:bg-gray-900 rounded-lg p-4 select-all">
+              {JSON.stringify(data, null, 2)}
+            </pre>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Clickable span that opens a DataModal with full untruncated data. */
+function DataPopupSpan({ encoded, children }: { encoded: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const data = useMemo(() => decodePopupData(encoded), [encoded]);
+
+  return (
+    <>
+      <span
+        className="cursor-pointer border-b border-dashed border-blue-400 dark:border-blue-500 hover:border-blue-600 dark:hover:border-blue-300 hover:text-blue-700 dark:hover:text-blue-300 transition-colors"
+        onClick={() => setOpen(true)}
+        title="Click to view full data"
+      >
+        {children}
+      </span>
+      {open && createPortal(
+        <DataModal data={data} onClose={() => setOpen(false)} />,
+        document.body,
+      )}
+    </>
   );
 }
 
@@ -214,7 +373,7 @@ function getMarkdownComponents(onToolCallClick?: (index: number) => void) {
       </th>
     ),
     td: ({ children }: any) => (
-      <td className="px-4 py-2 text-gray-800 dark:text-gray-200 break-words">
+      <td className="px-4 py-2 text-gray-800 dark:text-gray-200 break-words whitespace-pre-wrap">
         {children}
       </td>
     ),
@@ -250,6 +409,12 @@ function getMarkdownComponents(onToolCallClick?: (index: number) => void) {
         {children}
       </a>
     ),
+    span: ({ node, className, title, children, ...props }: any) => {
+      if (className?.includes('trunc') && title) {
+        return <DataPopupSpan encoded={title}>{children}</DataPopupSpan>;
+      }
+      return <span className={className} title={title} {...props}>{children}</span>;
+    },
   };
 }
 
@@ -257,11 +422,18 @@ function getMarkdownComponents(onToolCallClick?: (index: number) => void) {
 
 export function DetailedReportPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const isStandaloneReport = !!searchParams.get('report');
   const [inputValue, setInputValue] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [report, setReport] = useState<{ markdown: string; classification: string; sessionId: string } | null>(null);
   const reportRef = useRef<HTMLDivElement>(null);
+
+  // Flowise enrichment state
+  const [flowiseData, setFlowiseData] = useState<FlowiseReasoningResponse | null>(null);
+  const [flowiseLoading, setFlowiseLoading] = useState(false);
+  const [enriching, setEnriching] = useState(false);
+  const [flowiseExpanded, setFlowiseExpanded] = useState(false);
 
   const handleToolCallClick = useCallback((index: number) => {
     const el = document.getElementById(`tool-call-${index}`);
@@ -277,24 +449,76 @@ export function DetailedReportPage() {
 
   const mdComponents = useMemo(() => getMarkdownComponents(handleToolCallClick), [handleToolCallClick]);
 
+  // Fetch Flowise enrichment data for a session
+  const fetchFlowiseData = useCallback(async (sessionId: string) => {
+    setFlowiseLoading(true);
+    try {
+      const data = await getFlowiseReasoning(sessionId);
+      setFlowiseData(data);
+    } catch {
+      // Non-fatal — Flowise enrichment is optional
+      setFlowiseData(null);
+    } finally {
+      setFlowiseLoading(false);
+    }
+  }, []);
+
+  // Trigger on-demand Flowise enrichment
+  const handleEnrich = useCallback(async (sessionId: string) => {
+    setEnriching(true);
+    try {
+      await enrichFromFlowise([sessionId]);
+      // Re-fetch after enrichment
+      await fetchFlowiseData(sessionId);
+    } catch {
+      // Ignore
+    } finally {
+      setEnriching(false);
+    }
+  }, [fetchFlowiseData]);
+
   const fetchReport = useCallback(async (sessionId: string) => {
     if (!sessionId.trim()) return;
     setLoading(true);
     setError(null);
     setReport(null);
+    setFlowiseData(null);
 
     try {
       const data = await getInvestigationReport(sessionId.trim());
       setReport(data);
+      // Also fetch Flowise data
+      fetchFlowiseData(sessionId.trim());
     } catch (err: any) {
       setError(err?.message || 'Failed to fetch investigation report');
     } finally {
       setLoading(false);
     }
+  }, [fetchFlowiseData]);
+
+  const fetchStandaloneReport = useCallback(async (filename: string) => {
+    setLoading(true);
+    setError(null);
+    setReport(null);
+
+    try {
+      const data = await getStandaloneReport(filename);
+      setReport(data);
+    } catch (err: any) {
+      setError(err?.message || 'Failed to fetch report');
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  // Deep-link support: read sessionId from URL params on mount
+  // Deep-link support: read sessionId or report filename from URL params on mount
   useEffect(() => {
+    const reportFile = searchParams.get('report');
+    if (reportFile) {
+      const filename = reportFile.endsWith('.md') ? reportFile : `${reportFile}.md`;
+      fetchStandaloneReport(filename);
+      return;
+    }
     const sid = searchParams.get('sessionId');
     if (sid) {
       setInputValue(sid);
@@ -424,8 +648,8 @@ export function DetailedReportPage() {
 
   return (
     <div className="h-full w-full min-w-0 flex flex-col overflow-y-auto overflow-x-hidden" style={{ maxWidth: 'calc(100vw - 12rem)' }}>
-      {/* Search Bar */}
-      <div className="p-4 print:hidden">
+      {/* Search Bar — hidden for standalone reports */}
+      {!isStandaloneReport && <div className="p-4 print:hidden">
         <Card padding="sm">
           <form onSubmit={handleSubmit} className="flex items-center gap-3">
             <div className="text-gray-400">
@@ -447,7 +671,7 @@ export function DetailedReportPage() {
             </button>
           </form>
         </Card>
-      </div>
+      </div>}
 
       {/* Loading */}
       {loading && (
@@ -479,7 +703,31 @@ export function DetailedReportPage() {
           <Card padding="lg">
             {/* Report Header */}
             <div className="flex items-center justify-between mb-4 print:hidden">
-              <ClassificationBadge classification={report.classification} />
+              <div className="flex items-center gap-3">
+                <ClassificationBadge classification={report.classification} />
+                {/* Flowise enrichment badge */}
+                {flowiseData?.isEnriched ? (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300">
+                    <span className="w-1.5 h-1.5 rounded-full bg-purple-500" />
+                    Flowise Data
+                    {flowiseData.hasLoops && <span className="ml-1 text-red-500">(Loop)</span>}
+                  </span>
+                ) : flowiseLoading ? (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400">
+                    <Spinner size="xs" />
+                    Checking Flowise...
+                  </span>
+                ) : (
+                  <button
+                    onClick={() => report.sessionId && handleEnrich(report.sessionId)}
+                    disabled={enriching}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 hover:bg-purple-100 hover:text-purple-700 dark:hover:bg-purple-900/40 dark:hover:text-purple-300 transition-colors disabled:opacity-50"
+                    title="Fetch Flowise chat message data for this session"
+                  >
+                    {enriching ? <><Spinner size="xs" /> Enriching...</> : 'Enrich from Flowise'}
+                  </button>
+                )}
+              </div>
               <button
                 onClick={handlePrint}
                 className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
@@ -500,6 +748,86 @@ export function DetailedReportPage() {
                 {report.markdown}
               </ReactMarkdown>
             </div>
+
+            {/* Flowise Enrichment Data Section */}
+            {flowiseData?.isEnriched && flowiseData.turns.length > 0 && (
+              <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-4 print:hidden">
+                <button
+                  onClick={() => setFlowiseExpanded(!flowiseExpanded)}
+                  className="flex items-center gap-2 text-sm font-semibold text-purple-700 dark:text-purple-300 hover:text-purple-900 dark:hover:text-purple-100 transition-colors"
+                >
+                  <svg className={`w-4 h-4 transition-transform ${flowiseExpanded ? 'rotate-90' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
+                  Flowise Enrichment Data
+                  <span className="text-xs font-normal text-gray-500 dark:text-gray-400">
+                    ({flowiseData.turns.filter(t => t.stepCount > 0 || t.toolTimings.length > 0 || t.errors.length > 0).length} turns with data)
+                  </span>
+                </button>
+
+                {flowiseExpanded && (
+                  <div className="mt-3 space-y-3">
+                    {/* Summary stats */}
+                    <div className="grid grid-cols-4 gap-3">
+                      <div className="rounded-lg bg-gray-50 dark:bg-gray-800 p-3 text-center">
+                        <div className="text-lg font-bold text-gray-900 dark:text-gray-100">{flowiseData.totalSteps}</div>
+                        <div className="text-xs text-gray-500 dark:text-gray-400">Tool Calls</div>
+                      </div>
+                      <div className="rounded-lg bg-gray-50 dark:bg-gray-800 p-3 text-center">
+                        <div className="text-lg font-bold text-gray-900 dark:text-gray-100">{flowiseData.turns.length}</div>
+                        <div className="text-xs text-gray-500 dark:text-gray-400">Messages</div>
+                      </div>
+                      <div className={`rounded-lg p-3 text-center ${flowiseData.hasLoops ? 'bg-red-50 dark:bg-red-900/20' : 'bg-gray-50 dark:bg-gray-800'}`}>
+                        <div className={`text-lg font-bold ${flowiseData.hasLoops ? 'text-red-600 dark:text-red-400' : 'text-gray-900 dark:text-gray-100'}`}>
+                          {flowiseData.hasLoops ? 'Yes' : 'No'}
+                        </div>
+                        <div className="text-xs text-gray-500 dark:text-gray-400">Loop Detected</div>
+                      </div>
+                      <div className="rounded-lg bg-gray-50 dark:bg-gray-800 p-3 text-center">
+                        <div className="text-lg font-bold text-gray-900 dark:text-gray-100">{Object.keys(flowiseData.toolTimings).length}</div>
+                        <div className="text-xs text-gray-500 dark:text-gray-400">Timed Tools</div>
+                      </div>
+                    </div>
+
+                    {/* Per-tool timing */}
+                    {Object.keys(flowiseData.toolTimings).length > 0 && (
+                      <div className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+                        <div className="px-3 py-2 bg-gray-50 dark:bg-gray-800 text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">
+                          Tool Timing (from Node-RED _debug_calls)
+                        </div>
+                        <div className="divide-y divide-gray-200 dark:divide-gray-700">
+                          {Object.entries(flowiseData.toolTimings).map(([tool, avgMs]) => (
+                            <div key={tool} className="flex items-center justify-between px-3 py-2 text-sm">
+                              <span className="font-mono text-gray-700 dark:text-gray-300">{tool}</span>
+                              <span className="font-medium text-gray-900 dark:text-gray-100">{avgMs}ms avg</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Turns with errors */}
+                    {flowiseData.turns.some(t => t.errors.length > 0) && (
+                      <div className="rounded-lg border border-red-200 dark:border-red-800 overflow-hidden">
+                        <div className="px-3 py-2 bg-red-50 dark:bg-red-900/20 text-xs font-semibold text-red-600 dark:text-red-400 uppercase tracking-wider">
+                          Flowise Errors (not in Langfuse)
+                        </div>
+                        <div className="divide-y divide-red-200 dark:divide-red-800">
+                          {flowiseData.turns.filter(t => t.errors.length > 0).map(t => (
+                            <div key={t.turnIndex} className="px-3 py-2">
+                              <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">Turn {t.turnIndex} ({t.role})</div>
+                              {t.errors.map((err, i) => (
+                                <div key={i} className="text-sm text-red-700 dark:text-red-300 font-mono break-all">{err}</div>
+                              ))}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </Card>
         </div>
       )}

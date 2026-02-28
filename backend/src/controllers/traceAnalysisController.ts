@@ -2409,6 +2409,7 @@ interface InvestigationResult {
       slotsReturned: number;
       dates: string[];
       operatories: string[];
+      slots: Array<{ date: string; time: string; op: string }>;
     }>;
     bookingAttempts: Array<{
       toolCallIndex: number;
@@ -2665,6 +2666,7 @@ function runSlotAnalysis(
       slotRetrievals.push({
         toolCallIndex: tc.index, action: tc.action,
         slotsReturned: slots.length, dates, operatories,
+        slots: slots.map(s => ({ date: s.date, time: s.normalizedTime, op: s.operatoryId })),
       });
     }
 
@@ -3618,6 +3620,21 @@ function escapeTableCell(text: string): string {
   return text.replace(/\|/g, '\\|').replace(/\n/g, ' ');
 }
 
+/** Wrap truncated text in a clickable HTML span. Frontend decodes base64 and shows a popup modal. */
+function truncHtml(full: string, maxLen: number): string {
+  const cleaned = full.replace(/\n/g, ' ');
+  if (cleaned.length <= maxLen) return escapeTableCell(cleaned);
+  const display = escapeTableCell(cleaned.substring(0, maxLen - 1) + '…');
+  const encoded = Buffer.from(cleaned).toString('base64');
+  return `<span class="trunc" title="${encoded}">${display}</span>`;
+}
+
+/** Wrap structured data (JSON) in a clickable HTML span. Frontend decodes and renders a detail modal. */
+function truncHtmlJson(displayText: string, data: any): string {
+  const encoded = Buffer.from(JSON.stringify(data)).toString('base64');
+  return `<span class="trunc" title="${encoded}">${displayText}</span>`;
+}
+
 function formatRecommendedFixesMarkdown(fixes: RecommendedFix[]): string {
   if (fixes.length === 0) return '';
 
@@ -3898,7 +3915,7 @@ function formatInvestigationMarkdown(r: InvestigationResult): string {
         for (const cr of issue.details.createResults as any[]) {
           const name = `${cr.firstName} ${cr.lastName}`;
           const result = cr.isError ? 'ERROR' : 'Success';
-          const error = cr.errorMessage ? escapeTableCell(String(cr.errorMessage).substring(0, 60)) : '—';
+          const error = cr.errorMessage ? truncHtml(String(cr.errorMessage), 60) : '—';
           lines.push(`| #${cr.index} | ${name} | ${result} | ${error} |`);
         }
         lines.push('');
@@ -3953,7 +3970,16 @@ function formatInvestigationMarkdown(r: InvestigationResult): string {
     const detail = getToolCallDetail(tc);
     const reqContext = getToolCallRequestDetail(tc);
     const actionDisplay = (tc.action === tc.name || tc.name === 'CurrentDateTime' || tc.name === 'current_date_time') ? '—' : `\`${tc.action}\``;
-    lines.push(`| ${tc.index} | \`${tc.name}\` | ${actionDisplay} | ${escapeTableCell(reqContext) || '—'} | ${level} | ${escapeTableCell(detail)} |`);
+    // For the "Key Output" column: if the detail is truncated, encode the full output for popup
+    let keyOutputCell: string;
+    if (detail.length > 80) {
+      const fullOutput = tc.rawOutput || JSON.stringify(tc.output, null, 2) || detail;
+      const capped = fullOutput.length > 5000 ? fullOutput.substring(0, 5000) + '\n…(truncated at 5KB)' : fullOutput;
+      keyOutputCell = truncHtml(capped, 80);
+    } else {
+      keyOutputCell = escapeTableCell(detail);
+    }
+    lines.push(`| ${tc.index} | \`${tc.name}\` | ${actionDisplay} | ${escapeTableCell(reqContext) || '—'} | ${level} | ${keyOutputCell} |`);
   }
   lines.push('');
   if (r.bookingToolCallCount === 0 && r.toolCalls.length > 0) {
@@ -4078,8 +4104,19 @@ function formatInvestigationMarkdown(r: InvestigationResult): string {
       for (let i = 0; i < sa.slotRetrievals.length; i++) {
         const sr = sa.slotRetrievals[i];
         const dateRange = sr.dates.length > 0 ? `${sr.dates[0]} — ${sr.dates[sr.dates.length - 1]}` : '—';
-        const opCount = sr.operatories.length > 0 ? `${sr.operatories.length} (${sr.operatories.slice(0, 3).map(o => `\`${o.substring(0, 8)}\``).join(', ')}${sr.operatories.length > 3 ? '…' : ''})` : '—';
-        lines.push(`| ${i + 1} | #${sr.toolCallIndex} | \`${sr.action}\` | ${sr.slotsReturned} | ${dateRange} | ${opCount} |`);
+        const opShortParts = sr.operatories.slice(0, 3).map(o => o.substring(0, 8));
+        const opDisplayText = sr.operatories.length > 0
+          ? `${sr.operatories.length} ( ${opShortParts.join(', ')}${sr.operatories.length > 3 ? ' …' : ''} )`
+          : '—';
+        // Always make operatories + slots clickable for full data popup
+        const opCell = sr.operatories.length > 0
+          ? truncHtmlJson(opDisplayText, { operatories: sr.operatories, slots: sr.slots })
+          : '—';
+        // Also make "Slots Returned" count clickable to see all slot details
+        const slotsCell = sr.slots.length > 0
+          ? truncHtmlJson(String(sr.slotsReturned), { operatories: sr.operatories, slots: sr.slots })
+          : String(sr.slotsReturned);
+        lines.push(`| ${i + 1} | #${sr.toolCallIndex} | \`${sr.action}\` | ${slotsCell} | ${dateRange} | ${opCell} |`);
       }
     } else {
       lines.push('No slot retrieval calls found — booking was attempted without querying available slots.');
@@ -4100,7 +4137,11 @@ function formatInvestigationMarkdown(r: InvestigationResult): string {
         const ba = sa.bookingAttempts[i];
         const normTime = normalizeTimeForComparison(ba.startTime);
         const slotDisplay = `${ba.date} ${normTime}`;
-        const opDisplay = ba.operatory ? `\`${ba.operatory.substring(0, 8)}…\`` : '—';
+        const opDisplay = ba.operatory
+          ? (ba.operatory.length > 8
+            ? truncHtml(ba.operatory, 12)
+            : `\`${ba.operatory}\``)
+          : '—';
         const resultStr = ba.success ? 'Success' : `Failed: ${ba.error || 'unknown'}`;
         const matchStr = ba.matched ? 'VALID' : '**HALLUCINATED**';
         lines.push(`| ${i + 1} | #${ba.toolCallIndex} | ${ba.childName} | ${slotDisplay} | ${opDisplay} | ${escapeTableCell(resultStr)} | ${matchStr} |`);
@@ -4939,6 +4980,7 @@ interface HallucinationAuditResult {
     slotsReturned: number;
     dates: string[];
     operatories: string[];
+    slots: Array<{ date: string; time: string; op: string }>;
   }>;
   bookingAttempts: Array<{
     turnIndex: number;
@@ -5077,6 +5119,7 @@ function runHallucinationAudit(sessionId: string, db: BetterSqlite3.Database): H
       slotRetrievals.push({
         turnIndex, traceId: obs.trace_id, action,
         slotsReturned: slots.length, dates, operatories,
+        slots: slots.map(s => ({ date: s.date, time: s.normalizedTime, op: s.operatoryId })),
       });
     }
 
